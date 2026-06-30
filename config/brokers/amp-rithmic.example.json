@@ -1,0 +1,19 @@
+{
+  "note": "Example values only. Replace with real broker statement values.",
+  "brokerName": "AMP Futures",
+  "executionProvider": "Rithmic",
+  "accountType": "funded",
+  "accountCurrency": "USD",
+  "supportsMarketOrders": true,
+  "supportsLimitOrders": true,
+  "supportsStopOrders": true,
+  "supportsBracketOrders": true,
+  "supportsOcoOrders": true,
+  "supportsServerSideStops": true,
+  "supportsClientSideStops": true,
+  "supportsCancelReplace": true,
+  "maxOrdersPerSecond": 5,
+  "apiRateLimit": 100,
+  "reconnectBehavior": "ResumeState",
+  "partialFillBehavior": "TrackPartial"
+}

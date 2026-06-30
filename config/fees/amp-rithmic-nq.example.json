@@ -1,0 +1,16 @@
+{
+  "note": "Example values only. Replace with real broker statement values.",
+  "brokerName": "AMP Futures",
+  "executionProvider": "Rithmic",
+  "instrument": "NQ",
+  "commissionPerSide": 0.85,
+  "exchangeFeePerSide": 1.18,
+  "clearingFeePerSide": 0.10,
+  "routingFeePerSide": 0.00,
+  "nfaFeePerSide": 0.02,
+  "otherFeePerSide": 0.00,
+  "estimatedSlippageTicks": 1.0,
+  "maxAllowedSlippageTicks": 3.0,
+  "monthlyPlatformFee": 0.00,
+  "monthlyDataFeedFee": 0.00
+}

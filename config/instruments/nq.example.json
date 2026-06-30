@@ -1,0 +1,18 @@
+{
+  "note": "Example values only. Verify contract specs with the exchange/broker.",
+  "symbol": "NQ",
+  "brokerSymbol": "NQ",
+  "exchange": "CME",
+  "currency": "USD",
+  "tickSize": 0.25,
+  "tickValue": 5.00,
+  "pointValue": 20.00,
+  "contractMultiplier": 20.00,
+  "tradingTimezone": "America/New_York",
+  "sessionStart": "09:30:00",
+  "sessionEnd": "16:00:00",
+  "maxContracts": 5,
+  "defaultStopLossTicks": 40,
+  "defaultTakeProfitTicks": 60,
+  "defaultTrailingStopTicks": 20
+}

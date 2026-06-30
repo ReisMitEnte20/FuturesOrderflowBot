@@ -1,0 +1,15 @@
+{
+  "note": "Example values only. Adjust to YOUR prop firm / funded account rules.",
+  "maxDailyLoss": 1000.00,
+  "maxLossPerTrade": 300.00,
+  "maxTradesPerDay": 10,
+  "maxContracts": 5,
+  "maxOpenPositions": 1,
+  "maxOrdersPerMinute": 10,
+  "maxConsecutiveLosses": 3,
+  "enforceSession": true,
+  "profitLockEnabled": false,
+  "profitLockThreshold": null,
+  "trailingDrawdownEnabled": false,
+  "trailingDrawdownAmount": null
+}

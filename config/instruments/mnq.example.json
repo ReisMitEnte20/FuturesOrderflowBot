@@ -1,0 +1,18 @@
+{
+  "note": "Example values only. Verify contract specs with the exchange/broker.",
+  "symbol": "MNQ",
+  "brokerSymbol": "MNQ",
+  "exchange": "CME",
+  "currency": "USD",
+  "tickSize": 0.25,
+  "tickValue": 0.50,
+  "pointValue": 2.00,
+  "contractMultiplier": 2.00,
+  "tradingTimezone": "America/New_York",
+  "sessionStart": "09:30:00",
+  "sessionEnd": "16:00:00",
+  "maxContracts": 20,
+  "defaultStopLossTicks": 40,
+  "defaultTakeProfitTicks": 60,
+  "defaultTrailingStopTicks": 20
+}

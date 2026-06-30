@@ -1,0 +1,20 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\TradingBot.Domain\TradingBot.Domain.csproj" />
+    <ProjectReference Include="..\TradingBot.Core\TradingBot.Core.csproj" />
+    <ProjectReference Include="..\TradingBot.Application\TradingBot.Application.csproj" />
+    <ProjectReference Include="..\TradingBot.Infrastructure\TradingBot.Infrastructure.csproj" />
+    <ProjectReference Include="..\TradingBot.Execution\TradingBot.Execution.csproj" />
+    <ProjectReference Include="..\TradingBot.Backtesting\TradingBot.Backtesting.csproj" />
+    <ProjectReference Include="..\TradingBot.PaperTrading\TradingBot.PaperTrading.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

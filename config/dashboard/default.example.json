@@ -1,0 +1,7 @@
+{
+  "note": "Example values only.",
+  "enabled": false,
+  "host": "localhost",
+  "port": 5005,
+  "refreshIntervalMs": 1000
+}
