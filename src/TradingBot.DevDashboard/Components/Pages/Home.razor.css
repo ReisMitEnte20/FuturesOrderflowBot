@@ -1,0 +1,124 @@
+.dash {
+    max-width: 1200px;
+}
+
+.ro-banner {
+    font-size: 0.95rem;
+}
+
+.section-title {
+    font-size: 1.15rem;
+    font-weight: 600;
+    margin: 0.5rem 0 0.75rem;
+    padding-bottom: 0.25rem;
+    border-bottom: 2px solid #e3e3e3;
+}
+
+.stat-card {
+    background: #fff;
+    border: 1px solid #e3e3e3;
+    border-radius: 0.5rem;
+    padding: 0.75rem 1rem;
+    height: 100%;
+}
+
+.stat-label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #6c757d;
+}
+
+.stat-value {
+    font-size: 1.1rem;
+    font-weight: 600;
+}
+
+/* Pipeline */
+.pipeline {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 0.35rem;
+}
+
+.pipe-box {
+    background: #0d6efd;
+    color: #fff;
+    border-radius: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    min-width: 110px;
+    text-align: center;
+}
+
+.pipe-name {
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.pipe-sub {
+    font-size: 0.7rem;
+    opacity: 0.85;
+}
+
+.pipe-arrow {
+    align-self: center;
+    font-size: 1.3rem;
+    color: #adb5bd;
+}
+
+/* Module lists */
+.module-list {
+    list-style: none;
+    padding-left: 0;
+}
+
+.module-list li {
+    padding: 0.4rem 0;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.m-name {
+    font-weight: 600;
+    margin-left: 0.4rem;
+}
+
+.m-desc {
+    display: block;
+    font-size: 0.8rem;
+    color: #6c757d;
+    margin-left: 3.2rem;
+}
+
+/* Safety */
+.safety-item {
+    background: #fff;
+    border: 1px solid #e3e3e3;
+    border-radius: 0.4rem;
+    padding: 0.45rem 0.6rem;
+    font-size: 0.88rem;
+    height: 100%;
+}
+
+.safety-item .badge {
+    margin-right: 0.4rem;
+}
+
+/* Config */
+.cfg-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin-top: 1rem;
+}
+
+.cfg-table {
+    font-size: 0.85rem;
+}
+
+.dash-footer {
+    margin-top: 2rem;
+    padding-top: 1rem;
+    border-top: 1px solid #e3e3e3;
+    color: #6c757d;
+    font-size: 0.8rem;
+}

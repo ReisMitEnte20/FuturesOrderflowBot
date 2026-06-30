@@ -1,0 +1,162 @@
+@page "/"
+@using TradingBot.DevDashboard.Services
+@inject ProjectStatusService Status
+@inject GitInfoService Git
+@inject ConfigOverviewService Config
+
+<PageTitle>TradingBot · DevDashboard</PageTitle>
+
+<div class="dash">
+    <div class="alert alert-warning ro-banner" role="alert">
+        🔒 <strong>Read-only Dev-Dashboard.</strong> Keine Live-Execution · keine Broker-API ·
+        keine Order-/Flatten-Buttons. Nur Anzeige von Status, Modulen, Safety und Config.
+    </div>
+
+    <h1 class="mb-3">FuturesOrderflowBot — Projektstatus</h1>
+
+    @{ var git = Git.Read(); }
+    <div class="row g-3 mb-4">
+        <div class="col-sm-6 col-lg-3"><div class="stat-card"><div class="stat-label">Aktuelle Phase</div><div class="stat-value">@Status.CurrentPhase</div></div></div>
+        <div class="col-sm-6 col-lg-3"><div class="stat-card"><div class="stat-label">Tests</div><div class="stat-value text-success">@Status.TestStatus</div></div></div>
+        <div class="col-sm-6 col-lg-3"><div class="stat-card"><div class="stat-label">Branch</div><div class="stat-value">@git.Branch</div></div></div>
+        <div class="col-sm-6 col-lg-3"><div class="stat-card"><div class="stat-label">Letzter Commit</div><div class="stat-value"><code>@git.Commit</code></div></div></div>
+    </div>
+
+    <!-- Architecture / Pipeline -->
+    <h2 class="section-title">Architektur-Pipeline</h2>
+    <div class="pipeline mb-4">
+        @for (int i = 0; i < Status.Pipeline.Count; i++)
+        {
+            var stage = Status.Pipeline[i];
+            <div class="pipe-box">
+                <div class="pipe-name">@stage.Name</div>
+                <div class="pipe-sub">@stage.Sub</div>
+            </div>
+            @if (i < Status.Pipeline.Count - 1)
+            {
+                <div class="pipe-arrow">→</div>
+            }
+        }
+    </div>
+
+    <div class="row g-4">
+        <!-- Fertige Module -->
+        <div class="col-lg-6">
+            <h2 class="section-title">Fertige Module</h2>
+            <ul class="module-list">
+                @foreach (var m in Status.DoneModules)
+                {
+                    <li>
+                        <span class="badge bg-success">fertig</span>
+                        <span class="m-name">@m.Name</span>
+                        <span class="m-desc">@m.Description</span>
+                    </li>
+                }
+            </ul>
+        </div>
+
+        <!-- Offene Module -->
+        <div class="col-lg-6">
+            <h2 class="section-title">Offene Module</h2>
+            <ul class="module-list">
+                @foreach (var m in Status.OpenModules)
+                {
+                    <li>
+                        <span class="badge bg-secondary">offen</span>
+                        <span class="m-name">@m</span>
+                    </li>
+                }
+            </ul>
+        </div>
+    </div>
+
+    <!-- Safety -->
+    <h2 class="section-title mt-4">Safety-Status</h2>
+    <div class="row g-2 mb-4">
+        @foreach (var s in Status.Safety)
+        {
+            <div class="col-md-6 col-lg-4">
+                <div class="safety-item">
+                    <span class="badge @(s.Ok ? "bg-success" : "bg-danger")">@(s.Ok ? "✓" : "✗")</span>
+                    @s.Label
+                </div>
+            </div>
+        }
+    </div>
+
+    <!-- Config -->
+    <h2 class="section-title">Config-Übersicht (read-only)</h2>
+    @if (_config is null)
+    {
+        <p>Lade Config…</p>
+    }
+    else if (_config.Error is not null)
+    {
+        <div class="alert alert-secondary">Config nicht ladbar: @_config.Error</div>
+    }
+    else
+    {
+        <div class="alert alert-info py-2">
+            ⚠️ <strong>Example values only.</strong> Echte Broker-Gebühren / Tick-Werte müssen später
+            ersetzt werden. Pfad: <code>@_config.ConfigPath</code>
+        </div>
+
+        <h3 class="cfg-title">Broker-Profile (@_config.Brokers.Count)</h3>
+        <table class="table table-sm cfg-table">
+            <thead><tr><th>Broker</th><th>Provider</th><th>AccountType</th><th>Market</th><th>Limit</th><th>Stop</th></tr></thead>
+            <tbody>
+                @foreach (var b in _config.Brokers)
+                {
+                    <tr><td>@b.BrokerName</td><td>@b.ExecutionProvider</td><td>@b.AccountType</td>
+                        <td>@YesNo(b.SupportsMarketOrders)</td><td>@YesNo(b.SupportsLimitOrders)</td><td>@YesNo(b.SupportsStopOrders)</td></tr>
+                }
+            </tbody>
+        </table>
+
+        <h3 class="cfg-title">Instrument-Profile (@_config.Instruments.Count)</h3>
+        <table class="table table-sm cfg-table">
+            <thead><tr><th>Symbol</th><th>BrokerSymbol</th><th>Exchange</th><th>TickSize</th><th>TickValue</th><th>MaxContracts</th></tr></thead>
+            <tbody>
+                @foreach (var i in _config.Instruments)
+                {
+                    <tr><td>@i.Symbol</td><td>@i.BrokerSymbol</td><td>@i.Exchange</td><td>@i.TickSize</td><td>@i.TickValue</td><td>@i.MaxContracts</td></tr>
+                }
+            </tbody>
+        </table>
+
+        <h3 class="cfg-title">Fee-Profile (@_config.Fees.Count) — Example only</h3>
+        <table class="table table-sm cfg-table">
+            <thead><tr><th>Broker</th><th>Provider</th><th>Instrument</th><th>Commission/Side</th><th>Exchange/Side</th><th>NFA/Side</th></tr></thead>
+            <tbody>
+                @foreach (var f in _config.Fees)
+                {
+                    <tr><td>@f.BrokerName</td><td>@f.ExecutionProvider</td><td>@f.Instrument</td><td>@f.CommissionPerSide</td><td>@f.ExchangeFeePerSide</td><td>@f.NfaFeePerSide</td></tr>
+                }
+            </tbody>
+        </table>
+
+        <h3 class="cfg-title">Risk-Configs (@_config.Risks.Count)</h3>
+        <table class="table table-sm cfg-table">
+            <thead><tr><th>MaxDailyLoss</th><th>MaxLoss/Trade</th><th>MaxTrades/Day</th><th>MaxContracts</th><th>MaxOpenPos</th><th>MaxConsecLosses</th></tr></thead>
+            <tbody>
+                @foreach (var r in _config.Risks)
+                {
+                    <tr><td>@r.MaxDailyLoss</td><td>@r.MaxLossPerTrade</td><td>@r.MaxTradesPerDay</td><td>@r.MaxContracts</td><td>@r.MaxOpenPositions</td><td>@r.MaxConsecutiveLosses</td></tr>
+                }
+            </tbody>
+        </table>
+    }
+
+    <footer class="dash-footer">
+        Read-only Übersicht · generiert aus Code &amp; config/ · keine Trading-Funktion.
+    </footer>
+</div>
+
+@code {
+    private ConfigOverview? _config;
+
+    protected override async Task OnInitializedAsync()
+        => _config = await Config.LoadAsync();
+
+    private static string YesNo(bool b) => b ? "✓" : "—";
+}
