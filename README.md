@@ -4,14 +4,43 @@ Modularer Futures-Orderflow-Trading-Bot (C# / .NET 8).
 Unterstützt Backtest, Replay, Paper Trading und – später – Live Trading.
 Brokerunabhängig über JSON-Profile (Broker / Instrument / Fee / Risk).
 
+> **Teststand: 146/146 grün · Build: 0 Warnungen / 0 Fehler**
+> ⚠️ **Keine Live-Execution** vorhanden · ⚠️ **Keine Broker-API** angebunden ·
+> alle Broker-/Fee-/TickValue-Werte stammen aus Config (`config/`), nichts ist hardcoded.
+
+## Überblick
+
+```
+[MarketData] → [Strategy] → [Risk] → [Order] → [Position/PnL]
+   CSV/Replay    Signale     Gate     Submit     Netting/Fees
+```
+
+**Fertig (Phase 1–8A):**
+- Architektur, Solution-Skeleton, Domain-Modelle + Interfaces
+- Config-/Profil-System (Broker / Instrument / Fee / Risk) mit Validierung
+- Fee- + PnL-Engine (Gross/Net getrennt, `decimal`-genau)
+- RiskManager (fail-closed Gatekeeper, blockt vor jeder Order)
+- OrderManager + PositionManager (Dedup, Lifecycle, SL/TP/Bracket/BE/Trailing, Netting/PnL)
+- MarketData (CSV-Reader, Replay-Feed, Heartbeat, Time/Tick/Volume/OrderFlow-Aggregation)
+
+**Noch offen:**
+- Phase 8B: Backtest Engine
+- Phase 9: Paper Trading
+- Phase 10: Dashboard (read-only Monitoring)
+- Phase 13/14: Live-Broker-Adapter + Safety Audit
+
+Details: siehe [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) und [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 ## Sicherheits-Grundregel
 Die Strategie erzeugt **nur Signale**. Sie sendet **niemals** Orders.
 Über Ausführung entscheiden ausschließlich: **RiskManager → OrderManager → BrokerExecutionAdapter**.
 
-- Paper Mode ist Standard. Live nur manuell aktivierbar.
+- Paper Mode ist Standard. Live nur manuell aktivierbar (noch nicht implementiert).
 - Pflicht: Max Daily Loss, Max Contracts, Kill Switch, Emergency Flatten.
 - Keine Order ohne gültiges Broker-/Instrument-/Fee-Profil.
 - Keine Order bei Feed-/Broker-Disconnect oder Positions-Mismatch.
+- Kein doppeltes Signal → keine zweite Order (Idempotency-Key).
+- Keine Fake-Orderflow-Daten ohne echte Bid/Ask/TradeDirection.
 
 ## Solution-Struktur
 
@@ -19,13 +48,13 @@ Die Strategie erzeugt **nur Signale**. Sie sendet **niemals** Orders.
 |--------|---------|--------------|
 | `TradingBot.Domain` | Reine Modelle + Enums | – |
 | `TradingBot.Core` | Interfaces / Abstraktionen | Domain |
-| `TradingBot.Application` | Risk, Order, Position, Fee Logik | Core, Domain |
-| `TradingBot.Infrastructure` | Config (JSON), Logging, Clock | Core, Domain |
+| `TradingBot.Application` | Risk, Order, Position, Fee, MarketData-Aggregation | Core, Domain |
+| `TradingBot.Infrastructure` | Config (JSON), Logging, MarketData (CSV/Replay) | Core, Domain |
 | `TradingBot.Execution` | Broker-Adapter + MockBroker | Core, Domain |
 | `TradingBot.Backtesting` | Backtest / Replay Engine | Application, Core, Domain |
 | `TradingBot.PaperTrading` | Paper Trading Engine | Application, Core, Domain |
 | `TradingBot.Console` | Composition Root (Startpunkt) | alle |
-| `TradingBot.Tests` | Unit Tests | Domain, Core, Application, Execution |
+| `TradingBot.Tests` | Unit Tests | Domain, Core, Application, Infrastructure, Execution |
 
 **Abhängigkeitsregel:** Pfeile zeigen nach innen Richtung `Domain`.
 `Application` kennt nur Interfaces aus `Core` – nie `Infrastructure` oder `Execution`.
@@ -38,8 +67,9 @@ dotnet test
 ```
 
 ## Konfiguration
-JSON-Profile liegen unter `config/` (broker, instrument, fee, risk).
+JSON-Profile liegen unter `config/` (brokers, instruments, fees, risk, dashboard).
 Beispielwerte sind Platzhalter – echte Broker-Gebühren trägt der User selbst ein.
+MarketData-CSV-Formate sind unter [samples/marketdata/README.md](samples/marketdata/README.md) dokumentiert.
 
 ## Status
-Skeleton (Phase 2 abgeschlossen). Domain-Modelle folgen in Phase 3.
+Phase 8A (MarketData) abgeschlossen. Als Nächstes: Phase 8B – Backtest Engine.
