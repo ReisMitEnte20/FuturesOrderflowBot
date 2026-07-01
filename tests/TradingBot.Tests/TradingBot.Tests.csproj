@@ -28,6 +28,7 @@
     <ProjectReference Include="..\..\src\TradingBot.Application\TradingBot.Application.csproj" />
     <ProjectReference Include="..\..\src\TradingBot.Execution\TradingBot.Execution.csproj" />
     <ProjectReference Include="..\..\src\TradingBot.Infrastructure\TradingBot.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\TradingBot.Backtesting\TradingBot.Backtesting.csproj" />
   </ItemGroup>
 
 </Project>
