@@ -9,9 +9,9 @@ public sealed record PipelineStage(string Name, string Sub);
 /// </summary>
 public sealed class ProjectStatusService
 {
-    public string CurrentPhase => "Phase 8B abgeschlossen";
-    public string TestStatus => "188 / 188 bestanden";
-    public string KnownGoodCommit => "eec14cc";
+    public string CurrentPhase => "Phase 9 abgeschlossen";
+    public string TestStatus => "234 / 234 bestanden";
+    public string KnownGoodCommit => "6ff1141";
 
     public IReadOnlyList<ModuleInfo> DoneModules { get; } = new List<ModuleInfo>
     {
@@ -24,12 +24,13 @@ public sealed class ProjectStatusService
         new("PositionManager", "Netting, Average Entry, Realized/Unrealized PnL"),
         new("MarketData Modul", "CSV-Reader, Replay-Feed, Heartbeat, Aggregation"),
         new("Backtest Engine", "Deterministisch, Fill-Modell, Slippage/Fees, Kennzahlen"),
+        new("Exit-aware Risk Handling", "Reduce/Close/Flatten nicht durch Entry-Limits blockiert"),
+        new("Paper Trading Engine", "Session (Start/Stop/Pause), simulierte Fills, Journal"),
         new("Project Documentation", "PROJECT_STATUS.md, ARCHITECTURE.md, README"),
     };
 
     public IReadOnlyList<string> OpenModules { get; } = new List<string>
     {
-        "Paper Trading Engine",
         "Dashboard (final)",
         "Live Execution Adapter",
         "Live Safety Checklist",

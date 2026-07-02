@@ -1,13 +1,15 @@
 using TradingBot.Domain.Enums;
 using TradingBot.Domain.Models;
 
-namespace TradingBot.Backtesting.Execution;
+namespace TradingBot.Application.Simulation;
 
 /// <summary>Ergebnis eines Fill-Versuchs: das FillEvent und die (informativen) Slippage-Kosten in Geld.</summary>
 public sealed record FillResult(FillEvent Event, decimal SlippageCost);
 
 /// <summary>
 /// Simuliert Fills gegen einen einzelnen Tick. Deterministisch, ohne Netzwerk.
+/// GEMEINSAME Fill-Semantik für Backtest UND Paper Trading – bewusst eine einzige
+/// Implementierung, damit Paper niemals "lockerer" füllt als der Backtest (und umgekehrt).
 ///
 /// Regeln:
 /// - MARKET: füllt am aktuellen Tick-Preis mit ADVERSER Slippage (Buy: Preis + Slippage, Sell: Preis − Slippage).

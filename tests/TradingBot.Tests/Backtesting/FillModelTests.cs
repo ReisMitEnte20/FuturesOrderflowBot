@@ -1,5 +1,5 @@
 using FluentAssertions;
-using TradingBot.Backtesting.Execution;
+using TradingBot.Application.Simulation;
 using TradingBot.Domain.Enums;
 using TradingBot.Domain.Models;
 using Xunit;

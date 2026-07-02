@@ -4,10 +4,10 @@ using TradingBot.Application.Orders;
 using TradingBot.Application.Pnl;
 using TradingBot.Application.Positions;
 using TradingBot.Application.Risk;
+using TradingBot.Application.Simulation;
 using TradingBot.Backtesting.Execution;
 using TradingBot.Backtesting.Positions;
 using TradingBot.Backtesting.Risk;
-using TradingBot.Backtesting.Time;
 using TradingBot.Core.Interfaces;
 using TradingBot.Domain.Enums;
 

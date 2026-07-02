@@ -45,4 +45,16 @@ public sealed record FeeBreakdown
         OtherFee = a.OtherFee + b.OtherFee,
         SlippageCost = a.SlippageCost + b.SlippageCost
     };
+
+    /// <summary>Komponentenweise Differenz (z. B. Delta zwischen zwei Positions-Snapshots).</summary>
+    public static FeeBreakdown operator -(FeeBreakdown a, FeeBreakdown b) => new()
+    {
+        Commission = a.Commission - b.Commission,
+        ExchangeFee = a.ExchangeFee - b.ExchangeFee,
+        ClearingFee = a.ClearingFee - b.ClearingFee,
+        RoutingFee = a.RoutingFee - b.RoutingFee,
+        NfaFee = a.NfaFee - b.NfaFee,
+        OtherFee = a.OtherFee - b.OtherFee,
+        SlippageCost = a.SlippageCost - b.SlippageCost
+    };
 }

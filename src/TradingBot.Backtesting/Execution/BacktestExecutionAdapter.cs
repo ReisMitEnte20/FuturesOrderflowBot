@@ -1,3 +1,4 @@
+using TradingBot.Application.Simulation;
 using TradingBot.Core.Interfaces;
 using TradingBot.Domain.Enums;
 using TradingBot.Domain.Models;
