@@ -1,3 +1,5 @@
+using TradingBot.Domain.Enums;
+
 namespace TradingBot.Domain.Models;
 
 /// <summary>
@@ -9,6 +11,12 @@ namespace TradingBot.Domain.Models;
 public sealed record RiskEvaluationRequest
 {
     public required TradeSignal Signal { get; init; }
+
+    /// <summary>
+    /// Wirkung der Order auf das Risiko. Steuert, ob die Entry-Regeln greifen (Entry/Add)
+    /// oder übersprungen werden (Reduce/Close/Flatten). Standard: <see cref="OrderIntent.Entry"/>.
+    /// </summary>
+    public OrderIntent Intent { get; init; } = OrderIntent.Entry;
 
     /// <summary>Vom Aufrufer gewünschte Kontraktanzahl (muss &gt; 0 sein).</summary>
     public required int RequestedContracts { get; init; }

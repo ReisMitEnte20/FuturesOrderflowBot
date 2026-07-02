@@ -42,6 +42,12 @@ internal sealed class OrderManagerHarness
 
     public OrderRequest? LastSubmitted { get; private set; }
 
+    /// <summary>Aktuelle Position, die der PositionManager-Mock zurückgibt (für Intent-Klassifikation).</summary>
+    public Position? CurrentPosition { get; set; }
+
+    /// <summary>Der zuletzt an den RiskManager übergebene Request (für Intent-Assertions).</summary>
+    public RiskEvaluationRequest? LastRiskRequest { get; private set; }
+
     public OrderManagerHarness()
     {
         Clock.SetupGet(c => c.UtcNow).Returns(T);
@@ -49,7 +55,11 @@ internal sealed class OrderManagerHarness
         Context.Setup(c => c.BuildAsync(It.IsAny<TradeSignal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .Returns((TradeSignal s, int n, CancellationToken _) => Task.FromResult(RequestFor(s, n)));
 
-        Risk.Setup(r => r.Evaluate(It.IsAny<RiskEvaluationRequest>())).Returns(() => Decision);
+        Risk.Setup(r => r.Evaluate(It.IsAny<RiskEvaluationRequest>()))
+            .Callback<RiskEvaluationRequest>(r => LastRiskRequest = r)
+            .Returns(() => Decision);
+
+        Positions.Setup(p => p.GetPosition(It.IsAny<string>())).Returns(() => CurrentPosition);
 
         Adapter.Setup(a => a.SubmitOrderAsync(It.IsAny<OrderRequest>(), It.IsAny<CancellationToken>()))
             .Returns((OrderRequest r, CancellationToken _) =>

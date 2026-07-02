@@ -65,8 +65,13 @@ public sealed class OrderManager : IOrderManager, IDisposable
     {
         ArgumentNullException.ThrowIfNull(signal);
 
-        int requested = signal.SuggestedQuantity is int q && q > 0 ? q : 1;
+        int suggested = signal.SuggestedQuantity is int q && q > 0 ? q : 1;
         string key = BuildIdempotencyKey(signal);
+
+        // Intent aus AKTUELLER Position ableiten (Entry/Add/Reduce/Close). Exits (Reduce/Close)
+        // sollen nicht durch Entry-Regeln blockiert werden; der RiskManager wertet den Intent aus.
+        var currentPosition = _positionManager.GetPosition(signal.Symbol);
+        var (intent, requested) = OrderIntentClassifier.Classify(currentPosition, signal.Direction, suggested);
 
         // Frühe Duplikat-Erkennung (genehmigte Signale sind bereits reserviert).
         lock (_sync)
@@ -93,6 +98,7 @@ public sealed class OrderManager : IOrderManager, IDisposable
         // Kontext + Risk (außerhalb des Locks; reine/IO-Operationen).
         RiskEvaluationRequest request = await _context.BuildAsync(signal, requested, cancellationToken)
             .ConfigureAwait(false);
+        request = request with { Intent = intent }; // Intent zentral setzen (gilt auch im Backtest)
         RiskDecision decision = _riskManager.Evaluate(request);
         LastDecision = decision;
 

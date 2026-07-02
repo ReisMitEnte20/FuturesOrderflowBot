@@ -9,6 +9,16 @@ namespace TradingBot.Application.Risk;
 /// eine <see cref="RiskDecision"/> zurück. Hat KEINE Referenz auf Execution/OrderManager –
 /// kann technisch keine Order senden. Fail-closed: jede Unsicherheit führt zur Ablehnung.
 ///
+/// EXIT-AWARE:
+/// - Entry/Add (risiko-ERHÖHEND): volle Prüfung (Session, MaxDailyLoss, MaxTradesPerDay,
+///   ConsecutiveLosses, ProfitLock, TrailingDrawdown, MaxOpenPositions, MaxOrdersPerMinute,
+///   MaxContracts, MaxLossPerTrade).
+/// - Reduce/Close/Flatten (risiko-REDUZIEREND, nur bei offener Position): diese Entry-Business-Regeln
+///   werden ÜBERSPRUNGEN – eine offene Position muss immer geschlossen werden können.
+/// - Technische Hard-Stops blocken AUCH Exits (KillSwitch, Broker-/Feed-Disconnect, Positions-Mismatch,
+///   SafetyMonitor HALTED, fehlende Pflichtprofile), weil sonst keine sichere Ausführung/Nachverfolgung
+///   möglich ist. Ausnahme: Flatten (Notfall) überbrückt den Kill Switch bewusst.
+///
 /// Konventionen:
 /// - Limitwert 0 bei MaxTradesPerDay/MaxOrdersPerMinute/MaxConsecutiveLosses bedeutet "unbegrenzt".
 /// - MaxDailyLoss/MaxContracts/MaxOpenPositions sind laut Validierung &gt; 0.
@@ -39,9 +49,12 @@ public sealed class RiskManager : IRiskManager
 
         var m = ComputeMetrics(request);
         int requested = request.RequestedContracts;
+        var intent = request.Intent;
+        bool isFlatten = intent == OrderIntent.Flatten;
 
-        // ===================== 1) Harte technische Stops =====================
-        if (_killSwitch.IsActive)
+        // ===================== 1) Harte technische Stops (blocken auch Exits) =====================
+        // Ausnahme: Flatten (Notfall-Glattstellung) überbrückt den Kill Switch bewusst.
+        if (!isFlatten && _killSwitch.IsActive)
             return Reject(RiskRejectionReason.KillSwitchActive, "Kill Switch ist aktiv.", m, requested);
 
         if (!_safety.IsBrokerConnected)
@@ -61,7 +74,7 @@ public sealed class RiskManager : IRiskManager
             return Reject(RiskRejectionReason.MissingRiskConfig, "Kein RiskConfig vorhanden.", m, requested);
         if (request.Instrument is null)
             return Reject(RiskRejectionReason.MissingInstrumentProfile, "Kein InstrumentProfile vorhanden.", m, requested);
-        if (request.Fee is null)
+        if (!isFlatten && request.Fee is null)
             return Reject(RiskRejectionReason.MissingFeeProfile, "Kein FeeProfile vorhanden.", m, requested);
         if (request.Broker is null)
             return Reject(RiskRejectionReason.MissingBrokerProfile, "Kein BrokerProfile vorhanden.", m, requested);
@@ -75,6 +88,20 @@ public sealed class RiskManager : IRiskManager
             return Reject(RiskRejectionReason.SymbolNotAllowed,
                 $"Signal-Symbol '{request.Signal.Symbol}' passt nicht zum InstrumentProfile '{instrument.Symbol}'.", m, requested);
 
+        // ===================== Risiko-reduzierende Exits =====================
+        // Reduce/Close/Flatten dürfen NICHT durch Entry-Business-Regeln blockiert werden – eine offene
+        // Position muss immer geschlossen werden können. Nur echte Reduktion zählt (offene Kontrakte > 0);
+        // ein "Close" ohne offene Position fällt bewusst in die reguläre Entry-Prüfung unten.
+        bool actuallyReducing =
+            intent is OrderIntent.Reduce or OrderIntent.Close or OrderIntent.Flatten
+            && request.CurrentOpenContracts > 0;
+        if (actuallyReducing)
+        {
+            int approvedExit = Math.Min(requested, request.CurrentOpenContracts);
+            return Approve(approvedExit, requested, m, "Exit genehmigt (risiko-reduzierend).");
+        }
+
+        // ===================== Entry/Add: volle Prüfung ab hier =====================
         if (risk.EnforceSession)
         {
             if (!TryIsWithinSession(instrument, _clock.UtcNow, out bool inside))
@@ -111,7 +138,9 @@ public sealed class RiskManager : IRiskManager
             return Reject(RiskRejectionReason.MaxOrdersPerMinuteExceeded,
                 $"Max Orders pro Minute erreicht: {d.OrdersThisMinute}/{risk.MaxOrdersPerMinute}.", m, requested);
 
-        if (request.OpenPositionsCount >= risk.MaxOpenPositions)
+        // MaxOpenPositions begrenzt NEUE Positionen (Entry). Ein Add vergrößert eine bestehende
+        // Position (keine neue) und wird über MaxContracts begrenzt, nicht hier.
+        if (intent == OrderIntent.Entry && request.OpenPositionsCount >= risk.MaxOpenPositions)
             return Reject(RiskRejectionReason.MaxOpenPositionsReached,
                 $"Max offene Positionen erreicht: {request.OpenPositionsCount}/{risk.MaxOpenPositions}.", m, requested);
 
@@ -143,22 +172,24 @@ public sealed class RiskManager : IRiskManager
         }
 
         // approved ist hier garantiert >= 1.
-        return new RiskDecision
-        {
-            Approved = true,
-            RejectionReason = RiskRejectionReason.None,
-            Message = "Genehmigt.",
-            RequestedContracts = requested,
-            ApprovedContracts = approved,
-            RemainingDailyLoss = m.RemainingDailyLoss,
-            RemainingTrades = m.RemainingTrades,
-            CurrentDailyPnL = m.CurrentDailyPnL,
-            CurrentConsecutiveLosses = m.CurrentConsecutiveLosses,
-            RiskUtilizationPercent = m.Utilization
-        };
+        return Approve(approved, requested, m, "Genehmigt.");
     }
 
     // ---- Hilfsmethoden -------------------------------------------------------
+
+    private static RiskDecision Approve(int approvedContracts, int requested, in Metrics m, string message) => new()
+    {
+        Approved = true,
+        RejectionReason = RiskRejectionReason.None,
+        Message = message,
+        RequestedContracts = requested,
+        ApprovedContracts = approvedContracts,
+        RemainingDailyLoss = m.RemainingDailyLoss,
+        RemainingTrades = m.RemainingTrades,
+        CurrentDailyPnL = m.CurrentDailyPnL,
+        CurrentConsecutiveLosses = m.CurrentConsecutiveLosses,
+        RiskUtilizationPercent = m.Utilization
+    };
 
     private static RiskDecision Reject(RiskRejectionReason reason, string message, in Metrics m, int requested) => new()
     {

@@ -250,6 +250,110 @@ public class RiskManagerTests
         ctorParams.Should().NotContain(p => p.ParameterType == typeof(IOrderManager));
     }
 
+    // ----------------------------- Exit-aware Risk ---------------------------
+
+    [Fact]
+    public void Entry_is_still_blocked_by_max_daily_loss()
+    {
+        var state = DailyRiskState.Start(Date) with { IsDailyLossLimitHit = true };
+        var d = Sut().Evaluate(Request() with { Intent = OrderIntent.Entry, DailyState = state });
+
+        d.Approved.Should().BeFalse();
+        d.RejectionReason.Should().Be(RiskRejectionReason.MaxDailyLossReached);
+    }
+
+    [Fact]
+    public void Close_is_allowed_despite_max_daily_loss_when_position_open()
+    {
+        var state = DailyRiskState.Start(Date) with { NetPnL = -1000m, IsDailyLossLimitHit = true };
+        var d = Sut().Evaluate(Request() with
+        {
+            Intent = OrderIntent.Close, CurrentOpenContracts = 1, DailyState = state
+        });
+
+        d.Approved.Should().BeTrue();
+        d.ApprovedContracts.Should().Be(1);
+    }
+
+    [Fact]
+    public void Reduce_is_allowed_despite_max_trades_reached()
+    {
+        var state = DailyRiskState.Start(Date) with { TradesTaken = 10 }; // MaxTradesPerDay = 10
+        var d = Sut().Evaluate(Request() with
+        {
+            Intent = OrderIntent.Reduce, CurrentOpenContracts = 2, RequestedContracts = 1, DailyState = state
+        });
+
+        d.Approved.Should().BeTrue();
+        d.ApprovedContracts.Should().Be(1);
+    }
+
+    [Fact]
+    public void Close_is_allowed_despite_max_open_positions_reached()
+    {
+        var d = Sut().Evaluate(Request() with
+        {
+            Intent = OrderIntent.Close, OpenPositionsCount = 1, CurrentOpenContracts = 1 // MaxOpenPositions = 1
+        });
+
+        d.Approved.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Exit_is_not_blocked_by_consecutive_losses()
+    {
+        var state = DailyRiskState.Start(Date) with { ConsecutiveLosses = 3 }; // MaxConsecutiveLosses = 3
+        var d = Sut().Evaluate(Request() with
+        {
+            Intent = OrderIntent.Close, CurrentOpenContracts = 1, DailyState = state
+        });
+
+        d.Approved.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Close_without_open_position_is_treated_as_entry()
+    {
+        var state = DailyRiskState.Start(Date) with { IsDailyLossLimitHit = true };
+        var d = Sut().Evaluate(Request() with
+        {
+            Intent = OrderIntent.Close, CurrentOpenContracts = 0, DailyState = state
+        });
+
+        d.Approved.Should().BeFalse();
+        d.RejectionReason.Should().Be(RiskRejectionReason.MaxDailyLossReached);
+    }
+
+    [Fact]
+    public void Exit_is_still_blocked_by_kill_switch()
+    {
+        var d = Sut(killSwitch: KillSwitch(active: true))
+            .Evaluate(Request() with { Intent = OrderIntent.Close, CurrentOpenContracts = 1 });
+
+        d.RejectionReason.Should().Be(RiskRejectionReason.KillSwitchActive);
+    }
+
+    [Fact]
+    public void Exit_is_still_blocked_by_broker_disconnect()
+    {
+        var d = Sut(safety: Safety(broker: false))
+            .Evaluate(Request() with { Intent = OrderIntent.Close, CurrentOpenContracts = 1 });
+
+        d.RejectionReason.Should().Be(RiskRejectionReason.BrokerDisconnected);
+    }
+
+    [Fact]
+    public void Exit_caps_approved_contracts_to_open_position()
+    {
+        var d = Sut().Evaluate(Request() with
+        {
+            Intent = OrderIntent.Close, CurrentOpenContracts = 2, RequestedContracts = 5
+        });
+
+        d.Approved.Should().BeTrue();
+        d.ApprovedContracts.Should().Be(2); // nie mehr schließen als offen
+    }
+
     // ----------------------------- Misuse throws -----------------------------
 
     [Fact]

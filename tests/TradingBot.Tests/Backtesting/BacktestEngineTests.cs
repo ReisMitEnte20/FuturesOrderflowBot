@@ -140,6 +140,20 @@ public class BacktestEngineTests
     }
 
     [Fact]
+    public async Task Can_close_position_even_with_max_open_positions_one()
+    {
+        // MaxOpenPositions = 1: der Close (Gegensignal) darf NICHT als Entry blockiert werden.
+        var req = BacktestTestData.Request(
+            new TestSignalStrategy(intervalTicks: 2), BacktestTestData.RisingTicks(14),
+            risk: BacktestTestData.Risk() with { MaxOpenPositions = 1 });
+
+        var result = await Engine.RunAsync(req);
+
+        result.Status.Should().Be(BacktestRunStatus.Completed);
+        result.Statistics.TotalTrades.Should().BeGreaterThan(0); // Positionen konnten geschlossen werden
+    }
+
+    [Fact]
     public void Engine_has_no_live_execution_reference()
     {
         // BacktestEngine referenziert keinen Live-/echten Broker-Adapter-Typ im Konstruktor.

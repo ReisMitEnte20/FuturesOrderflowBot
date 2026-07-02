@@ -245,4 +245,42 @@ public class OrderManagerTests
         var result = await sut.CancelAsync(Guid.NewGuid());
         result.Should().BeNull();
     }
+
+    // ----------------------------- Intent classification ---------------------
+
+    [Fact]
+    public async Task Signal_from_flat_is_classified_as_entry()
+    {
+        var h = new OrderManagerHarness(); // CurrentPosition == null (flat)
+        using var sut = h.Build();
+
+        await sut.ProcessSignalAsync(h.Signal());
+
+        h.LastRiskRequest!.Intent.Should().Be(OrderIntent.Entry);
+    }
+
+    [Fact]
+    public async Task Opposite_signal_while_long_is_classified_as_close()
+    {
+        var h = new OrderManagerHarness
+        {
+            CurrentPosition = new Position
+            {
+                AccountId = "ACC1", Symbol = "NQ", Side = PositionSide.Long,
+                Quantity = 1, AverageEntryPrice = 20000m
+            }
+        };
+        using var sut = h.Build();
+
+        var shortSignal = new TradeSignal
+        {
+            StrategyName = "t", Symbol = "NQ", Direction = SignalDirection.Short,
+            Timestamp = OrderManagerHarness.T, ReferencePrice = 20000m,
+            SuggestedStopLossTicks = 40, SuggestedQuantity = 1
+        };
+
+        await sut.ProcessSignalAsync(shortSignal);
+
+        h.LastRiskRequest!.Intent.Should().Be(OrderIntent.Close);
+    }
 }
