@@ -1,5 +1,5 @@
 using FluentAssertions;
-using TradingBot.Backtesting.Strategies;
+using TradingBot.Application.Strategies;
 using TradingBot.Domain.Enums;
 using TradingBot.Domain.Models;
 using TradingBot.PaperTrading;
@@ -31,7 +31,7 @@ public class PaperTradingSessionTests
     [Fact]
     public async Task Stops_cleanly_via_StopAsync()
     {
-        // RealTime + endlose Verzögerung: nach Tick 1 blockiert der Feed, bis Stop abbricht.
+        // RealTime + endlose Verzoegerung: nach Tick 1 blockiert der Feed, bis Stop abbricht.
         var session = Engine.Start(Request(
             new TestSignalStrategy(intervalTicks: 2), BacktestTestData.RisingTicks(10),
             replay: ReplayOptions.Realtime,
@@ -74,7 +74,7 @@ public class PaperTradingSessionTests
 
         session.Pause();
         session.IsPaused.Should().BeTrue();
-        gate.Release(); // Tick 2 fließt WÄHREND Pause
+        gate.Release(); // Tick 2 fliesst WAEHREND Pause
         await WaitUntilAsync(() => session.GetState().TicksProcessed >= 2, "Tick 2");
         strategy.TickCalls.Should().Be(1); // Strategie wurde NICHT aufgerufen
 
@@ -283,6 +283,6 @@ public class PaperTradingSessionTests
     {
         typeof(PaperTradingEngine).GetConstructors()
             .SelectMany(c => c.GetParameters())
-            .Should().BeEmpty(); // parameterlos: keinerlei externe Abhängigkeiten
+            .Should().BeEmpty(); // parameterlos: keinerlei externe Abhaengigkeiten
     }
 }

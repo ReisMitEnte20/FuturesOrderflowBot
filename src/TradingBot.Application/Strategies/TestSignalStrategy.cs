@@ -2,13 +2,14 @@ using TradingBot.Core.Interfaces;
 using TradingBot.Domain.Enums;
 using TradingBot.Domain.Models;
 
-namespace TradingBot.Backtesting.Strategies;
+namespace TradingBot.Application.Strategies;
 
 /// <summary>
-/// DUMMY-Strategie NUR zum Testen der Backtest-Infrastruktur. KEINE Profit-Strategie.
-/// Erzeugt deterministisch alle <c>intervalTicks</c> Ticks ein Signal (optional alternierend
-/// Long/Short). Erzeugt ausschließlich <see cref="TradeSignal"/> – sendet niemals Orders.
-/// Über <see cref="Enabled"/> abschaltbar.
+/// DUMMY-Strategie NUR zum Testen der Infrastruktur (Backtest/Paper/Framework).
+/// KEINE Profit-Strategie. Erzeugt deterministisch alle <c>intervalTicks</c> Ticks ein
+/// Signal (optional alternierend Long/Short). Erzeugt ausschließlich <see cref="TradeSignal"/> –
+/// sendet niemals Orders. Über <see cref="Enabled"/> zusätzlich lokal abschaltbar
+/// (Framework-Disable über die StrategyRegistry ist der primäre Weg).
 /// </summary>
 public sealed class TestSignalStrategy : IStrategy
 {
@@ -16,6 +17,7 @@ public sealed class TestSignalStrategy : IStrategy
     private readonly bool _alternate;
     private readonly int _quantity;
     private readonly int _stopLossTicks;
+    private readonly SignalDirection _firstDirection;
     private int _tickCount;
     private bool _nextIsLong;
 
@@ -29,13 +31,12 @@ public sealed class TestSignalStrategy : IStrategy
         _alternate = alternate;
         _quantity = quantity;
         _stopLossTicks = stopLossTicks;
+        _firstDirection = firstDirection;
         _nextIsLong = firstDirection != SignalDirection.Short;
     }
 
     public bool Enabled { get; set; } = true;
     public string Name => "TestSignalStrategy";
-
-    public TradeSignal? OnBar(OrderFlowBar bar) => null;
 
     public TradeSignal? OnTick(MarketTick tick)
     {
@@ -58,5 +59,11 @@ public sealed class TestSignalStrategy : IStrategy
             SuggestedStopLossTicks = _stopLossTicks,
             Reason = "dummy test signal"
         };
+    }
+
+    public void Reset()
+    {
+        _tickCount = 0;
+        _nextIsLong = _firstDirection != SignalDirection.Short;
     }
 }

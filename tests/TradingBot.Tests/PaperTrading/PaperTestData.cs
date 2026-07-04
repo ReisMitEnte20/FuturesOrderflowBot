@@ -16,7 +16,10 @@ internal sealed class CountingStrategy : IStrategy
 
     public int TickCalls => _tickCalls;
     public string Name => _inner.Name;
-    public TradeSignal? OnBar(OrderFlowBar bar) => _inner.OnBar(bar);
+    public void Initialize(StrategyExecutionContext context) => _inner.Initialize(context);
+    public TradeSignal? OnCandle(Candle candle) => _inner.OnCandle(candle);
+    public TradeSignal? OnOrderFlowBar(OrderFlowBar bar) => _inner.OnOrderFlowBar(bar);
+    public void Reset() => _inner.Reset();
 
     public TradeSignal? OnTick(MarketTick tick)
     {

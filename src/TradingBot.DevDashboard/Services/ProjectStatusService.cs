@@ -9,9 +9,18 @@ public sealed record PipelineStage(string Name, string Sub);
 /// </summary>
 public sealed class ProjectStatusService
 {
-    public string CurrentPhase => "Phase 10A abgeschlossen";
-    public string TestStatus => "241 / 241 bestanden";
-    public string KnownGoodCommit => "08ac0b2";
+    public string CurrentPhase => "Phase 11 abgeschlossen";
+    public string TestStatus => "260 / 260 bestanden";
+    public string KnownGoodCommit => "e6a1b04";
+
+    /// <summary>Registrierte Dummy-Strategien (nur Anzeige). Strategien erzeugen NUR Signale, keine Orders.</summary>
+    public IReadOnlyList<ModuleInfo> DummyStrategies { get; } = new List<ModuleInfo>
+    {
+        new("NoOpStrategy", "Erzeugt niemals Signale (Platzhalter/Test)"),
+        new("TestSignalStrategy", "Deterministisch alle N Ticks, alternierend Long/Short"),
+        new("MovingAverageDummyStrategy", "SMA-Crossover-Dummy (Candle) – keine Profit-Strategie"),
+        new("OrderFlowTemplateStrategy", "Leeres Template – kein Signal ohne echte Orderflow-Daten"),
+    };
 
     public IReadOnlyList<ModuleInfo> DoneModules { get; } = new List<ModuleInfo>
     {
@@ -27,6 +36,7 @@ public sealed class ProjectStatusService
         new("Exit-aware Risk Handling", "Reduce/Close/Flatten nicht durch Entry-Limits blockiert"),
         new("Paper Trading Engine", "Session (Start/Stop/Pause), simulierte Fills, Journal"),
         new("Paper Trading Monitor", "Live-Monitor im DevDashboard (PAPER SIMULATION ONLY)"),
+        new("Strategy Framework", "Registry + Engine: Enable/Disable, Routing, Signal-Sammlung"),
         new("Project Documentation", "PROJECT_STATUS.md, ARCHITECTURE.md, PAPER_TRADING.md, README"),
     };
 

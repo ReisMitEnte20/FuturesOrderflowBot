@@ -1,7 +1,7 @@
 using System.Text;
 using FluentAssertions;
 using TradingBot.Backtesting;
-using TradingBot.Backtesting.Strategies;
+using TradingBot.Application.Strategies;
 using TradingBot.Core.Interfaces;
 using TradingBot.Domain.Models;
 using TradingBot.Infrastructure.MarketData;
@@ -121,7 +121,7 @@ public class BacktestEngineTests
 
         var result = await Engine.RunAsync(req);
 
-        result.Statistics.TotalTrades.Should().Be(1);           // nur der erste Trade schließt
+        result.Statistics.TotalTrades.Should().Be(1);           // nur der erste Trade schliesst
         result.Statistics.NetProfit.Should().BeLessThan(0m);    // Verlust
         result.OrdersRejectedByRisk.Should().BeGreaterThan(0);  // Folge-Signale blockiert
     }

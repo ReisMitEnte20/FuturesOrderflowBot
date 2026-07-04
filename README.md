@@ -4,7 +4,7 @@ Modularer Futures-Orderflow-Trading-Bot (C# / .NET 8).
 Unterstützt Backtest, Replay, Paper Trading und – später – Live Trading.
 Brokerunabhängig über JSON-Profile (Broker / Instrument / Fee / Risk).
 
-> **Teststand: 241/241 grün · Build: 0 Warnungen / 0 Fehler**
+> **Teststand: 260/260 grün · Build: 0 Warnungen / 0 Fehler**
 > ⚠️ **Keine Live-Execution** vorhanden · ⚠️ **Keine Broker-API** angebunden ·
 > alle Broker-/Fee-/TickValue-Werte stammen aus Config (`config/`), nichts ist hardcoded.
 
@@ -15,7 +15,7 @@ Brokerunabhängig über JSON-Profile (Broker / Instrument / Fee / Risk).
    CSV/Replay    Signale     Gate     Submit     Netting/Fees
 ```
 
-**Fertig (Phase 1–10A):**
+**Fertig (Phase 1–11):**
 - Architektur, Solution-Skeleton, Domain-Modelle + Interfaces
 - Config-/Profil-System (Broker / Instrument / Fee / Risk) mit Validierung
 - Fee- + PnL-Engine (Gross/Net getrennt, `decimal`-genau)
@@ -24,6 +24,7 @@ Brokerunabhängig über JSON-Profile (Broker / Instrument / Fee / Risk).
 - MarketData (CSV-Reader, Replay-Feed, Heartbeat, Time/Tick/Volume/OrderFlow-Aggregation)
 - Backtest Engine (deterministisch, Fill-Modell, Kennzahlen) + Paper Trading Engine (Session)
 - DevDashboard mit **Paper Trading Monitor** (`/paper`, PAPER SIMULATION ONLY — Demo per Sample-CSV)
+- **Strategy Framework** (Registry + Engine: Enable/Disable, Routing, Signal-Sammlung — siehe [docs/STRATEGY_FRAMEWORK.md](docs/STRATEGY_FRAMEWORK.md))
 
 **Noch offen:**
 - Phase 10 (Rest): finales Dashboard

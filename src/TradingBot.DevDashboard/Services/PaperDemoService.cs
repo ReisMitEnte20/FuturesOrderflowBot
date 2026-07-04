@@ -1,4 +1,4 @@
-using TradingBot.Backtesting.Strategies;
+using TradingBot.Application.Strategies;
 using TradingBot.Domain.Models;
 using TradingBot.Infrastructure.Config;
 using TradingBot.Infrastructure.MarketData;

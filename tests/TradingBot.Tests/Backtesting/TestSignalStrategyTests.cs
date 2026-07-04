@@ -1,5 +1,6 @@
 using FluentAssertions;
-using TradingBot.Backtesting.Strategies;
+using TradingBot.Application.Strategies;
+using TradingBot.Core.Interfaces;
 using TradingBot.Domain.Enums;
 using Xunit;
 
@@ -50,9 +51,25 @@ public class TestSignalStrategyTests
     }
 
     [Fact]
-    public void OnBar_returns_null()
+    public void OrderFlowBar_and_Candle_handlers_default_to_null()
     {
-        var sut = new TestSignalStrategy();
-        sut.OnBar(new TradingBot.Domain.Models.OrderFlowBar { Symbol = "NQ" }).Should().BeNull();
+        IStrategy sut = new TestSignalStrategy();
+        sut.OnOrderFlowBar(new TradingBot.Domain.Models.OrderFlowBar { Symbol = "NQ" }).Should().BeNull();
+        sut.OnCandle(new TradingBot.Domain.Models.Candle { Symbol = "NQ" }).Should().BeNull();
+    }
+
+    [Fact]
+    public void Reset_restarts_tick_counting_deterministically()
+    {
+        var sut = new TestSignalStrategy(intervalTicks: 2);
+        sut.OnTick(BacktestTestData.Tick(0, 20000m)).Should().BeNull();
+        sut.OnTick(BacktestTestData.Tick(1, 20001m)).Should().NotBeNull();
+
+        ((IStrategy)sut).Reset();
+
+        sut.OnTick(BacktestTestData.Tick(2, 20002m)).Should().BeNull();      // Zaehler wieder bei 1
+        var signal = sut.OnTick(BacktestTestData.Tick(3, 20003m));
+        signal.Should().NotBeNull();
+        signal!.Direction.Should().Be(SignalDirection.Long);                 // Richtung zurueckgesetzt
     }
 }

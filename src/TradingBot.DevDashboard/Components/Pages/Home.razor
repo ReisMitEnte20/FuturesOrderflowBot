@@ -84,6 +84,23 @@
         }
     </div>
 
+    <!-- Strategien (read-only) -->
+    <h2 class="section-title">Strategy Framework — Dummy-Strategien</h2>
+    <div class="alert alert-info py-2">
+        ℹ️ Strategien erzeugen ausschließlich <strong>TradeSignals</strong> – niemals Orders.
+        Ob und wie gehandelt wird, entscheiden RiskManager und OrderManager.
+    </div>
+    <ul class="module-list">
+        @foreach (var s in Status.DummyStrategies)
+        {
+            <li>
+                <span class="badge bg-info text-dark">Dummy</span>
+                <span class="m-name">@s.Name</span>
+                <span class="m-desc">@s.Description</span>
+            </li>
+        }
+    </ul>
+
     <!-- Config -->
     <h2 class="section-title">Config-Übersicht (read-only)</h2>
     @if (_config is null)
