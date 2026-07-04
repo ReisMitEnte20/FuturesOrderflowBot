@@ -47,6 +47,33 @@ Der **RiskManager läuft unverändert** — Paper ist nicht lockerer als später
 - Emergency Flatten mit echter Orderausführung + Kill-Switch-Integration
 - Live-Mode-Aktivierung mit Safety-Audit (Phase 19/20) — bis dahin existiert kein Live-Pfad im Code
 
+## Paper Trading Monitor (DevDashboard, Phase 10A)
+
+Das read-only DevDashboard hat unter **`/paper`** einen Live-Monitor für Paper-Sessions.
+
+**Dashboard starten:**
+
+```powershell
+dotnet run --project src\TradingBot.DevDashboard\TradingBot.DevDashboard.csproj
+# oder mit Live-Reload:
+dotnet watch --project src\TradingBot.DevDashboard\TradingBot.DevDashboard.csproj run
+```
+
+Dann im Browser die angezeigte URL öffnen (Standard `http://localhost:5034`) → „Paper Monitor".
+
+**Paper-Demo starten:** Button **„Start Demo Paper Session"**. Die Demo spielt die lokale
+Sample-CSV `samples/marketdata/demo-paper-session.csv` (120 Ticks, ~60 s) in Echtzeit ab —
+mit der deterministischen `TestSignalStrategy` (keine Profit-Strategie) und Profilen aus `config/`.
+Pause/Resume/Stop wirken ausschließlich auf diese lokale Simulation.
+Der Monitor pollt den Session-State alle 500 ms (reiner Read-only-Snapshot).
+
+**Was „PAPER SIMULATION ONLY" bedeutet:** Es existiert im gesamten Projekt kein Code-Pfad zu
+einem echten Broker. Der `PaperExecutionAdapter` ist ein In-Memory-Simulator (keine Netzwerk-
+Referenzen — per Test abgesichert), das Dashboard referenziert das Execution-Projekt nicht
+(ebenfalls per Test abgesichert), und es gibt keine Buy/Sell-/Order-Buttons. Jede angezeigte
+Order, jeder Fill und jeder PnL-Wert ist simuliert. Eine echte Broker-Verbindung entsteht erst
+in Phase 15/16 hinter demselben Interface — nach separatem Safety-Audit.
+
 ## Nutzung (Beispiel)
 
 ```csharp

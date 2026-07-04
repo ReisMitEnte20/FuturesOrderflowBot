@@ -4,6 +4,8 @@
     <ProjectReference Include="..\TradingBot.Domain\TradingBot.Domain.csproj" />
     <ProjectReference Include="..\TradingBot.Core\TradingBot.Core.csproj" />
     <ProjectReference Include="..\TradingBot.Infrastructure\TradingBot.Infrastructure.csproj" />
+    <ProjectReference Include="..\TradingBot.PaperTrading\TradingBot.PaperTrading.csproj" />
+    <ProjectReference Include="..\TradingBot.Backtesting\TradingBot.Backtesting.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

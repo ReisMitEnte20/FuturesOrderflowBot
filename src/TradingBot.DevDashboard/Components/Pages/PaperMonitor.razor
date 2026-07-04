@@ -1,0 +1,188 @@
+@page "/paper"
+@rendermode InteractiveServer
+@implements IDisposable
+@using TradingBot.DevDashboard.Services
+@using TradingBot.PaperTrading
+@inject PaperDemoService Demo
+
+<PageTitle>Paper Trading Monitor</PageTitle>
+
+<div class="pm">
+    <div class="alert alert-danger pm-banner" role="alert">
+        🧪 <strong>PAPER SIMULATION ONLY</strong> — No Broker API connected · No Live Execution ·
+        Paper/Replay only · No real orders can be sent · All fills are simulated.
+    </div>
+
+    <h1 class="mb-3">Paper Trading Monitor</h1>
+
+    <div class="pm-controls mb-3">
+        <button class="btn btn-primary" @onclick="StartAsync" disabled="@(!CanStart)">▶ Start Demo Paper Session</button>
+        <button class="btn btn-outline-secondary" @onclick="Pause" disabled="@(!CanPause)">⏸ Pause</button>
+        <button class="btn btn-outline-secondary" @onclick="Resume" disabled="@(!CanResume)">⏵ Resume</button>
+        <button class="btn btn-outline-danger" @onclick="StopAsync" disabled="@(!CanStop)">⏹ Stop</button>
+        <span class="pm-hint">Alle Buttons wirken nur auf die lokale Paper-Simulation (Replay der Demo-CSV, ~60 s).</span>
+    </div>
+
+    @if (Demo.LastError is not null)
+    {
+        <div class="alert alert-warning">Demo konnte nicht starten: @Demo.LastError</div>
+    }
+
+    @if (_state is null)
+    {
+        <div class="alert alert-secondary">
+            Noch keine Session gestartet. „Start Demo Paper Session" spielt die lokale Sample-CSV
+            (<code>samples/marketdata/demo-paper-session.csv</code>) in Echtzeit ab —
+            mit der deterministischen TestSignalStrategy (keine Profit-Strategie, nur Infrastruktur-Demo).
+        </div>
+    }
+    else
+    {
+        <div class="row g-3 mb-3">
+            <div class="col-sm-6 col-lg-3"><div class="pm-card"><div class="pm-label">Session Status</div>
+                <div class="pm-value @StatusCss(_state.Status)">@_state.Status</div></div></div>
+            <div class="col-sm-6 col-lg-3"><div class="pm-card"><div class="pm-label">Trading Mode</div>
+                <div class="pm-value">@_state.TradingMode <span class="badge bg-danger">SIM</span></div></div></div>
+            <div class="col-sm-6 col-lg-3"><div class="pm-card"><div class="pm-label">Symbol</div>
+                <div class="pm-value">@_state.CurrentSymbol</div></div></div>
+            <div class="col-sm-6 col-lg-3"><div class="pm-card"><div class="pm-label">Ticks verarbeitet</div>
+                <div class="pm-value">@_state.TicksProcessed</div></div></div>
+        </div>
+
+        <div class="row g-3 mb-3">
+            <div class="col-sm-6 col-lg-3"><div class="pm-card"><div class="pm-label">Gross PnL</div>
+                <div class="pm-value @PnlCss(_state.GrossPnL)">@_state.GrossPnL.ToString("F2") $</div></div></div>
+            <div class="col-sm-6 col-lg-3"><div class="pm-card"><div class="pm-label">Net PnL</div>
+                <div class="pm-value @PnlCss(_state.NetPnL)">@_state.NetPnL.ToString("F2") $</div></div></div>
+            <div class="col-sm-6 col-lg-3"><div class="pm-card"><div class="pm-label">Total Fees</div>
+                <div class="pm-value">@_state.TotalFees.ToString("F2") $</div></div></div>
+            <div class="col-sm-6 col-lg-3"><div class="pm-card"><div class="pm-label">Total Slippage (simuliert)</div>
+                <div class="pm-value">@_state.TotalSlippage.ToString("F2") $</div></div></div>
+        </div>
+
+        <div class="row g-3 mb-3">
+            <div class="col-lg-6">
+                <table class="table table-sm pm-table">
+                    <tbody>
+                        <tr><th>Position</th><td>@PositionText()</td></tr>
+                        <tr><th>Unrealized Gross PnL</th><td>@_state.UnrealizedGrossPnL.ToString("F2") $</td></tr>
+                        <tr><th>Open Orders</th><td>@_state.OpenOrders</td></tr>
+                        <tr><th>Filled Orders</th><td>@_state.FilledOrders</td></tr>
+                        <tr><th>Rejected Orders (Risk + Broker-Sim)</th><td>@_state.RejectedOrders</td></tr>
+                        <tr><th>Trades heute</th><td>@_state.TradesToday</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="col-lg-6">
+                <table class="table table-sm pm-table">
+                    <tbody>
+                        <tr><th>Last Tick Time</th><td>@(_state.LastTickTime?.ToString("HH:mm:ss.fff") ?? "–")</td></tr>
+                        <tr><th>Feed Health</th><td>@_state.FeedHealthStatus</td></tr>
+                        <tr><th>Kill Switch</th><td>@(_state.KillSwitchActive ? "AKTIV" : "inaktiv")</td></tr>
+                        <tr><th>Risk Status (letzte Entscheidung)</th><td>@RiskText()</td></tr>
+                        <tr><th>Session gestartet</th><td>@(_state.StartedAt?.ToLocalTime().ToString("HH:mm:ss") ?? "–")</td></tr>
+                        <tr><th>Session beendet</th><td>@(_state.StoppedAt?.ToLocalTime().ToString("HH:mm:ss") ?? "–")</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <h2 class="pm-section">Abgeschlossene Trades (@(_trades?.Count ?? 0)) — simuliert</h2>
+        @if (_trades is { Count: > 0 })
+        {
+            <table class="table table-sm pm-table">
+                <thead><tr><th>Seite</th><th>Menge</th><th>Entry</th><th>Exit</th><th>Gross</th><th>Fees</th><th>Net</th></tr></thead>
+                <tbody>
+                    @foreach (var t in _trades)
+                    {
+                        <tr>
+                            <td>@t.Side</td><td>@t.Quantity</td>
+                            <td>@t.EntryPrice.ToString("F2")</td><td>@t.ExitPrice.ToString("F2")</td>
+                            <td class="@PnlCss(t.GrossPnL)">@t.GrossPnL.ToString("F2")</td>
+                            <td>@t.Fees.TotalFees.ToString("F2")</td>
+                            <td class="@PnlCss(t.NetPnL)">@t.NetPnL.ToString("F2")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+        else
+        {
+            <p class="text-muted">Noch keine abgeschlossenen Trades.</p>
+        }
+    }
+
+    <footer class="pm-footer">
+        Read-only Monitor · Simulation über PaperTradingEngine + PaperExecutionAdapter ·
+        keine Broker-Verbindung, keine echten Orders.
+    </footer>
+</div>
+
+@code {
+    private PaperTradingSessionState? _state;
+    private IReadOnlyList<TradingBot.PaperTrading.Positions.PaperClosedTrade>? _trades;
+    private PeriodicTimer? _timer;
+
+    private bool CanStart => _state is null
+        || _state.Status is PaperTradingRunStatus.Stopped or PaperTradingRunStatus.Completed
+            or PaperTradingRunStatus.Cancelled or PaperTradingRunStatus.Failed;
+    private bool CanPause => _state?.Status == PaperTradingRunStatus.Running;
+    private bool CanResume => _state?.Status == PaperTradingRunStatus.Paused;
+    private bool CanStop => _state?.Status is PaperTradingRunStatus.Running or PaperTradingRunStatus.Paused;
+
+    protected override void OnInitialized()
+    {
+        Refresh();
+        _timer = new PeriodicTimer(TimeSpan.FromMilliseconds(500));
+        _ = PollAsync(_timer);
+    }
+
+    private async Task PollAsync(PeriodicTimer timer)
+    {
+        try
+        {
+            while (await timer.WaitForNextTickAsync())
+            {
+                Refresh();
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException) { /* Seite geschlossen */ }
+    }
+
+    private void Refresh()
+    {
+        _state = Demo.GetState();              // reiner Read-only-Snapshot, keine Side-Effects
+        _trades = Demo.Session?.ClosedTrades;  // thread-safe Kopie, auch während des Laufs
+    }
+
+    private async Task StartAsync() { await Demo.StartDemoAsync(); Refresh(); }
+    private void Pause() { Demo.Pause(); Refresh(); }
+    private void Resume() { Demo.Resume(); Refresh(); }
+    private async Task StopAsync() { await Demo.StopAsync(); Refresh(); }
+
+    private string PositionText()
+    {
+        var p = _state?.CurrentPosition;
+        if (p is null || p.IsFlat) return "Flat";
+        return $"{p.Side} {p.Quantity} @ {p.AverageEntryPrice:F2}";
+    }
+
+    private string RiskText()
+    {
+        var r = _state?.RiskStatus;
+        if (r is null) return "–";
+        return r.Approved ? $"Approved ({r.ApprovedContracts} Kontrakte)" : $"Rejected: {r.RejectionReason}";
+    }
+
+    private static string PnlCss(decimal v) => v > 0 ? "text-success" : v < 0 ? "text-danger" : "";
+    private static string StatusCss(PaperTradingRunStatus s) => s switch
+    {
+        PaperTradingRunStatus.Running => "text-success",
+        PaperTradingRunStatus.Paused => "text-warning",
+        PaperTradingRunStatus.Failed => "text-danger",
+        _ => ""
+    };
+
+    public void Dispose() => _timer?.Dispose();
+}

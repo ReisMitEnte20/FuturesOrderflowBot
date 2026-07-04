@@ -269,6 +269,9 @@ public sealed class PaperTradingSession
     /// <summary>Journal der Session (Trades mit Kontext, Mode = Paper).</summary>
     public IReadOnlyList<TradeJournalEntry> JournalEntries => _journal.Entries;
 
+    /// <summary>Bisher abgeschlossene (simulierte) Trades – auch während des Laufs abfragbar.</summary>
+    public IReadOnlyList<PaperClosedTrade> ClosedTrades => _positions.Trades;
+
     private PaperTradingResult BuildResult(string? failure) => new()
     {
         Status = _status,

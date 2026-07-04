@@ -4,7 +4,7 @@ Modularer Futures-Orderflow-Trading-Bot (C# / .NET 8).
 Unterstützt Backtest, Replay, Paper Trading und – später – Live Trading.
 Brokerunabhängig über JSON-Profile (Broker / Instrument / Fee / Risk).
 
-> **Teststand: 146/146 grün · Build: 0 Warnungen / 0 Fehler**
+> **Teststand: 241/241 grün · Build: 0 Warnungen / 0 Fehler**
 > ⚠️ **Keine Live-Execution** vorhanden · ⚠️ **Keine Broker-API** angebunden ·
 > alle Broker-/Fee-/TickValue-Werte stammen aus Config (`config/`), nichts ist hardcoded.
 
@@ -15,19 +15,22 @@ Brokerunabhängig über JSON-Profile (Broker / Instrument / Fee / Risk).
    CSV/Replay    Signale     Gate     Submit     Netting/Fees
 ```
 
-**Fertig (Phase 1–8A):**
+**Fertig (Phase 1–10A):**
 - Architektur, Solution-Skeleton, Domain-Modelle + Interfaces
 - Config-/Profil-System (Broker / Instrument / Fee / Risk) mit Validierung
 - Fee- + PnL-Engine (Gross/Net getrennt, `decimal`-genau)
-- RiskManager (fail-closed Gatekeeper, blockt vor jeder Order)
+- RiskManager (fail-closed Gatekeeper, exit-aware: Close/Reduce nie durch Entry-Limits blockiert)
 - OrderManager + PositionManager (Dedup, Lifecycle, SL/TP/Bracket/BE/Trailing, Netting/PnL)
 - MarketData (CSV-Reader, Replay-Feed, Heartbeat, Time/Tick/Volume/OrderFlow-Aggregation)
+- Backtest Engine (deterministisch, Fill-Modell, Kennzahlen) + Paper Trading Engine (Session)
+- DevDashboard mit **Paper Trading Monitor** (`/paper`, PAPER SIMULATION ONLY — Demo per Sample-CSV)
 
 **Noch offen:**
-- Phase 8B: Backtest Engine
-- Phase 9: Paper Trading
-- Phase 10: Dashboard (read-only Monitoring)
+- Phase 10 (Rest): finales Dashboard
 - Phase 13/14: Live-Broker-Adapter + Safety Audit
+
+**Dashboard starten:** siehe [docs/PAPER_TRADING.md](docs/PAPER_TRADING.md) —
+`dotnet watch --project src\TradingBot.DevDashboard\TradingBot.DevDashboard.csproj run`
 
 Details: siehe [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) und [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 

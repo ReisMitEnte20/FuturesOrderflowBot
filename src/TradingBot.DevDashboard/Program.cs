@@ -12,6 +12,7 @@ var repoRoot = RepoLocator.FindRoot(builder.Environment.ContentRootPath);
 builder.Services.AddSingleton<ProjectStatusService>();
 builder.Services.AddSingleton(new GitInfoService(repoRoot));
 builder.Services.AddSingleton(new ConfigOverviewService(repoRoot));
+builder.Services.AddSingleton(new PaperDemoService(repoRoot)); // PAPER SIMULATION ONLY
 
 var app = builder.Build();
 

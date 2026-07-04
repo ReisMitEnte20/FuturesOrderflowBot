@@ -1,0 +1,67 @@
+.pm {
+    max-width: 1200px;
+}
+
+.pm-banner {
+    font-size: 0.95rem;
+    font-weight: 500;
+}
+
+.pm-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.pm-hint {
+    font-size: 0.78rem;
+    color: #6c757d;
+    margin-left: 0.5rem;
+}
+
+.pm-card {
+    background: #fff;
+    border: 1px solid #e3e3e3;
+    border-radius: 0.5rem;
+    padding: 0.75rem 1rem;
+    height: 100%;
+}
+
+.pm-label {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #6c757d;
+}
+
+.pm-value {
+    font-size: 1.15rem;
+    font-weight: 600;
+}
+
+.pm-section {
+    font-size: 1.05rem;
+    font-weight: 600;
+    margin: 1rem 0 0.5rem;
+    padding-bottom: 0.25rem;
+    border-bottom: 2px solid #e3e3e3;
+}
+
+.pm-table {
+    font-size: 0.88rem;
+}
+
+.pm-table th {
+    width: 45%;
+    color: #495057;
+    font-weight: 500;
+}
+
+.pm-footer {
+    margin-top: 2rem;
+    padding-top: 1rem;
+    border-top: 1px solid #e3e3e3;
+    color: #6c757d;
+    font-size: 0.8rem;
+}
