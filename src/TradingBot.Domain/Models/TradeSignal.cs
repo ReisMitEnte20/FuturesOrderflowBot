@@ -27,6 +27,15 @@ public sealed record TradeSignal
     public int? SuggestedStopLossTicks { get; init; }
     public int? SuggestedTakeProfitTicks { get; init; }
 
-    /// <summary>Kurzbegründung des Signals (z. B. "Stacked Imbalance + CVD").</summary>
+    /// <summary>Kurzbegründung des Signals (z. B. "Liquidity Sweep + Absorption + Delta-Reversal").</summary>
     public string Reason { get; init; } = string.Empty;
+
+    /// <summary>Bedingungen, die dieses Signal ausgelöst haben (für Auswertung/Journal).</summary>
+    public IReadOnlyList<string> TriggeredConditions { get; init; } = Array.Empty<string>();
+
+    /// <summary>Bedingungen, die geprüft wurden, aber NICHT erfüllt waren (Diagnose).</summary>
+    public IReadOnlyList<string> FailedConditions { get; init; } = Array.Empty<string>();
+
+    /// <summary>Optionale Debug-Notizen (z. B. Checks ohne ausreichende Datenbasis).</summary>
+    public string? DebugNotes { get; init; }
 }

@@ -30,5 +30,6 @@ public sealed record OrderFlowBar
     /// <summary>Kumulatives Delta bis einschließlich dieser Bar (vom Aggregator gesetzt).</summary>
     public decimal CumulativeDelta { get; init; }
 
+    public decimal Range => High - Low;
     public bool IsBullish => Close > Open;
 }

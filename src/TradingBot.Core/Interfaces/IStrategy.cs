@@ -17,6 +17,9 @@ public interface IStrategy
 {
     string Name { get; }
 
+    /// <summary>Welche Daten diese Strategie benötigt. Default: keine besonderen Anforderungen.</summary>
+    StrategyDataRequirements DataRequirements => StrategyDataRequirements.None;
+
     /// <summary>Einmalige Initialisierung mit Kontext (Instrument, Config). Default: no-op.</summary>
     void Initialize(StrategyExecutionContext context) { }
 
