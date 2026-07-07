@@ -4,7 +4,7 @@ Modularer Futures-Orderflow-Trading-Bot (C# / .NET 8).
 Unterstützt Backtest, Replay, Paper Trading und – später – Live Trading.
 Brokerunabhängig über JSON-Profile (Broker / Instrument / Fee / Risk).
 
-> **Teststand: 288/288 grün · Build: 0 Warnungen / 0 Fehler**
+> **Teststand: 313/313 grün · Build: 0 Warnungen / 0 Fehler**
 > ⚠️ **Keine Live-Execution** vorhanden · ⚠️ **Keine Broker-API** angebunden ·
 > alle Broker-/Fee-/TickValue-Werte stammen aus Config (`config/`), nichts ist hardcoded.
 
@@ -15,7 +15,7 @@ Brokerunabhängig über JSON-Profile (Broker / Instrument / Fee / Risk).
    CSV/Replay    Signale     Gate     Submit     Netting/Fees
 ```
 
-**Fertig (Phase 1–12):**
+**Fertig (Phase 1–12B):**
 - Architektur, Solution-Skeleton, Domain-Modelle + Interfaces
 - Config-/Profil-System (Broker / Instrument / Fee / Risk) mit Validierung
 - Fee- + PnL-Engine (Gross/Net getrennt, `decimal`-genau)
@@ -26,6 +26,7 @@ Brokerunabhängig über JSON-Profile (Broker / Instrument / Fee / Risk).
 - DevDashboard mit **Paper Trading Monitor** (`/paper`, PAPER SIMULATION ONLY — Demo per Sample-CSV)
 - **Strategy Framework** (Registry + Engine: Enable/Disable, Routing, Signal-Sammlung — siehe [docs/STRATEGY_FRAMEWORK.md](docs/STRATEGY_FRAMEWORK.md))
 - **Orderflow Strategy Template** (modulare Checks: Divergenz/Absorption/Sweep/CVD/… — siehe [docs/ORDERFLOW_STRATEGY_TEMPLATE.md](docs/ORDERFLOW_STRATEGY_TEMPLATE.md))
+- **Data Import + Quality Layer** (ATAS-CSV: Tick/Bar/Footprint/Profile, Capabilities, QualityReport — siehe [docs/DATA_IMPORT_AND_QUALITY.md](docs/DATA_IMPORT_AND_QUALITY.md))
 
 **Noch offen:**
 - Phase 10 (Rest): finales Dashboard

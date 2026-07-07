@@ -9,9 +9,9 @@ public sealed record PipelineStage(string Name, string Sub);
 /// </summary>
 public sealed class ProjectStatusService
 {
-    public string CurrentPhase => "Phase 12 abgeschlossen";
-    public string TestStatus => "288 / 288 bestanden";
-    public string KnownGoodCommit => "8b558c5";
+    public string CurrentPhase => "Phase 12B abgeschlossen";
+    public string TestStatus => "313 / 313 bestanden";
+    public string KnownGoodCommit => "8793b9a";
 
     /// <summary>Registrierte Dummy-Strategien (nur Anzeige). Strategien erzeugen NUR Signale, keine Orders.</summary>
     public IReadOnlyList<ModuleInfo> DummyStrategies { get; } = new List<ModuleInfo>
@@ -39,6 +39,7 @@ public sealed class ProjectStatusService
         new("Paper Trading Monitor", "Live-Monitor im DevDashboard (PAPER SIMULATION ONLY)"),
         new("Strategy Framework", "Registry + Engine: Enable/Disable, Routing, Signal-Sammlung"),
         new("Orderflow Strategy Template", "Modulare Checks (Divergenz/Absorption/Sweep/CVD …) — nur Signale, keine Orders"),
+        new("Data Import + Quality Layer", "ATAS-CSV-Import (Tick/Bar/Footprint/Profile), Capabilities, QualityReport"),
         new("Project Documentation", "PROJECT_STATUS.md, ARCHITECTURE.md, PAPER_TRADING.md, README"),
     };
 
