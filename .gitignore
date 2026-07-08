@@ -15,3 +15,12 @@ Thumbs.db
 ## Secrets / local config (NICHT committen)
 config/**/*.local.json
 *.secrets.json
+
+## Lokale Marktdaten-Exporte (NIE committen; .gitkeep bleibt)
+samples/sierra/raw/*.txt
+samples/sierra/raw/*.csv
+samples/sierra/raw/*.scid
+samples/sierra/raw/*.tct
+samples/atas/raw/*.txt
+samples/atas/raw/*.csv
+!samples/**/raw/.gitkeep
