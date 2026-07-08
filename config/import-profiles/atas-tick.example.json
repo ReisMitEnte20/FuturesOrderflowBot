@@ -1,0 +1,13 @@
+{
+  "_comment": "BEISPIEL-Mapping (keine garantierten ATAS-Spaltennamen). Passe die rechten Werte an deinen echten ATAS-Header an. Logische Felder (links) sind fest; Pflicht: timestamp, symbol, price, volume. Fuer Delta/CVD zusaetzlich tradedirection ODER bidvolume+askvolume.",
+  "sourceType": "AggressorTick",
+  "delimiter": ",",
+  "note": "ATAS Tick/Trade Export (Beispiel) - vor echtem Einsatz gegen realen Header pruefen.",
+  "columnMap": {
+    "timestamp": "Time",
+    "symbol": "Instrument",
+    "price": "Price",
+    "volume": "Volume",
+    "tradedirection": "AggressorSide"
+  }
+}

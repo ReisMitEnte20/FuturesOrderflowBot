@@ -1,0 +1,18 @@
+{
+  "_comment": "BEISPIEL-Mapping fuer Sierra-Chart-Intraday-Export (Date, Time, Open, High, Low, Last, Volume, NumberOfTrades, BidVolume, AskVolume). Date/Time sind laut Sierra UTC und werden zu EINEM Timestamp kombiniert. Pflicht: date, time, last, volume. Fuer Delta/CVD zusaetzlich bidvolume+askvolume. High=Ask, Low=Bid gelten NUR im echten 1-Tick-Export (NumberOfTrades==1).",
+  "sourceType": "AggressorTick",
+  "delimiter": ",",
+  "note": "Sierra Chart Intraday Text/CSV Export (Beispiel) - bevorzugte Kurzfrist-Quelle; echten 1-Tick-Export testen.",
+  "columnMap": {
+    "date": "Date",
+    "time": "Time",
+    "last": "Last",
+    "volume": "Volume",
+    "high": "High",
+    "low": "Low",
+    "open": "Open",
+    "numberoftrades": "NumberOfTrades",
+    "bidvolume": "BidVolume",
+    "askvolume": "AskVolume"
+  }
+}

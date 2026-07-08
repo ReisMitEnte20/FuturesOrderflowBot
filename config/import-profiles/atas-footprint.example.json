@@ -1,0 +1,16 @@
+{
+  "_comment": "BEISPIEL-Mapping (keine garantierten ATAS-Spaltennamen). Pflicht: bartimestamp, symbol, pricelevel, bidvolumeatprice, askvolumeatprice. Optional: totalvolumeatprice, imbalanceratio, isstackedimbalance, open/high/low/close.",
+  "sourceType": "Footprint",
+  "delimiter": ",",
+  "note": "ATAS Footprint Export (Beispiel, Bid/Ask je Preislevel je Bar) - vor echtem Einsatz gegen realen Header pruefen.",
+  "columnMap": {
+    "bartimestamp": "Time",
+    "symbol": "Instrument",
+    "pricelevel": "Price",
+    "bidvolumeatprice": "BidVolume",
+    "askvolumeatprice": "AskVolume",
+    "totalvolumeatprice": "Volume",
+    "imbalanceratio": "ImbalanceRatio",
+    "isstackedimbalance": "StackedImbalance"
+  }
+}

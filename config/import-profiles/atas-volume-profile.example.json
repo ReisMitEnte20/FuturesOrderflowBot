@@ -1,0 +1,14 @@
+{
+  "_comment": "BEISPIEL-Mapping (keine garantierten ATAS-Spaltennamen). Pflicht: sessiondate, symbol, pricelevel, volumeatprice. Optional: bidvolumeatprice, askvolumeatprice, hvn, lvn.",
+  "sourceType": "VolumeProfile",
+  "delimiter": ",",
+  "note": "ATAS Volume Profile Export (Beispiel, Volumen je Preislevel je Session) - vor echtem Einsatz gegen realen Header pruefen.",
+  "columnMap": {
+    "sessiondate": "TradingDate",
+    "symbol": "Instrument",
+    "pricelevel": "Price",
+    "volumeatprice": "Volume",
+    "bidvolumeatprice": "BidVolume",
+    "askvolumeatprice": "AskVolume"
+  }
+}

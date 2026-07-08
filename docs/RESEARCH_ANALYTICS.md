@@ -77,6 +77,17 @@ unzureichende Capabilities) und bündelt sie in einem `RobustnessScore` — ausd
 3. Für einzelne Kandidaten: `ParameterSweepRunner`, `WalkForwardAnalyzer`, `SensitivityAnalyzer`.
 4. Entscheidung nach **OOS + Robustheit**, nicht nach IS-NetProfit.
 
+## Benchmark: risk-adjusted gegen S&P 500 / ES buy-and-hold
+
+Das eigentliche Ziel ist eine Edge, die **nach Fees/Slippage risikoadjustiert** besser ist als
+passiv den S&P 500 (ES) zu halten. Eine Strategie, die nur **brutto** gut aussieht, aber nach
+Kosten, Slippage oder Out-of-Sample schlecht ist, zählt als **nicht robust**. Später zu
+vergleichen (geplant, noch nicht gebaut): NetPnL nach Kosten, Max Drawdown, Sharpe/Sortino,
+MAR/Return-to-Drawdown, Walk-Forward-Stabilität, Monte-Carlo-Worst-Case, OOS-Performance und
+Time-in-market/Capital-Efficiency. Datengrundlage dafür: echte Orderflow-Daten
+(siehe [MARKET_DATA_SOURCE_GUIDE.md](MARKET_DATA_SOURCE_GUIDE.md)) — **einfache OHLCV-Strategien
+dienen nur der Infrastruktur-Validierung, nicht dem Edge-Ziel.**
+
 ## Benötigte Datenqualität
 
 Research ist nur so gut wie die Daten. Für Orderflow-Setups sind echte Aggressor-/Bid-Ask-Daten

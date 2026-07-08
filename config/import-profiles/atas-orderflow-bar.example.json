@@ -1,0 +1,19 @@
+{
+  "_comment": "BEISPIEL-Mapping (keine garantierten ATAS-Spaltennamen). Pflicht: bartimestamp, symbol, open, high, low, close, volume, bidvolume, askvolume, delta. Optional: cumulativedelta (sonst als laufende Summe der echten Bar-Deltas abgeleitet).",
+  "sourceType": "OrderFlowBars",
+  "delimiter": ",",
+  "note": "ATAS Orderflow Bar Export (Beispiel) - vor echtem Einsatz gegen realen Header pruefen.",
+  "columnMap": {
+    "bartimestamp": "Time",
+    "symbol": "Instrument",
+    "open": "Open",
+    "high": "High",
+    "low": "Low",
+    "close": "Close",
+    "volume": "Volume",
+    "bidvolume": "BidVolume",
+    "askvolume": "AskVolume",
+    "delta": "Delta",
+    "cumulativedelta": "CumulativeDelta"
+  }
+}

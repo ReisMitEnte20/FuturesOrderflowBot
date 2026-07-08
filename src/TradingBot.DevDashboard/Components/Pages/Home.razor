@@ -164,6 +164,24 @@
         </table>
     }
 
+    <!-- ATAS Data Import (Vorbereitung, Phase 12E-A) -->
+    <h2 class="section-title mt-4">ATAS Data Import Status</h2>
+    <div class="alert alert-warning py-2">
+        📄 <strong>No real ATAS CSV loaded yet.</strong> · <strong>No fake orderflow.</strong>
+        Vorbereitung: Export-Guide + Beispiel-Mapping-Profile vorhanden, echte Exporte fehlen noch.
+        Fehlt ein Datenlevel, meldet das System <code>InsufficientData</code>.
+    </div>
+    <ul class="module-list">
+        <li><span class="badge bg-secondary">OHLCV</span> <span class="m-desc">nur Candle-/Volume-Strategien</span></li>
+        <li><span class="badge bg-secondary">Aggressor / Bid-Ask</span> <span class="m-desc">nötig für Delta · CVD · Absorption</span></li>
+        <li><span class="badge bg-secondary">Footprint</span> <span class="m-desc">nötig für Stacked Imbalances</span></li>
+        <li><span class="badge bg-secondary">Volume Profile</span> <span class="m-desc">nötig für HVN / LVN</span></li>
+    </ul>
+    <div class="alert alert-secondary py-2">
+        Anleitung: <code>docs/ATAS_EXPORT_GUIDE.md</code> · Ablage: <code>samples/atas/raw/</code> ·
+        Vorlagen: <code>config/import-profiles/atas-*.example.json</code>
+    </div>
+
     <footer class="dash-footer">
         Read-only Übersicht · generiert aus Code &amp; config/ · keine Trading-Funktion.
     </footer>
