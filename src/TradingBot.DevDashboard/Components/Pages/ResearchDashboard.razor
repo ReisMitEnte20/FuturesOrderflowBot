@@ -1,0 +1,410 @@
+@page "/research"
+@using System.Globalization
+@using TradingBot.DevDashboard.Services
+@using TradingBot.Domain.Enums
+@using TradingBot.Research
+@using TradingBot.Research.MonteCarlo
+@using TradingBot.Research.Ranking
+@using TradingBot.Research.Robustness
+@using TradingBot.Research.Sensitivity
+@using TradingBot.Research.WalkForward
+@inject ResearchDemoService Research
+
+<PageTitle>Research Dashboard</PageTitle>
+
+<div class="rd">
+    <div class="alert alert-danger rd-banner" role="alert">
+        🔬 <strong>RESEARCH / SIMULATION ONLY</strong>
+        <ul class="rd-banner-list mb-0">
+            <li>No Broker API connected</li>
+            <li>No Live Execution</li>
+            <li>No real orders can be sent</li>
+            <li>Research uses historical / simulated data only</li>
+        </ul>
+    </div>
+
+    <h1 class="mb-2">Research Dashboard</h1>
+    <div class="alert alert-warning py-2 rd-demo" role="alert">
+        ⚠️ <strong>Demo-Daten.</strong> Alle Kennzahlen stammen aus deterministischen, künstlichen
+        Trade-Listen (fester Seed) — sie sind bewusst als DEMO konstruiert und stellen
+        <strong>keine echte Strategie-Performance</strong> dar. Ausgewertet über die echten
+        <code>TradingBot.Research</code>-Klassen (Monte Carlo, Ranking, Robustness).
+    </div>
+
+    @{
+        var data = Research.GetDemoData();
+        var best = data.Best;
+        var m = best.Metrics;
+        var mc = best.MonteCarlo!.Statistics;
+        var rob = best.Robustness!;
+    }
+
+    <!-- ================= A) SUMMARY CARDS ================= -->
+    <h2 class="rd-section">A · Summary — Bestkandidat</h2>
+    <div class="alert alert-secondary py-2 rd-note">
+        Bestkandidat laut Ranking (Robustheit höher gewichtet als roher Profit):
+        <strong>@best.Name</strong>. <span class="text-muted">@best.Description</span>
+    </div>
+    <div class="row g-3 mb-3">
+        <div class="col-sm-6 col-lg-4"><div class="rd-card"><div class="rd-label">Best Strategy Candidate</div>
+            <div class="rd-value rd-strong">@best.Name</div></div></div>
+        <div class="col-sm-6 col-lg-4"><div class="rd-card"><div class="rd-label">Robustness Score (Hilfsmetrik)</div>
+            <div class="rd-value @ScoreCss(rob.Score.Value)">@rob.Score.Value.ToString("F0") / 100</div>
+            <div class="rd-sub">@rob.Score.Interpretation</div></div></div>
+        <div class="col-sm-6 col-lg-4"><div class="rd-card"><div class="rd-label">Overfitting Risk</div>
+            <div class="rd-value @OverfitCss(rob)">@OverfitLabel(rob)</div>
+            <div class="rd-sub">@rob.Findings.Count Warnsignal(e)</div></div></div>
+
+        <div class="col-sm-6 col-lg-4"><div class="rd-card"><div class="rd-label">Net Profit (nach Kosten)</div>
+            <div class="rd-value @PnlCss(m.NetProfit)">@Usd(m.NetProfit)</div></div></div>
+        <div class="col-sm-6 col-lg-4"><div class="rd-card"><div class="rd-label">Max Drawdown</div>
+            <div class="rd-value text-danger">@Usd(m.MaxDrawdown)</div></div></div>
+        <div class="col-sm-6 col-lg-4"><div class="rd-card"><div class="rd-label">Profit Factor</div>
+            <div class="rd-value">@Pf(m.ProfitFactor)</div></div></div>
+
+        <div class="col-sm-6 col-lg-4"><div class="rd-card"><div class="rd-label">Expectancy / Trade</div>
+            <div class="rd-value @PnlCss(m.Expectancy)">@Usd(m.Expectancy)</div></div></div>
+        <div class="col-sm-6 col-lg-4"><div class="rd-card"><div class="rd-label">Monte Carlo Worst 5% Drawdown</div>
+            <div class="rd-value text-danger">@Usd(mc.WorstDrawdown5Percent)</div></div></div>
+        <div class="col-sm-6 col-lg-4"><div class="rd-card"><div class="rd-label">Walk Forward Efficiency</div>
+            <div class="rd-value @WfeCss(m.WalkForwardEfficiency)">@Wfe(m.WalkForwardEfficiency)</div>
+            <div class="rd-sub">OOS-NetPnL/Trade ÷ IS-NetPnL/Trade</div></div></div>
+    </div>
+
+    <!-- ================= B) STRATEGY RANKING ================= -->
+    <h2 class="rd-section">B · Strategy Ranking</h2>
+    <div class="table-responsive">
+        <table class="table table-sm rd-table align-middle">
+            <thead>
+                <tr>
+                    <th>Rank</th><th>Strategy Name</th><th class="text-end">Net Profit</th>
+                    <th class="text-end">Max DD</th><th class="text-end">Profit Factor</th>
+                    <th class="text-end">Expectancy</th><th class="text-end">Robustness</th>
+                    <th class="text-end">MC Worst 5%</th><th class="text-end">OOS Net</th><th class="text-end">Warnings</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var r in data.Ranking)
+                {
+                    var v = data.ViewFor(r);
+                    var vm = v.Metrics;
+                    <tr class="@(r.Rank == 1 ? "rd-row-best" : "")">
+                        <td><span class="badge @(r.Rank == 1 ? "bg-success" : "bg-secondary")">#@r.Rank</span></td>
+                        <td>@v.Name</td>
+                        <td class="text-end @PnlCss(vm.NetProfit)">@Usd(vm.NetProfit)</td>
+                        <td class="text-end text-danger">@Usd(vm.MaxDrawdown)</td>
+                        <td class="text-end">@Pf(vm.ProfitFactor)</td>
+                        <td class="text-end @PnlCss(vm.Expectancy)">@Usd(vm.Expectancy)</td>
+                        <td class="text-end @ScoreCss(v.Robustness!.Score.Value)">@v.Robustness!.Score.Value.ToString("F0")</td>
+                        <td class="text-end text-danger">@UsdN(vm.MonteCarloWorstDrawdown5)</td>
+                        <td class="text-end @PnlCss(vm.OutOfSampleNetProfit ?? 0m)">@UsdN(vm.OutOfSampleNetProfit)</td>
+                        <td class="text-end">@v.WarningCount</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+    <p class="rd-hint">Composite-Score gewichtet Robustheit (Drawdown, Monte-Carlo-Worst-Case, OOS,
+        Parameter-Stabilität = 0.55) höher als rohen NetProfit (0.15). Zu wenige Trades / schlechte
+        Datenqualität werten ab.</p>
+
+    <!-- ================= C) MONTE CARLO ================= -->
+    <h2 class="rd-section">C · Monte Carlo — @best.Name</h2>
+    <div class="alert alert-info py-2 rd-note">
+        ℹ️ Monte Carlo ist <strong>keine Zukunftsvorhersage</strong>. Es prüft nur, wie empfindlich
+        Endgewinn und Drawdown auf die <em>Zusammensetzung</em> der bereits beobachteten Demo-Trades
+        reagieren (Bootstrap: Ziehen mit Zurücklegen). Ein guter Worst-Case ist keine Gewinngarantie.
+    </div>
+    <div class="row g-3 mb-3">
+        <div class="col-sm-6 col-lg-3"><div class="rd-card"><div class="rd-label">Runs</div>
+            <div class="rd-value">@mc.Simulations.ToString("N0")</div>
+            <div class="rd-sub">Seed @data.MonteCarloSeed · Bootstrap</div></div></div>
+        <div class="col-sm-6 col-lg-3"><div class="rd-card"><div class="rd-label">Median Net Profit</div>
+            <div class="rd-value @PnlCss(mc.MedianNetProfit)">@Usd(mc.MedianNetProfit)</div></div></div>
+        <div class="col-sm-6 col-lg-3"><div class="rd-card"><div class="rd-label">Worst 5% Drawdown</div>
+            <div class="rd-value text-danger">@Usd(mc.WorstDrawdown5Percent)</div></div></div>
+        <div class="col-sm-6 col-lg-3"><div class="rd-card"><div class="rd-label">Probability of Loss</div>
+            <div class="rd-value">@Pct(mc.ProbabilityOfLoss)</div></div></div>
+        <div class="col-sm-6 col-lg-3"><div class="rd-card"><div class="rd-label">P(Drawdown &gt; @Usd(data.MonteCarloDrawdownThreshold))</div>
+            <div class="rd-value">@PctN(mc.ProbabilityOfDrawdownExceeding)</div></div></div>
+        <div class="col-sm-6 col-lg-3"><div class="rd-card"><div class="rd-label">90% Confidence Interval (Net)</div>
+            <div class="rd-value rd-ci">@Usd(mc.NetProfitP5) … @Usd(mc.NetProfitP95)</div>
+            <div class="rd-sub">P5 … P95 des Endgewinns</div></div></div>
+        <div class="col-sm-6 col-lg-3"><div class="rd-card"><div class="rd-label">Median Max Drawdown</div>
+            <div class="rd-value text-danger">@Usd(mc.MedianMaxDrawdown)</div></div></div>
+        <div class="col-sm-6 col-lg-3"><div class="rd-card"><div class="rd-label">Worst / Best Net (Runs)</div>
+            <div class="rd-value rd-ci">@Usd(mc.WorstNetProfit) / @Usd(mc.BestNetProfit)</div></div></div>
+    </div>
+
+    <!-- ================= D) WALK FORWARD ================= -->
+    <h2 class="rd-section">D · Walk Forward — @best.Name</h2>
+    <div class="alert alert-info py-2 rd-note">
+        ℹ️ Selektion erfolgt <strong>ausschließlich auf In-Sample (IS)</strong>; getestet wird auf dem
+        nie gesehenen Out-of-Sample (OOS). Sieht eine Strategie nur auf IS gut aus, fällt sie auf OOS
+        auf (Walk-Forward-Efficiency klein → Overfitting-Verdacht).
+    </div>
+    @{ var wf = best.WalkForward; }
+    <div class="row g-3 mb-3">
+        <div class="col-sm-6 col-lg-3"><div class="rd-card"><div class="rd-label">In-Sample Net</div>
+            <div class="rd-value @PnlCss(wf.InSampleNetProfit)">@Usd(wf.InSampleNetProfit)</div>
+            <div class="rd-sub">@wf.InSampleTrades Trades</div></div></div>
+        <div class="col-sm-6 col-lg-3"><div class="rd-card"><div class="rd-label">Out-of-Sample Net</div>
+            <div class="rd-value @PnlCss(wf.OutOfSampleNetProfit)">@Usd(wf.OutOfSampleNetProfit)</div>
+            <div class="rd-sub">@wf.OutOfSampleTrades Trades</div></div></div>
+        <div class="col-sm-6 col-lg-3"><div class="rd-card"><div class="rd-label">Walk Forward Efficiency</div>
+            <div class="rd-value @WfeCss(wf.WalkForwardEfficiency)">@Wfe(wf.WalkForwardEfficiency)</div></div></div>
+        <div class="col-sm-6 col-lg-3"><div class="rd-card"><div class="rd-label">Overfitting-Verdacht</div>
+            <div class="rd-value @(wf.OverfittingSuspected ? "text-danger" : "text-success")">
+                @(wf.OverfittingSuspected ? "JA" : "nein")</div></div></div>
+    </div>
+    @if (wf.OverfittingSuspected && wf.OverfittingNote is not null)
+    {
+        <div class="alert alert-danger py-2">⚠️ @wf.OverfittingNote</div>
+    }
+    <div class="table-responsive">
+        <table class="table table-sm rd-table">
+            <thead><tr><th>Segment</th><th>IS-Bereich (Ticks)</th><th>OOS-Bereich (Ticks)</th>
+                <th class="text-end">IS Net</th><th class="text-end">IS Trades</th>
+                <th class="text-end">OOS Net</th><th class="text-end">OOS Trades</th></tr></thead>
+            <tbody>
+                @foreach (var s in wf.Segments)
+                {
+                    <tr>
+                        <td>#@s.Window.Index</td>
+                        <td>@s.Window.InSampleStart–@s.Window.InSampleEnd</td>
+                        <td>@s.Window.OutOfSampleStart–@s.Window.OutOfSampleEnd</td>
+                        <td class="text-end @PnlCss(s.InSample.NetProfit)">@Usd(s.InSample.NetProfit)</td>
+                        <td class="text-end">@s.InSample.TradeCount</td>
+                        <td class="text-end @PnlCss(s.OutOfSample.NetProfit)">@Usd(s.OutOfSample.NetProfit)</td>
+                        <td class="text-end">@s.OutOfSample.TradeCount</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    <h3 class="rd-subsection">Walk-Forward-Überblick (alle Kandidaten)</h3>
+    <div class="table-responsive">
+        <table class="table table-sm rd-table">
+            <thead><tr><th>Strategy</th><th class="text-end">IS Net</th><th class="text-end">OOS Net</th>
+                <th class="text-end">WFE</th><th>Overfitting</th></tr></thead>
+            <tbody>
+                @foreach (var v in data.Strategies)
+                {
+                    <tr>
+                        <td>@v.Name</td>
+                        <td class="text-end @PnlCss(v.WalkForward.InSampleNetProfit)">@Usd(v.WalkForward.InSampleNetProfit)</td>
+                        <td class="text-end @PnlCss(v.WalkForward.OutOfSampleNetProfit)">@Usd(v.WalkForward.OutOfSampleNetProfit)</td>
+                        <td class="text-end @WfeCss(v.WalkForward.WalkForwardEfficiency)">@Wfe(v.WalkForward.WalkForwardEfficiency)</td>
+                        <td>@if (v.WalkForward.OverfittingSuspected)
+                            { <span class="badge bg-danger">Verdacht</span> } else { <span class="badge bg-success">ok</span> }</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    <!-- ================= E) SENSITIVITY ================= -->
+    <h2 class="rd-section">E · Fee / Slippage Sensitivity — @best.Name</h2>
+    <div class="alert alert-info py-2 rd-note">
+        ℹ️ Performance immer <strong>NetPnL nach Kosten</strong>. Eine Strategie, die nur bei
+        perfekten/niedrigen Kosten profitabel ist, ist fragil.
+    </div>
+    @if (best.Slippage.FragileToSlippage || best.Fees.FragileToFees)
+    {
+        <div class="alert alert-warning py-2">
+            ⚠️ Bestkandidat wird bei höheren Kosten unprofitabel
+            @(best.Slippage.BreakEvenSlippageTicks is decimal st ? $"(Slippage-Break-even ~{st} Ticks)" : "")
+            @(best.Fees.BreakEvenFeeMultiplier is decimal fm ? $"(Fee-Break-even ~{fm}×)" : "").
+        </div>
+    }
+    else
+    {
+        <div class="alert alert-success py-2">
+            ✓ Bestkandidat bleibt über den getesteten Kostenbereich profitabel (keine Fragilität erkannt).
+        </div>
+    }
+    <div class="row g-3">
+        <div class="col-lg-6">
+            <h3 class="rd-subsection">Slippage-Sensitivität</h3>
+            <table class="table table-sm rd-table">
+                <thead><tr><th class="text-end">Extra Slippage (Ticks)</th><th class="text-end">Net Profit</th>
+                    <th class="text-end">Max DD</th></tr></thead>
+                <tbody>
+                    @foreach (var p in best.Slippage.Points)
+                    {
+                        <tr>
+                            <td class="text-end">@p.SlippageTicks</td>
+                            <td class="text-end @PnlCss(p.NetProfit)">@Usd(p.NetProfit)</td>
+                            <td class="text-end text-danger">@Usd(p.MaxDrawdown)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <div class="col-lg-6">
+            <h3 class="rd-subsection">Fee-Sensitivität</h3>
+            <table class="table table-sm rd-table">
+                <thead><tr><th class="text-end">Fee-Multiplikator</th><th class="text-end">Net Profit</th></tr></thead>
+                <tbody>
+                    @foreach (var p in best.Fees.Points)
+                    {
+                        <tr>
+                            <td class="text-end">@p.FeeMultiplier.ToString("0.00")×</td>
+                            <td class="text-end @PnlCss(p.NetProfit)">@Usd(p.NetProfit)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <h3 class="rd-subsection">Kosten-Fragilität (alle Kandidaten)</h3>
+    <div class="table-responsive">
+        <table class="table table-sm rd-table">
+            <thead><tr><th>Strategy</th><th class="text-end">Base Net</th>
+                <th class="text-end">Slippage Break-even</th><th>Slippage fragil?</th>
+                <th class="text-end">Fee Break-even</th><th>Fee fragil?</th></tr></thead>
+            <tbody>
+                @foreach (var v in data.Strategies)
+                {
+                    <tr>
+                        <td>@v.Name</td>
+                        <td class="text-end @PnlCss(v.Metrics.NetProfit)">@Usd(v.Metrics.NetProfit)</td>
+                        <td class="text-end">@(v.Slippage.BreakEvenSlippageTicks is decimal s ? $"{s} Ticks" : "—")</td>
+                        <td>@FragileBadge(v.Slippage.FragileToSlippage)</td>
+                        <td class="text-end">@(v.Fees.BreakEvenFeeMultiplier is decimal f ? $"{f:0.00}×" : "—")</td>
+                        <td>@FragileBadge(v.Fees.FragileToFees)</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    <!-- ================= F) EQUITY / DRAWDOWN ================= -->
+    <h2 class="rd-section">F · Equity Curve &amp; Drawdown — @best.Name</h2>
+    <div class="rd-note text-muted mb-2">
+        Kumulierte NetPnL der @best.Metrics.TradeCount Demo-Trades (nach Kosten). Drawdown = Abstand
+        zum bisherigen Equity-Hoch.
+    </div>
+    <div class="rd-chart-wrap">
+        <div class="rd-chart-title">Equity Curve (NetPnL kumuliert)</div>
+        <svg viewBox="0 0 680 160" preserveAspectRatio="none" class="rd-chart" role="img"
+             aria-label="Equity Curve Demo">
+            <line x1="0" y1="@_zeroY" x2="680" y2="@_zeroY" class="rd-axis" />
+            <polyline points="@_equityPoints" class="rd-equity-line" fill="none" />
+        </svg>
+        <div class="rd-chart-scale"><span>Start 0 $</span><span>Ende @Usd(best.FinalEquity)</span></div>
+    </div>
+    <div class="rd-chart-wrap">
+        <div class="rd-chart-title">Drawdown (Underwater, ≥ 0)</div>
+        <svg viewBox="0 0 680 90" preserveAspectRatio="none" class="rd-chart" role="img"
+             aria-label="Drawdown Demo">
+            <polygon points="@_drawdownArea" class="rd-drawdown-area" />
+        </svg>
+        <div class="rd-chart-scale"><span>0 $</span><span>Max @Usd(_maxDrawdownForChart)</span></div>
+    </div>
+
+    <footer class="rd-footer">
+        Read-only Research-Ansicht · deterministische Demo über <code>TradingBot.Research</code> ·
+        keine Broker-Verbindung, keine Live-Execution, keine Order-/Buy-/Sell-Buttons, keine echten Orders.
+    </footer>
+</div>
+
+@code {
+    // Für die SVG-Charts vorberechnete Koordinaten (Bestkandidat).
+    private string _equityPoints = "";
+    private string _drawdownArea = "";
+    private double _zeroY;
+    private decimal _maxDrawdownForChart;
+
+    protected override void OnInitialized()
+    {
+        var best = Research.GetDemoData().Best;
+        BuildEquityChart(best.EquityCurve);
+        BuildDrawdownChart(best.DrawdownCurve);
+    }
+
+    private const int ChartW = 680;
+
+    private void BuildEquityChart(IReadOnlyList<decimal> equity)
+    {
+        const double h = 160, pad = 10;
+        var series = Downsample(equity, 90);
+        if (series.Count == 0) { _equityPoints = ""; _zeroY = h / 2; return; }
+
+        double min = (double)series.Min(), max = (double)series.Max();
+        min = Math.Min(min, 0); max = Math.Max(max, 0);            // 0 immer sichtbar
+        double range = max - min; if (range <= 0) range = 1;
+        double usable = h - 2 * pad;
+
+        double Y(double v) => pad + usable * (1 - (v - min) / range);
+        _zeroY = Y(0);
+
+        var pts = new List<string>(series.Count);
+        for (int i = 0; i < series.Count; i++)
+        {
+            double x = series.Count == 1 ? 0 : (double)i / (series.Count - 1) * ChartW;
+            double y = Y((double)series[i]);
+            pts.Add($"{x.ToString("0.#", CultureInfo.InvariantCulture)},{y.ToString("0.#", CultureInfo.InvariantCulture)}");
+        }
+        _equityPoints = string.Join(" ", pts);
+    }
+
+    private void BuildDrawdownChart(IReadOnlyList<decimal> drawdown)
+    {
+        const double h = 90, pad = 6;
+        var series = Downsample(drawdown, 90);
+        _maxDrawdownForChart = drawdown.Count > 0 ? drawdown.Max() : 0m;
+        if (series.Count == 0) { _drawdownArea = ""; return; }
+
+        double max = (double)series.Max(); if (max <= 0) max = 1;
+        double usable = h - 2 * pad;
+
+        // Fläche: oben (kein Drawdown) → Kurve nach unten (größerer Drawdown = tiefer).
+        var pts = new List<string> { $"0,{pad.ToString("0.#", CultureInfo.InvariantCulture)}" };
+        for (int i = 0; i < series.Count; i++)
+        {
+            double x = series.Count == 1 ? 0 : (double)i / (series.Count - 1) * ChartW;
+            double y = pad + usable * ((double)series[i] / max);
+            pts.Add($"{x.ToString("0.#", CultureInfo.InvariantCulture)},{y.ToString("0.#", CultureInfo.InvariantCulture)}");
+        }
+        pts.Add($"{ChartW},{pad.ToString("0.#", CultureInfo.InvariantCulture)}");
+        _drawdownArea = string.Join(" ", pts);
+    }
+
+    /// <summary>Reduziert eine Serie gleichmäßig auf höchstens <paramref name="maxPoints"/> Punkte.</summary>
+    private static List<decimal> Downsample(IReadOnlyList<decimal> series, int maxPoints)
+    {
+        if (series.Count <= maxPoints) return series.ToList();
+        var result = new List<decimal>(maxPoints);
+        for (int i = 0; i < maxPoints; i++)
+        {
+            int idx = (int)((long)i * (series.Count - 1) / (maxPoints - 1));
+            result.Add(series[idx]);
+        }
+        return result;
+    }
+
+    // ---- Formatierung ----
+    private static string Usd(decimal v) => v.ToString("N2", CultureInfo.InvariantCulture) + " $";
+    private static string UsdN(decimal? v) => v is decimal d ? Usd(d) : "—";
+    private static string Pf(decimal? pf) => pf is decimal d ? d.ToString("F2", CultureInfo.InvariantCulture) : "—";
+    private static string Pct(decimal frac) => (frac * 100m).ToString("F1", CultureInfo.InvariantCulture) + " %";
+    private static string PctN(decimal? frac) => frac is decimal d ? Pct(d) : "—";
+    private static string Wfe(decimal? wfe) => wfe is decimal d ? d.ToString("F2", CultureInfo.InvariantCulture) : "—";
+
+    private static string PnlCss(decimal v) => v > 0 ? "text-success" : v < 0 ? "text-danger" : "";
+    private static string ScoreCss(decimal score) => score >= 80m ? "text-success" : score >= 50m ? "text-warning" : "text-danger";
+    private static string WfeCss(decimal? wfe) => wfe is decimal d ? (d >= 0.5m ? "text-success" : "text-danger") : "";
+
+    private static string OverfitLabel(OverfittingReport r)
+        => r.HasCritical ? "Hoch" : r.HasWarnings ? "Mittel" : "Niedrig";
+    private static string OverfitCss(OverfittingReport r)
+        => r.HasCritical ? "text-danger" : r.HasWarnings ? "text-warning" : "text-success";
+
+    private static Microsoft.AspNetCore.Components.MarkupString FragileBadge(bool fragile)
+        => new(fragile
+            ? "<span class=\"badge bg-warning text-dark\">fragil</span>"
+            : "<span class=\"badge bg-success\">robust</span>");
+}

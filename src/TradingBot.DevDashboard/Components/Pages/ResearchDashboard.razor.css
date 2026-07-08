@@ -1,0 +1,142 @@
+.rd {
+    max-width: 1200px;
+}
+
+.rd-banner {
+    font-size: 0.95rem;
+    font-weight: 500;
+}
+
+.rd-banner-list {
+    margin-top: 0.35rem;
+    padding-left: 1.1rem;
+    font-weight: 400;
+    font-size: 0.85rem;
+}
+
+.rd-demo, .rd-note {
+    font-size: 0.85rem;
+}
+
+.rd-section {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin: 1.75rem 0 0.75rem;
+    padding-bottom: 0.3rem;
+    border-bottom: 2px solid #e3e3e3;
+}
+
+.rd-subsection {
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin: 1rem 0 0.5rem;
+}
+
+.rd-card {
+    background: #fff;
+    border: 1px solid #e3e3e3;
+    border-radius: 0.5rem;
+    padding: 0.7rem 1rem;
+    height: 100%;
+}
+
+.rd-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #6c757d;
+}
+
+.rd-value {
+    font-size: 1.15rem;
+    font-weight: 600;
+}
+
+.rd-value.rd-strong {
+    font-size: 1.0rem;
+}
+
+.rd-value.rd-ci {
+    font-size: 0.95rem;
+}
+
+.rd-sub {
+    font-size: 0.72rem;
+    color: #6c757d;
+    margin-top: 0.15rem;
+}
+
+.rd-table {
+    font-size: 0.85rem;
+}
+
+.rd-table thead th {
+    color: #495057;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.rd-row-best {
+    background: rgba(25, 135, 84, 0.07);
+}
+
+.rd-hint {
+    font-size: 0.78rem;
+    color: #6c757d;
+}
+
+/* --- Charts (inline SVG, keine externe Library) --- */
+.rd-chart-wrap {
+    margin-bottom: 1.25rem;
+}
+
+.rd-chart-title {
+    font-size: 0.78rem;
+    color: #495057;
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+}
+
+.rd-chart {
+    width: 100%;
+    height: auto;
+    background: #fff;
+    border: 1px solid #e3e3e3;
+    border-radius: 0.5rem;
+}
+
+.rd-equity-line {
+    stroke: #198754;
+    stroke-width: 1.5;
+    vector-effect: non-scaling-stroke;
+}
+
+.rd-drawdown-area {
+    fill: rgba(220, 53, 69, 0.25);
+    stroke: #dc3545;
+    stroke-width: 1;
+    vector-effect: non-scaling-stroke;
+}
+
+.rd-axis {
+    stroke: #adb5bd;
+    stroke-width: 1;
+    stroke-dasharray: 4 3;
+    vector-effect: non-scaling-stroke;
+}
+
+.rd-chart-scale {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.72rem;
+    color: #6c757d;
+    margin-top: 0.15rem;
+}
+
+.rd-footer {
+    margin-top: 2rem;
+    padding-top: 1rem;
+    border-top: 1px solid #e3e3e3;
+    color: #6c757d;
+    font-size: 0.8rem;
+}

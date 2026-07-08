@@ -24,6 +24,8 @@ Brokerunabhängig über JSON-Profile (Broker / Instrument / Fee / Risk).
 - MarketData (CSV-Reader, Replay-Feed, Heartbeat, Time/Tick/Volume/OrderFlow-Aggregation)
 - Backtest Engine (deterministisch, Fill-Modell, Kennzahlen) + Paper Trading Engine (Session)
 - DevDashboard mit **Paper Trading Monitor** (`/paper`, PAPER SIMULATION ONLY — Demo per Sample-CSV)
+  und **Research Dashboard** (`/research`, RESEARCH / SIMULATION ONLY — Monte Carlo · Walk Forward ·
+  Ranking · Robustness · Sensitivity · Equity/Drawdown, siehe [docs/RESEARCH_DASHBOARD.md](docs/RESEARCH_DASHBOARD.md))
 - **Strategy Framework** (Registry + Engine: Enable/Disable, Routing, Signal-Sammlung — siehe [docs/STRATEGY_FRAMEWORK.md](docs/STRATEGY_FRAMEWORK.md))
 - **Orderflow Strategy Template** (modulare Checks: Divergenz/Absorption/Sweep/CVD/… — siehe [docs/ORDERFLOW_STRATEGY_TEMPLATE.md](docs/ORDERFLOW_STRATEGY_TEMPLATE.md))
 - **Data Import + Quality Layer** (ATAS-CSV: Tick/Bar/Footprint/Profile, Capabilities, QualityReport — siehe [docs/DATA_IMPORT_AND_QUALITY.md](docs/DATA_IMPORT_AND_QUALITY.md))
@@ -33,8 +35,13 @@ Brokerunabhängig über JSON-Profile (Broker / Instrument / Fee / Risk).
 - Phase 10 (Rest): finales Dashboard
 - Phase 13/14: Live-Broker-Adapter + Safety Audit
 
-**Dashboard starten:** siehe [docs/PAPER_TRADING.md](docs/PAPER_TRADING.md) —
-`dotnet watch --project src\TradingBot.DevDashboard\TradingBot.DevDashboard.csproj run`
+**Dashboard starten** (Seiten: `/` Status · `/paper` Paper Monitor · `/research` Research Dashboard):
+
+```powershell
+dotnet run --project src\TradingBot.DevDashboard\TradingBot.DevDashboard.csproj
+# oder mit Live-Reload:
+dotnet watch --project src\TradingBot.DevDashboard\TradingBot.DevDashboard.csproj run
+```
 
 Details: siehe [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) und [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 

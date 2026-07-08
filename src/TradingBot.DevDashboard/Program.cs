@@ -13,6 +13,7 @@ builder.Services.AddSingleton<ProjectStatusService>();
 builder.Services.AddSingleton(new GitInfoService(repoRoot));
 builder.Services.AddSingleton(new ConfigOverviewService(repoRoot));
 builder.Services.AddSingleton(new PaperDemoService(repoRoot)); // PAPER SIMULATION ONLY
+builder.Services.AddSingleton<ResearchDemoService>();          // RESEARCH / SIMULATION ONLY (deterministische Demo)
 
 var app = builder.Build();
 

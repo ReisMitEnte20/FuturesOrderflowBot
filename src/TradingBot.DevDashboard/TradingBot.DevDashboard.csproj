@@ -5,6 +5,8 @@
     <ProjectReference Include="..\TradingBot.Core\TradingBot.Core.csproj" />
     <ProjectReference Include="..\TradingBot.Infrastructure\TradingBot.Infrastructure.csproj" />
     <ProjectReference Include="..\TradingBot.PaperTrading\TradingBot.PaperTrading.csproj" />
+    <!-- Research-Layer (Phase 12C): read-only Analyse-Klassen. Referenziert NICHT TradingBot.Execution. -->
+    <ProjectReference Include="..\TradingBot.Research\TradingBot.Research.csproj" />
   </ItemGroup>
 
   <PropertyGroup>
