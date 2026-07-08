@@ -31,6 +31,7 @@
     <ProjectReference Include="..\..\src\TradingBot.Backtesting\TradingBot.Backtesting.csproj" />
     <ProjectReference Include="..\..\src\TradingBot.PaperTrading\TradingBot.PaperTrading.csproj" />
     <ProjectReference Include="..\..\src\TradingBot.DevDashboard\TradingBot.DevDashboard.csproj" />
+    <ProjectReference Include="..\..\src\TradingBot.Research\TradingBot.Research.csproj" />
   </ItemGroup>
 
 </Project>

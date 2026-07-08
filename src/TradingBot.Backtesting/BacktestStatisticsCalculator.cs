@@ -89,4 +89,24 @@ public static class BacktestStatisticsCalculator
         int distinctDays = trades.Select(t => DateOnly.FromDateTime(t.ExitTime.UtcDateTime)).Distinct().Count();
         return distinctDays == 0 ? 0m : (decimal)total / distinctDays;
     }
+
+    /// <summary>
+    /// Maximaler Drawdown der realisierten Equity-Kurve (kumulativer NetPnL). Startpeak = 0,
+    /// d. h. eine anfängliche Verlustserie zählt als Drawdown ab 0. Identisch zur Berechnung in
+    /// <see cref="Compute"/> – gemeinsame Definition für Backtest UND Research (Monte Carlo).
+    /// Rückgabe ≥ 0.
+    /// </summary>
+    public static decimal MaxDrawdown(IReadOnlyList<decimal> netPnls)
+    {
+        ArgumentNullException.ThrowIfNull(netPnls);
+        decimal running = 0m, peak = 0m, maxDd = 0m;
+        foreach (var pnl in netPnls)
+        {
+            running += pnl;
+            if (running > peak) peak = running;
+            var dd = peak - running;
+            if (dd > maxDd) maxDd = dd;
+        }
+        return maxDd;
+    }
 }
