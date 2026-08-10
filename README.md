@@ -8,6 +8,11 @@ Brokerunabhängig über JSON-Profile (Broker / Instrument / Fee / Risk).
 > ⚠️ **Keine Live-Execution** vorhanden · ⚠️ **Keine Broker-API** angebunden ·
 > alle Broker-/Fee-/TickValue-Werte stammen aus Config (`config/`), nichts ist hardcoded.
 
+## Mitarbeit / Onboarding
+
+- **Claude Code:** zuerst [CLAUDE.md](CLAUDE.md) lesen (Arbeitsregeln, Standard-Kommandos, Grenzen).
+- **Menschen:** [docs/COLLABORATOR_ONBOARDING.md](docs/COLLABORATOR_ONBOARDING.md) (Projektziel, Setup, Regeln).
+
 ## Überblick
 
 ```
