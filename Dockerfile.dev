@@ -1,0 +1,18 @@
+FROM mcr.microsoft.com/dotnet/sdk:8.0
+
+WORKDIR /app
+
+# Copy solution
+COPY . .
+
+# Restore dependencies
+RUN dotnet restore
+
+# Build solution
+RUN dotnet build --configuration Debug
+
+# Create logs directory
+RUN mkdir -p logs
+
+# Default command: Show available options
+CMD ["/bin/bash", "-c", "echo 'FuturesOrderflowBot Development Container' && echo '' && echo 'Available commands:' && echo '  dotnet build' && echo '  dotnet test' && echo '  dotnet run --project src/TradingBot.Console' && echo '  dotnet run --project src/TradingBot.DevDashboard' && bash"]

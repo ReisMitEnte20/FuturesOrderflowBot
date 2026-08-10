@@ -1,0 +1,112 @@
+version: '3.8'
+
+services:
+  # Elasticsearch - Log storage and search
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: tradingbot-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    networks:
+      - tradingbot-network
+    healthcheck:
+      test: curl -s http://localhost:9200 >/dev/null || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Kibana - Visualization and dashboards
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.0
+    container_name: tradingbot-kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - ELASTICSEARCH_USERNAME=elastic
+      - ELASTICSEARCH_PASSWORD=changeme
+      - xpack.security.enabled=false
+    ports:
+      - "5601:5601"
+    networks:
+      - tradingbot-network
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: curl -s http://localhost:5601/api/status >/dev/null || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Logstash - Log processing pipeline
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.11.0
+    container_name: tradingbot-logstash
+    ports:
+      - "5044:5044"
+      - "9600:9600"
+    volumes:
+      - ./logstash.conf:/usr/share/logstash/pipeline/logstash.conf:ro
+      - ./logs:/logs:ro
+    environment:
+      - "LS_JAVA_OPTS=-Xmx256m -Xms256m"
+    networks:
+      - tradingbot-network
+    depends_on:
+      - elasticsearch
+    command: logstash -f /usr/share/logstash/pipeline/logstash.conf
+
+  # Filebeat - Log shipper
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.11.0
+    container_name: tradingbot-filebeat
+    user: root
+    volumes:
+      - ./filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - ./logs:/logs:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - LOGSTASH_HOST=logstash
+      - LOGSTASH_PORT=5044
+    networks:
+      - tradingbot-network
+    depends_on:
+      - logstash
+    command: filebeat -e -strict.perms=false
+    restart: unless-stopped
+
+  # .NET Development Container (Optional)
+  tradingbot-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: tradingbot-dev
+    volumes:
+      - .:/app
+      - /app/bin  # Prevent mounting bin from host
+      - /app/obj  # Prevent mounting obj from host
+    working_dir: /app
+    networks:
+      - tradingbot-network
+    stdin_open: true
+    tty: true
+    environment:
+      - DOTNET_CLI_TELEMETRY_OPTOUT=1
+      - ASPNETCORE_ENVIRONMENT=Development
+    profiles:
+      - dev  # Use: docker-compose --profile dev up
+
+networks:
+  tradingbot-network:
+    driver: bridge
+
+volumes:
+  elasticsearch_data:
+    driver: local
