@@ -1,0 +1,12 @@
+{
+  "hindsight": {
+    "enabled": true,
+    "apiBaseUrl": "https://api.hindsight.example.com/v1",
+    "apiKey": "your-hindsight-api-key-here",
+    "timeout": 30,
+    "retryPolicy": {
+      "maxRetries": 3,
+      "delayMilliseconds": 1000
+    }
+  }
+}
