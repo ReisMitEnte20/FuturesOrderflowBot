@@ -1,0 +1,141 @@
+.rp {
+    max-width: 1000px;
+}
+
+.rp-banner {
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+
+.rp-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    align-items: center;
+}
+
+.rp-speeds {
+    display: inline-flex;
+    gap: 0.25rem;
+}
+
+.rp-seek {
+    flex: 1 1 180px;
+    min-width: 140px;
+}
+
+.rp-hint {
+    font-size: 0.78rem;
+    color: #6c757d;
+}
+
+.rp-card {
+    background: #fff;
+    border: 1px solid #e3e3e3;
+    border-radius: 0.4rem;
+    padding: 0.4rem 0.6rem;
+    height: 100%;
+}
+
+.rp-label {
+    font-size: 0.64rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: #6c757d;
+}
+
+.rp-value {
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.rp-chart-wrap {
+    margin-bottom: 0.75rem;
+}
+
+.rp-chart {
+    width: 100%;
+    height: auto;
+    background: #fff;
+    border: 1px solid #e3e3e3;
+    border-radius: 0.4rem;
+}
+
+.rp-chart-scale {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.7rem;
+    color: #6c757d;
+}
+
+/* Candles */
+.rp-body-up { fill: #198754; stroke: #198754; }
+.rp-body-down { fill: #dc3545; stroke: #dc3545; }
+.rp-wick-up { stroke: #198754; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.rp-wick-down { stroke: #dc3545; stroke-width: 1; vector-effect: non-scaling-stroke; }
+
+/* Trade markers */
+.rp-m-long { fill: #0d6efd; }
+.rp-m-short { fill: #fd7e14; }
+.rp-m-exit { fill: #6c757d; }
+
+/* SL / TP lines of the open position */
+.rp-sl { stroke: #dc3545; stroke-width: 1; stroke-dasharray: 5 3; vector-effect: non-scaling-stroke; }
+.rp-tp { stroke: #198754; stroke-width: 1; stroke-dasharray: 5 3; vector-effect: non-scaling-stroke; }
+
+/* Equity */
+.rp-chart-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #495057;
+    margin: 0.25rem 0;
+}
+
+.rp-equity {
+    width: 100%;
+    height: auto;
+    background: #fff;
+    border: 1px solid #e3e3e3;
+    border-radius: 0.4rem;
+}
+
+.rp-eq-line { stroke: #0d6efd; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.rp-axis { stroke: #adb5bd; stroke-width: 1; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
+
+/* Journal */
+.rp-section {
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 1.25rem 0 0.5rem;
+    padding-bottom: 0.25rem;
+    border-bottom: 2px solid #e3e3e3;
+}
+
+.rp-table {
+    font-size: 0.82rem;
+}
+
+.rp-trow {
+    cursor: pointer;
+}
+
+.rp-trow:hover {
+    background: rgba(13, 110, 253, 0.07);
+}
+
+.rp-open {
+    background: rgba(255, 193, 7, 0.15);
+    font-weight: 600;
+}
+
+.rp-future {
+    color: #adb5bd;
+}
+
+.rp-footer {
+    margin-top: 1.5rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid #e3e3e3;
+    color: #6c757d;
+    font-size: 0.78rem;
+}

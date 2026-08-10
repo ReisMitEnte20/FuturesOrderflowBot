@@ -14,6 +14,7 @@ builder.Services.AddSingleton(new GitInfoService(repoRoot));
 builder.Services.AddSingleton(new ConfigOverviewService(repoRoot));
 builder.Services.AddSingleton(new PaperDemoService(repoRoot)); // PAPER SIMULATION ONLY
 builder.Services.AddSingleton<ResearchDemoService>();          // RESEARCH / SIMULATION ONLY (deterministische Demo)
+builder.Services.AddSingleton<ReplayDemoService>();            // RESEARCH / SIMULATION ONLY (deterministisches Replay)
 
 var app = builder.Build();
 

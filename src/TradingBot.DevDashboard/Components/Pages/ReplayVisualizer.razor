@@ -1,0 +1,281 @@
+@page "/replay"
+@rendermode InteractiveServer
+@implements IDisposable
+@using System.Globalization
+@using TradingBot.DevDashboard.Services
+@using TradingBot.Domain.Enums
+@inject ReplayDemoService Replay
+
+<PageTitle>Backtest Replay Visualizer</PageTitle>
+
+<div class="rp">
+    <div class="alert alert-danger rp-banner" role="alert">
+        🎬 <strong>RESEARCH / SIMULATION ONLY</strong> — No Broker API · No Live Execution ·
+        No real orders · No Buy/Sell buttons · deterministische Demo-Daten (keine echte Performance).
+    </div>
+
+    <h1 class="mb-2">Backtest Replay Visualizer</h1>
+
+    <div class="rp-controls mb-2">
+        <button class="btn btn-primary btn-sm" @onclick="TogglePlay">@(_playing ? "⏸ Pause" : "▶ Play")</button>
+        <button class="btn btn-outline-secondary btn-sm" @onclick="Reset">⏮ Reset</button>
+        <span class="rp-speeds">
+            @foreach (var (label, val) in Speeds)
+            {
+                <button class="btn btn-sm @(_speed == val ? "btn-secondary" : "btn-outline-secondary")"
+                        @onclick="() => SetSpeed(val)">@label</button>
+            }
+        </span>
+        <input type="range" min="0" max="@(_session.BarCount - 1)" value="@_i"
+               @oninput="OnSeek" class="rp-seek" />
+        <span class="rp-hint">Bar @(_i + 1) / @_session.BarCount</span>
+    </div>
+
+    <!-- Info-Leiste -->
+    <div class="row g-2 mb-2">
+        <div class="col-6 col-md-3 col-lg-2"><div class="rp-card"><div class="rp-label">Replay-Zeit (UTC)</div>
+            <div class="rp-value">@Cur.Time.ToString("MM-dd HH:mm")</div></div></div>
+        <div class="col-6 col-md-3 col-lg-2"><div class="rp-card"><div class="rp-label">Preis (Close)</div>
+            <div class="rp-value">@Cur.Close.ToString("F2")</div></div></div>
+        <div class="col-6 col-md-3 col-lg-2"><div class="rp-card"><div class="rp-label">Status</div>
+            <div class="rp-value @StatusCss">@StatusText</div></div></div>
+        <div class="col-6 col-md-3 col-lg-2"><div class="rp-card"><div class="rp-label">PnL (real.+unreal.)</div>
+            <div class="rp-value @PnlCss(CurrentPnL)">@CurrentPnL.ToString("F2") $</div></div></div>
+        <div class="col-6 col-md-3 col-lg-2"><div class="rp-card"><div class="rp-label">Realisiert</div>
+            <div class="rp-value @PnlCss(RealizedPnL)">@RealizedPnL.ToString("F2") $</div></div></div>
+        <div class="col-6 col-md-3 col-lg-2"><div class="rp-card"><div class="rp-label">Trades (geschlossen)</div>
+            <div class="rp-value">@ClosedCount</div></div></div>
+    </div>
+
+    <!-- Price / Candlestick Chart -->
+    <div class="rp-chart-wrap">
+        <svg viewBox="0 0 @ChartW @ChartH" preserveAspectRatio="none" class="rp-chart" role="img" aria-label="Replay Chart">
+            @if (_openTrade is not null)
+            {
+                <line x1="0" y1="@F(_slY)" x2="@ChartW" y2="@F(_slY)" class="rp-sl" />
+                <line x1="0" y1="@F(_tpY)" x2="@ChartW" y2="@F(_tpY)" class="rp-tp" />
+            }
+            @foreach (var c in _candles)
+            {
+                <line x1="@F(c.X)" y1="@F(c.WickTop)" x2="@F(c.X)" y2="@F(c.WickBot)"
+                      class="@(c.Up ? "rp-wick-up" : "rp-wick-down")" />
+                <rect x="@F(c.X - CandleW / 2)" y="@F(c.BodyY)" width="@F(CandleW)" height="@F(c.BodyH)"
+                      class="@(c.Up ? "rp-body-up" : "rp-body-down")" />
+            }
+            @foreach (var m in _markers)
+            {
+                <polygon points="@m.Points" class="@m.Css" />
+            }
+        </svg>
+        <div class="rp-chart-scale"><span>@_pMin.ToString("F2")</span><span>@_pMax.ToString("F2")</span></div>
+    </div>
+
+    <!-- Equity Curve (realisiert) -->
+    <div class="rp-chart-title">Equity Curve (realisiert, bis aktueller Bar)</div>
+    <svg viewBox="0 0 @ChartW 70" preserveAspectRatio="none" class="rp-equity" role="img" aria-label="Equity Curve">
+        <line x1="0" y1="@F(_eqZeroY)" x2="@ChartW" y2="@F(_eqZeroY)" class="rp-axis" />
+        <polyline points="@_equityPoints" class="rp-eq-line" fill="none" />
+    </svg>
+
+    <!-- Trade Journal -->
+    <h2 class="rp-section">Trade Journal (Demo) — Klick springt zum Entry</h2>
+    <div class="table-responsive">
+        <table class="table table-sm rp-table">
+            <thead><tr><th>#</th><th>Side</th><th>Entry</th><th>Exit</th><th class="text-end">Entry $</th>
+                <th class="text-end">Exit $</th><th class="text-end">SL</th><th class="text-end">TP</th>
+                <th class="text-end">NetPnL</th><th>Status</th></tr></thead>
+            <tbody>
+                @foreach (var t in _session.Trades)
+                {
+                    <tr class="rp-trow @(t.IsOpenAt(_i) ? "rp-open" : "") @(t.EntryIndex <= _i ? "" : "rp-future")"
+                        @onclick="() => JumpTo(t)">
+                        <td>@t.Id</td>
+                        <td>@SideText(t.Side)</td>
+                        <td>@t.EntryTime.ToString("HH:mm")</td>
+                        <td>@t.ExitTime.ToString("HH:mm")</td>
+                        <td class="text-end">@t.EntryPrice.ToString("F2")</td>
+                        <td class="text-end">@t.ExitPrice.ToString("F2")</td>
+                        <td class="text-end">@t.StopLoss.ToString("F2")</td>
+                        <td class="text-end">@t.TakeProfit.ToString("F2")</td>
+                        <td class="text-end @PnlCss(t.NetPnL)">@t.NetPnL.ToString("F2")</td>
+                        <td>@TradeStatus(t)</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    <footer class="rp-footer">
+        Read-only Replay über <code>ReplayDemoService</code> · deterministische Demo-Daten ·
+        keine Broker-Verbindung, keine Live-Execution, keine Order-/Buy-/Sell-Buttons, keine echten Orders.
+    </footer>
+</div>
+
+@code {
+    private ReplaySession _session = default!;
+    private int _i;
+    private bool _playing;
+    private int _speed = 1;
+    private PeriodicTimer? _timer;
+
+    private static readonly (string Label, int Val)[] Speeds =
+        { ("x1", 1), ("x10", 4), ("x100", 12), ("x1000", 40) };
+
+    private const double ChartW = 720, ChartH = 320, PadY = 12, Window = 60;
+    private const double CandleW = ChartW / Window * 0.6;
+
+    // Vorberechnete Chart-Geometrie (bei jeder Index-Änderung).
+    private readonly List<Candle> _candles = new();
+    private readonly List<Marker> _markers = new();
+    private ReplayTradeMarker? _openTrade;
+    private double _slY, _tpY, _eqZeroY;
+    private string _equityPoints = "";
+    private decimal _pMin, _pMax;
+
+    private ReplayBar Cur => _session.Bars[_i];
+    private ReplayTradeMarker? OpenTrade() => _session.Trades.FirstOrDefault(t => t.IsOpenAt(_i));
+    private decimal RealizedPnL => _session.RealizedEquityByBar[_i];
+    private decimal CurrentPnL
+    {
+        get
+        {
+            if (_openTrade is null) return RealizedPnL;
+            decimal sign = _openTrade.Side == PositionSide.Long ? 1m : -1m;
+            decimal unreal = (Cur.Close - _openTrade.EntryPrice) * sign * _session.DollarPerPoint;
+            return RealizedPnL + Math.Round(unreal, 2);
+        }
+    }
+    private int ClosedCount => _session.Trades.Count(t => t.IsClosedAt(_i));
+    private string StatusText => _openTrade is null ? "FLAT" : _openTrade.Side == PositionSide.Long ? "LONG" : "SHORT";
+    private string StatusCss => _openTrade is null ? "" : _openTrade.Side == PositionSide.Long ? "text-success" : "text-danger";
+
+    protected override void OnInitialized()
+    {
+        _session = Replay.GetSession();
+        BuildChart();
+        _timer = new PeriodicTimer(TimeSpan.FromMilliseconds(200));
+        _ = Loop(_timer);
+    }
+
+    private async Task Loop(PeriodicTimer timer)
+    {
+        try
+        {
+            while (await timer.WaitForNextTickAsync())
+            {
+                if (!_playing) continue;
+                int next = Math.Min(_i + _speed, _session.BarCount - 1);
+                _i = next;
+                if (_i >= _session.BarCount - 1) _playing = false;
+                BuildChart();
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException) { /* Seite geschlossen */ }
+    }
+
+    private void TogglePlay() { if (_i >= _session.BarCount - 1) _i = 0; _playing = !_playing; BuildChart(); }
+    private void Reset() { _playing = false; _i = 0; BuildChart(); }
+    private void SetSpeed(int v) => _speed = v;
+    private void OnSeek(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out int v))
+        { _playing = false; _i = Math.Clamp(v, 0, _session.BarCount - 1); BuildChart(); }
+    }
+    private void JumpTo(ReplayTradeMarker t) { _playing = false; _i = t.EntryIndex; BuildChart(); }
+
+    private void BuildChart()
+    {
+        _candles.Clear();
+        _markers.Clear();
+        _openTrade = OpenTrade();
+
+        int end = _i;
+        int start = Math.Max(0, end - (int)Window + 1);
+        int n = end - start + 1;
+
+        decimal pMin = decimal.MaxValue, pMax = decimal.MinValue;
+        for (int idx = start; idx <= end; idx++)
+        {
+            var b = _session.Bars[idx];
+            if (b.Low < pMin) pMin = b.Low;
+            if (b.High > pMax) pMax = b.High;
+        }
+        if (_openTrade is not null)
+        {
+            pMin = Math.Min(pMin, Math.Min(_openTrade.StopLoss, _openTrade.TakeProfit));
+            pMax = Math.Max(pMax, Math.Max(_openTrade.StopLoss, _openTrade.TakeProfit));
+        }
+        if (pMax <= pMin) pMax = pMin + 1m;
+        _pMin = pMin; _pMax = pMax;
+
+        double range = (double)(pMax - pMin);
+        double usable = ChartH - 2 * PadY;
+        double xStep = ChartW / Window;
+        double X(int idx) => (idx - start) * xStep + xStep / 2;
+        double Y(decimal p) => PadY + usable * (1 - ((double)(p - pMin) / range));
+
+        for (int idx = start; idx <= end; idx++)
+        {
+            var b = _session.Bars[idx];
+            double bodyTop = Y(Math.Max(b.Open, b.Close));
+            double bodyBot = Y(Math.Min(b.Open, b.Close));
+            _candles.Add(new Candle(X(idx), bodyTop, Math.Max(1, bodyBot - bodyTop), Y(b.High), Y(b.Low), b.IsBullish));
+        }
+
+        foreach (var t in _session.Trades)
+        {
+            if (t.EntryIndex >= start && t.EntryIndex <= end && t.EntryIndex <= _i)
+                _markers.Add(EntryMarker(X(t.EntryIndex), Y(t.EntryPrice), t.Side));
+            if (t.ExitIndex >= start && t.ExitIndex <= end && t.IsClosedAt(_i))
+                _markers.Add(ExitMarker(X(t.ExitIndex), Y(t.ExitPrice), t.Side));
+        }
+
+        if (_openTrade is not null) { _slY = Y(_openTrade.StopLoss); _tpY = Y(_openTrade.TakeProfit); }
+
+        BuildEquity();
+    }
+
+    private void BuildEquity()
+    {
+        int end = _i;
+        var eq = _session.RealizedEquityByBar;
+        double min = 0, max = 0;
+        for (int i = 0; i <= end; i++) { double v = (double)eq[i]; if (v < min) min = v; if (v > max) max = v; }
+        double range = max - min; if (range <= 0) range = 1;
+        double usable = 70 - 12;
+        double Y(double v) => 6 + usable * (1 - (v - min) / range);
+        _eqZeroY = Y(0);
+        var pts = new List<string>(end + 1);
+        for (int i = 0; i <= end; i++)
+        {
+            double x = end == 0 ? 0 : (double)i / end * ChartW;
+            pts.Add($"{F(x)},{F(Y((double)eq[i]))}");
+        }
+        _equityPoints = string.Join(" ", pts);
+    }
+
+    // Marker: kleines Dreieck (Entry aufwärts/abwärts je Seite), Exit = Raute.
+    private static Marker EntryMarker(double x, double y, PositionSide side)
+    {
+        string css = side == PositionSide.Long ? "rp-m-long" : "rp-m-short";
+        string pts = side == PositionSide.Long
+            ? $"{F(x)},{F(y + 10)} {F(x - 6)},{F(y + 20)} {F(x + 6)},{F(y + 20)}"   // Dreieck nach oben (unter Preis)
+            : $"{F(x)},{F(y - 10)} {F(x - 6)},{F(y - 20)} {F(x + 6)},{F(y - 20)}";  // nach unten (über Preis)
+        return new Marker(pts, css);
+    }
+    private static Marker ExitMarker(double x, double y, PositionSide side)
+        => new($"{F(x)},{F(y - 6)} {F(x + 6)},{F(y)} {F(x)},{F(y + 6)} {F(x - 6)},{F(y)}", "rp-m-exit");
+
+    private string TradeStatus(ReplayTradeMarker t)
+        => t.IsOpenAt(_i) ? "offen" : t.IsClosedAt(_i) ? "geschlossen" : "—";
+
+    private static string SideText(PositionSide s) => s == PositionSide.Long ? "Long" : "Short";
+    private static string PnlCss(decimal v) => v > 0 ? "text-success" : v < 0 ? "text-danger" : "";
+    private static string F(double v) => v.ToString("0.##", CultureInfo.InvariantCulture);
+
+    public void Dispose() => _timer?.Dispose();
+
+    private readonly record struct Candle(double X, double BodyY, double BodyH, double WickTop, double WickBot, bool Up);
+    private readonly record struct Marker(string Points, string Css);
+}

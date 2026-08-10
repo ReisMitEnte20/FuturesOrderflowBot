@@ -26,6 +26,8 @@ Brokerunabhängig über JSON-Profile (Broker / Instrument / Fee / Risk).
 - DevDashboard mit **Paper Trading Monitor** (`/paper`, PAPER SIMULATION ONLY — Demo per Sample-CSV)
   und **Research Dashboard** (`/research`, RESEARCH / SIMULATION ONLY — Monte Carlo · Walk Forward ·
   Ranking · Robustness · Sensitivity · Equity/Drawdown, siehe [docs/RESEARCH_DASHBOARD.md](docs/RESEARCH_DASHBOARD.md))
+  und **Backtest Replay Visualizer** (`/replay`, RESEARCH / SIMULATION ONLY — Candlestick-Replay mit
+  Trade-Markern, siehe [docs/BACKTEST_REPLAY_VISUALIZER.md](docs/BACKTEST_REPLAY_VISUALIZER.md))
 - **Strategy Framework** (Registry + Engine: Enable/Disable, Routing, Signal-Sammlung — siehe [docs/STRATEGY_FRAMEWORK.md](docs/STRATEGY_FRAMEWORK.md))
 - **Orderflow Strategy Template** (modulare Checks: Divergenz/Absorption/Sweep/CVD/… — siehe [docs/ORDERFLOW_STRATEGY_TEMPLATE.md](docs/ORDERFLOW_STRATEGY_TEMPLATE.md))
 - **Data Import + Quality Layer** (ATAS-CSV: Tick/Bar/Footprint/Profile, Capabilities, QualityReport — siehe [docs/DATA_IMPORT_AND_QUALITY.md](docs/DATA_IMPORT_AND_QUALITY.md))
@@ -35,7 +37,7 @@ Brokerunabhängig über JSON-Profile (Broker / Instrument / Fee / Risk).
 - Phase 10 (Rest): finales Dashboard
 - Phase 13/14: Live-Broker-Adapter + Safety Audit
 
-**Dashboard starten** (Seiten: `/` Status · `/paper` Paper Monitor · `/research` Research Dashboard):
+**Dashboard starten** (Seiten: `/` Status · `/paper` Paper Monitor · `/research` Research Dashboard · `/replay` Backtest Replay):
 
 ```powershell
 dotnet run --project src\TradingBot.DevDashboard\TradingBot.DevDashboard.csproj
