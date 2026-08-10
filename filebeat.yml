@@ -1,0 +1,80 @@
+# Filebeat configuration for FuturesOrderflowBot monitoring
+# This config monitors application logs and system metrics
+
+filebeat.inputs:
+  - type: log
+    enabled: true
+    paths:
+      - "logs/*.log"
+      - "logs/**/*.log"
+    fields:
+      service: tradingbot
+      component: core
+    multiline.pattern: '^\d{4}-\d{2}-\d{2}'
+    multiline.negate: true
+    multiline.match: after
+    parsers:
+      - ndjson:
+          message_key: message
+
+  # Market Data Feed Logs
+  - type: log
+    enabled: true
+    paths:
+      - "logs/marketdata-*.log"
+    fields:
+      service: tradingbot
+      component: marketdata
+      monitoring_type: feed_health
+
+  # Order & Risk Management Logs
+  - type: log
+    enabled: true
+    paths:
+      - "logs/orders-*.log"
+      - "logs/risk-*.log"
+    fields:
+      service: tradingbot
+      component: execution
+      monitoring_type: critical
+
+  # Strategy Signals
+  - type: log
+    enabled: true
+    paths:
+      - "logs/strategy-*.log"
+    fields:
+      service: tradingbot
+      component: strategy
+      monitoring_type: signals
+
+processors:
+  - add_host_metadata: ~
+  - add_process_metadata: ~
+  - timestamp:
+      field: timestamp
+      layouts:
+        - '2006-01-02T15:04:05.000Z07:00'
+        - '2006-01-02T15:04:05Z07:00'
+
+output.logstash:
+  hosts: ["localhost:5044"]
+  ssl.enabled: false
+
+# Optional: Use Elasticsearch directly
+# output.elasticsearch:
+#   hosts: ["localhost:9200"]
+#   index: "tradingbot-%{+yyyy.MM.dd}"
+
+logging.level: info
+logging.to_files: true
+logging.files:
+  path: logs/filebeat
+  name: filebeat.log
+  keepfiles: 7
+  permissions: 0644
+
+# Monitoring Filebeat itself
+monitoring.enabled: false
+# monitoring.elasticsearch:
+#   hosts: ["localhost:9200"]
