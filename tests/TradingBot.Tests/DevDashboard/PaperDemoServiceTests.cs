@@ -49,18 +49,30 @@ public class PaperDemoServiceTests
         var session = await service.StartDemoAsync(ReplayOptions.Realtime);
         session.Should().NotBeNull(service.LastError);
 
-        session!.Status.Should().Be(PaperTradingRunStatus.Running);
+        // Der Hintergrund-Replay-Loop setzt _status asynchron auf Running -> darauf warten,
+        // sonst racet die Assertion (Status == Paused gilt nur, wenn _status bereits Running ist).
+        await WaitUntilAsync(() => session!.Status == PaperTradingRunStatus.Running);
 
         service.Pause();
-        session.Status.Should().Be(PaperTradingRunStatus.Paused);
+        session!.Status.Should().Be(PaperTradingRunStatus.Paused);
         service.GetState()!.IsPaused.Should().BeTrue();
 
         service.Resume();
+        await WaitUntilAsync(() => session.Status == PaperTradingRunStatus.Running);
         session.Status.Should().Be(PaperTradingRunStatus.Running);
 
         await service.StopAsync();
         session.Status.Should().Be(PaperTradingRunStatus.Stopped);
         session.IsRunning.Should().BeFalse();
+    }
+
+    /// <summary>Pollt eine Bedingung bis Timeout (stabilisiert Tests gegen den async Replay-Loop; keine Feature-Änderung).</summary>
+    private static async Task WaitUntilAsync(Func<bool> condition, int timeoutMs = 3000)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (!condition() && sw.ElapsedMilliseconds < timeoutMs)
+            await Task.Delay(15);
+        condition().Should().BeTrue($"Bedingung wurde nicht innerhalb von {timeoutMs} ms erfüllt.");
     }
 
     [Fact]
