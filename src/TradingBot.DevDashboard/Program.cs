@@ -15,6 +15,7 @@ builder.Services.AddSingleton(new ConfigOverviewService(repoRoot));
 builder.Services.AddSingleton(new PaperDemoService(repoRoot)); // PAPER SIMULATION ONLY
 builder.Services.AddSingleton<ResearchDemoService>();          // RESEARCH / SIMULATION ONLY (deterministische Demo)
 builder.Services.AddSingleton<ReplayDemoService>();            // RESEARCH / SIMULATION ONLY (deterministisches Replay)
+builder.Services.AddSingleton<SierraBacktestReplayService>(); // LOCAL HISTORICAL REPLAY / SIMULATION ONLY (lokale Datei, read-only)
 
 var app = builder.Build();
 

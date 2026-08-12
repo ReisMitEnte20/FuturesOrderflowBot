@@ -5,16 +5,55 @@
 @using TradingBot.DevDashboard.Services
 @using TradingBot.Domain.Enums
 @inject ReplayDemoService Replay
+@inject SierraBacktestReplayService Sierra
 
 <PageTitle>Backtest Replay Visualizer</PageTitle>
 
 <div class="rp">
-    <div class="alert alert-danger rp-banner" role="alert">
-        🎬 <strong>RESEARCH / SIMULATION ONLY</strong> — No Broker API · No Live Execution ·
-        No real orders · No Buy/Sell buttons · deterministische Demo-Daten (keine echte Performance).
-    </div>
+    @if (_sierraMode)
+    {
+        <div class="alert alert-danger rp-banner" role="alert">
+            🎬 <strong>LOCAL HISTORICAL REPLAY / SIMULATION ONLY</strong> — No Broker API · No Live Execution ·
+            No real orders · No Buy/Sell buttons · lokale historische Daten, simple Demo-Regel (keine Edge-Bestätigung).
+        </div>
+    }
+    else
+    {
+        <div class="alert alert-danger rp-banner" role="alert">
+            🎬 <strong>RESEARCH / SIMULATION ONLY</strong> — No Broker API · No Live Execution ·
+            No real orders · No Buy/Sell buttons · deterministische Demo-Daten (keine echte Performance).
+        </div>
+    }
 
     <h1 class="mb-2">Backtest Replay Visualizer</h1>
+
+    <div class="rp-controls mb-2">
+        <button class="btn btn-sm @(_sierraMode ? "btn-outline-secondary" : "btn-secondary")"
+                @onclick="LoadDemo">Demo</button>
+        <button class="btn btn-sm @(_sierraMode ? "btn-secondary" : "btn-outline-secondary")"
+                @onclick="LoadSierra" disabled="@(!Sierra.LocalFileAvailable)">Sierra Local Sample / Backtest Replay</button>
+        @if (!Sierra.LocalFileAvailable)
+        {
+            <span class="rp-hint">Lokale Sierra-Datei nicht gefunden (@SierraDemoPathShort) – Demo bleibt aktiv.</span>
+        }
+        @if (_sierraError is not null)
+        {
+            <span class="rp-hint text-danger">Sierra-Replay-Fehler: @_sierraError</span>
+        }
+    </div>
+
+    @if (_sierraMode && _sierra is not null)
+    {
+        <div class="alert alert-secondary py-2 rp-note">
+            Sierra local sample · Bars: <strong>@_sierra.Session.BarCount</strong> · Trades:
+            <strong>@_sierra.Session.Trades.Count</strong> (W/L @_sierra.Wins/@_sierra.Losses) ·
+            NetPnL: <strong>@_sierra.Session.TotalNetPnL.ToString("F2") $</strong> ·
+            NetDelta @_sierra.NetDelta · FinalCVD @_sierra.FinalCumulativeDelta ·
+            @(_sierra.From?.ToString("yyyy-MM-dd HH:mm"))–@(_sierra.To?.ToString("HH:mm")) ·
+            Delta/CVD: @(_sierra.DeltaCvdAvailable ? "ja" : "nein") · @_sierra.ElapsedMs ms.
+            <em>Technische Backtest-Auswertung einer simplen Demo-Regel — keine Strategie-Empfehlung, keine Edge-Bestätigung.</em>
+        </div>
+    }
 
     <div class="rp-controls mb-2">
         <button class="btn btn-primary btn-sm" @onclick="TogglePlay">@(_playing ? "⏸ Pause" : "▶ Play")</button>
@@ -149,12 +188,34 @@
     private string StatusText => _openTrade is null ? "FLAT" : _openTrade.Side == PositionSide.Long ? "LONG" : "SHORT";
     private string StatusCss => _openTrade is null ? "" : _openTrade.Side == PositionSide.Long ? "text-success" : "text-danger";
 
+    private bool _sierraMode;
+    private SierraReplayResult? _sierra;
+    private string? _sierraError;
+    private static string SierraDemoPathShort => "A:\\Projects\\MARKET DATA\\...";
+
     protected override void OnInitialized()
     {
         _session = Replay.GetSession();
         BuildChart();
         _timer = new PeriodicTimer(TimeSpan.FromMilliseconds(200));
         _ = Loop(_timer);
+    }
+
+    private void LoadDemo()
+    {
+        _sierraMode = false; _sierraError = null;
+        _session = Replay.GetSession();
+        _playing = false; _i = 0; BuildChart();
+    }
+
+    private void LoadSierra()
+    {
+        _playing = false;
+        _sierra = Sierra.TryBuild();          // read-only, lokal, gecacht; lädt nie automatisch
+        if (_sierra is null) { _sierraError = Sierra.LastError; return; }
+        _sierraError = null; _sierraMode = true;
+        _session = _sierra.Session;
+        _i = 0; BuildChart();
     }
 
     private async Task Loop(PeriodicTimer timer)
