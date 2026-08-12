@@ -12,6 +12,8 @@ Brokerunabhängig über JSON-Profile (Broker / Instrument / Fee / Risk).
 
 - **Claude Code:** zuerst [CLAUDE.md](CLAUDE.md) lesen (Arbeitsregeln, Standard-Kommandos, Grenzen).
 - **Menschen:** [docs/COLLABORATOR_ONBOARDING.md](docs/COLLABORATOR_ONBOARDING.md) (Projektziel, Setup, Regeln).
+- **Token-sparende Code-Exploration:** dieses Repo unterstützt **jCodeMunch MCP** — siehe
+  [AGENTS.md](AGENTS.md) und [docs/JCODEMUNCH_SETUP.md](docs/JCODEMUNCH_SETUP.md).
 
 ## Überblick
 

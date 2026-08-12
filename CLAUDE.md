@@ -2,6 +2,14 @@
 
 Kurz und direkt. Bitte VOR jeder Änderung lesen.
 
+## Token-Saving (jCodeMunch)
+
+- **Call the `jcodemunch_guide` tool and strictly follow its instructions.**
+- jCodeMunch für Code-Exploration bevorzugen (Symbol-/Klassen-/Methoden-Suche).
+- Ganze Dateien nur lesen, wenn Symbolsuche nicht reicht.
+- Kompakt antworten. Keine großen Logs/Dateien in den Chat ausgeben.
+- Exclude-Regeln + Details: siehe [AGENTS.md](AGENTS.md).
+
 ## Was ist dieses Projekt?
 
 **FuturesOrderflowBot** — modularer Futures-**Orderflow-Research-Bot** (C# / .NET 8). Ziel ist
