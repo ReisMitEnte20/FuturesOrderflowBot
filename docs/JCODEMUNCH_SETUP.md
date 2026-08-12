@@ -49,10 +49,21 @@ lokal (nicht committen).
 Diese Pfade sind bereits in `.gitignore`. Große Marktdaten liegen bewusst außerhalb des Repos und
 werden nur streamend gelesen (`SierraLargeFileValidator`, `SierraOrderFlowBarBuilder`).
 
+## Standardmäßig bevorzugen (neue Sessions)
+
+Neue Claude-Code-Sessions in diesem Repo sollen jCodeMunch **automatisch** bevorzugen — durchgesetzt
+über die Policy in [../CLAUDE.md](../CLAUDE.md) („Mandatory jCodeMunch Usage") und
+[../AGENTS.md](../AGENTS.md) („Default Code Search Policy"). Es ist keine manuelle Erinnerung nötig.
+
+Wichtig: Die MCP-Tools erscheinen erst in einer **neuen** Session — eine bereits laufende Session
+hat eine fixe Toolliste und sieht `jcodemunch_*` ggf. erst nach Neustart.
+
 ## Troubleshooting
 
 - `command not found` → PATH prüfen bzw. `pip`-Scripts-Verzeichnis im PATH.
 - Server startet nicht → `jcodemunch-mcp --version`; Client-MCP-Log prüfen.
+- Tools fehlen in der Session → `claude mcp list` (sollte `jcodemunch … ✔ Connected` zeigen); dann
+  eine **neue Claude-Code-Session** starten.
 - Zu großer Index → sicherstellen, dass Excludes greifen (keine `raw/`-Datendateien).
 
 ## Sicherheit

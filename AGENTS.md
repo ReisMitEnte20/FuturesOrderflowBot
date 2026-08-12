@@ -2,6 +2,20 @@
 
 Regeln für KI-Agenten (Claude Code / Kilo Code / Cursor) in diesem Repo. Ergänzt `CLAUDE.md`.
 
+## Default Code Search Policy
+
+- **AI agents must use jCodeMunch before broad code reads.**
+- Prefer:
+  - symbol search
+  - class/method retrieval
+  - import/call/blast-radius queries
+  - targeted context bundles
+- Avoid:
+  - full-file reads unless required
+  - repeated broad grep
+  - reading unrelated project areas
+  - long architecture summaries
+
 ## jCodeMunch / Token-Saving Rules
 
 - **Nutze jCodeMunch für Code-Recherche, bevor ganze Dateien gelesen werden.**
