@@ -77,6 +77,49 @@ public class SierraBacktestReplayServiceTests
         finally { File.Delete(tmp); }
     }
 
+    // Mehrere Ticks je Minute -> 1 Candle; 5-Min bündelt mehr Ticks -> weniger Bars als 1-Min.
+    private const string ThreeMinutesManyTicks =
+        "Date, Time, Open, High, Low, Last, Volume, NumberOfTrades, BidVolume, AskVolume\n" +
+        "2025/12/28, 23:00:05, 100.00,100,100,100.00, 3, 1, 0, 3\n" +
+        "2025/12/28, 23:00:40, 100.50,100,100,100.50, 2, 1, 0, 2\n" +   // selbe Minute
+        "2025/12/28, 23:01:10, 100.25,100,100,100.25, 4, 1, 4, 0\n" +
+        "2025/12/28, 23:04:30, 100.75,100,100,100.75, 1, 1, 0, 1\n" +   // eigene Minute
+        "2025/12/28, 23:06:00, 101.00,100,100,101.00, 1, 1, 0, 1\n";
+
+    [Fact]
+    public void One_minute_aggregates_same_minute_ticks_into_one_bar()
+    {
+        var bars = SierraBacktestReplayService.BuildFrom(Load(ThreeMinutesManyTicks), "MES").Session.Bars;
+
+        bars.Should().HaveCount(4);                 // Minuten 23:00, 23:01, 23:04, 23:06
+        bars[0].Open.Should().Be(100.00m);
+        bars[0].Close.Should().Be(100.50m);         // letzter Trade der Minute
+        bars[0].Volume.Should().Be(5m);            // 3 + 2 (beide Ticks der Minute)
+        bars[0].Delta.Should().Be(5m);             // Ask 5 - Bid 0
+    }
+
+    [Fact]
+    public void Five_minute_has_fewer_bars_than_one_minute()
+    {
+        var oneMin = new SierraMarketDataAdapter().Load(new StringReader(ThreeMinutesManyTicks), "MES", TimeSpan.FromMinutes(1));
+        var fiveMin = new SierraMarketDataAdapter().Load(new StringReader(ThreeMinutesManyTicks), "MES", TimeSpan.FromMinutes(5));
+
+        var b1 = SierraBacktestReplayService.BuildFrom(oneMin, "MES").Session.Bars;
+        var b5 = SierraBacktestReplayService.BuildFrom(fiveMin, "MES").Session.Bars;
+
+        b5.Count.Should().BeLessThan(b1.Count);     // 5-Min bündelt stärker
+        b1.Count.Should().Be(4);
+        b5.Count.Should().Be(2);                    // [23:00–23:05) und [23:05–23:10)
+    }
+
+    [Fact]
+    public void Play_index_is_bar_based_not_tick_based()
+    {
+        var s = SierraBacktestReplayService.BuildFrom(Load(ThreeMinutesManyTicks), "MES").Session;
+        s.BarCount.Should().Be(4);                  // 4 Bars, nicht 5 Ticks
+        s.RealizedEquityByBar.Should().HaveCount(4);
+    }
+
     [Fact]
     public void Missing_local_file_sets_error()
     {
@@ -84,6 +127,29 @@ public class SierraBacktestReplayServiceTests
         svc.LocalFileAvailable.Should().BeFalse();
         svc.TryBuild().Should().BeNull();
         svc.LastError.Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public void Intrabar_session_has_more_frames_than_completed_bars()
+    {
+        var csv =
+            "Date, Time, Open, High, Low, Last, Volume, NumberOfTrades, BidVolume, AskVolume\n" +
+            "2025/12/28, 23:00:10, 100.00,0,0,100.00, 1, 1, 0, 1\n" +
+            "2025/12/28, 23:01:00, 101.00,0,0,101.00, 1, 1, 0, 1\n" +
+            "2025/12/28, 23:02:00, 99.00,0,0,99.00, 1, 1, 1, 0\n" +
+            "2025/12/28, 23:06:00, 102.00,0,0,102.00, 1, 1, 0, 1\n";
+
+        var frames = new System.Collections.Generic.List<SierraIntrabarFrame>();
+        var agg = new SierraOrderFlowBarBuilder().Build(
+            new StringReader(csv), "MES", TimeSpan.FromMinutes(5), frameEveryTicks: 1, onFrame: frames.Add);
+
+        var s = SierraBacktestReplayService.BuildIntrabarSession(agg, frames, "MES", 5, 1);
+
+        s.CompletedBars.Should().HaveCount(2);
+        s.FrameCount.Should().Be(4);                          // Replay-Index über Frames, nicht nur Bars
+        s.FrameCount.Should().BeGreaterThan(s.CompletedBars.Count);
+        s.RealizedEquityByBar.Should().HaveCount(s.CompletedBars.Count);
+        s.DeltaCvdAvailable.Should().BeTrue();
     }
 
     [Fact]

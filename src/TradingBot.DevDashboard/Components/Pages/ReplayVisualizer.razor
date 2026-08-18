@@ -4,6 +4,7 @@
 @using System.Globalization
 @using TradingBot.DevDashboard.Services
 @using TradingBot.Domain.Enums
+@using TradingBot.Infrastructure.MarketData.Import
 @inject ReplayDemoService Replay
 @inject SierraBacktestReplayService Sierra
 
@@ -40,18 +41,35 @@
         {
             <span class="rp-hint text-danger">Sierra-Replay-Fehler: @_sierraError</span>
         }
+        @if (_sierraMode)
+        {
+            <span class="rp-speeds">
+                @foreach (var mnt in SierraBacktestReplayService.BarSizeMinutes)
+                {
+                    <button class="btn btn-sm @(_sierraBarMinutes == mnt ? "btn-secondary" : "btn-outline-secondary")"
+                            @onclick="() => SetSierraBarSize(mnt)">@mnt Min</button>
+                }
+            </span>
+            <span class="rp-speeds">
+                @foreach (var n in SierraBacktestReplayService.FrameEveryTicksOptions)
+                {
+                    <button class="btn btn-sm @(_frameEvery == n ? "btn-secondary" : "btn-outline-secondary")"
+                            @onclick="() => SetFrameEvery(n)">@(n == 1 ? "Tick" : "Every " + n)</button>
+                }
+            </span>
+        }
     </div>
 
-    @if (_sierraMode && _sierra is not null)
+    @if (Intra)
     {
         <div class="alert alert-secondary py-2 rp-note">
-            Sierra local sample · Bars: <strong>@_sierra.Session.BarCount</strong> · Trades:
-            <strong>@_sierra.Session.Trades.Count</strong> (W/L @_sierra.Wins/@_sierra.Losses) ·
-            NetPnL: <strong>@_sierra.Session.TotalNetPnL.ToString("F2") $</strong> ·
-            NetDelta @_sierra.NetDelta · FinalCVD @_sierra.FinalCumulativeDelta ·
-            @(_sierra.From?.ToString("yyyy-MM-dd HH:mm"))–@(_sierra.To?.ToString("HH:mm")) ·
-            Delta/CVD: @(_sierra.DeltaCvdAvailable ? "ja" : "nein") · @_sierra.ElapsedMs ms.
-            <em>Technische Backtest-Auswertung einer simplen Demo-Regel — keine Strategie-Empfehlung, keine Edge-Bestätigung.</em>
+            Sierra local sample · <strong>@_sierraBarMinutes-Min Bars</strong>, Intrabar-Frames alle
+            <strong>@_iab!.FrameEveryTicks Tick(s)</strong> · finale Bars: <strong>@_iab.CompletedBars.Count</strong> ·
+            Frames: <strong>@_iab.FrameCount</strong> · Trades: <strong>@_iab.Trades.Count</strong>
+            (W/L @_iab.Wins/@_iab.Losses) · NetPnL: <strong>@_iab.TotalNetPnL.ToString("F2") $</strong> ·
+            @(_iab.From?.ToString("yyyy-MM-dd HH:mm"))–@(_iab.To?.ToString("HH:mm")) ·
+            Delta/CVD: @(_iab.DeltaCvdAvailable ? "ja" : "nein") · @_iab.ElapsedMs ms.
+            <em>Forming candle baut sich aus historischen Ticks auf — simple Demo-Regel, keine Edge-Bestätigung.</em>
         </div>
     }
 
@@ -65,15 +83,15 @@
                         @onclick="() => SetSpeed(val)">@label</button>
             }
         </span>
-        <input type="range" min="0" max="@(_session.BarCount - 1)" value="@_i"
+        <input type="range" min="0" max="@(ReplayLen - 1)" value="@ReplayPos"
                @oninput="OnSeek" class="rp-seek" />
-        <span class="rp-hint">Bar @(_i + 1) / @_session.BarCount</span>
+        <span class="rp-hint">@(Intra ? "Frame" : "Bar") @(ReplayPos + 1) / @ReplayLen</span>
     </div>
 
     <!-- Info-Leiste -->
     <div class="row g-2 mb-2">
         <div class="col-6 col-md-3 col-lg-2"><div class="rp-card"><div class="rp-label">Replay-Zeit (UTC)</div>
-            <div class="rp-value">@Cur.Time.ToString("MM-dd HH:mm")</div></div></div>
+            <div class="rp-value">@((Intra ? Frame.TickTimeUtc : Cur.Time).ToString("MM-dd HH:mm:ss"))</div></div></div>
         <div class="col-6 col-md-3 col-lg-2"><div class="rp-card"><div class="rp-label">Preis (Close)</div>
             <div class="rp-value">@Cur.Close.ToString("F2")</div></div></div>
         <div class="col-6 col-md-3 col-lg-2"><div class="rp-card"><div class="rp-label">Status</div>
@@ -84,52 +102,78 @@
             <div class="rp-value @PnlCss(RealizedPnL)">@RealizedPnL.ToString("F2") $</div></div></div>
         <div class="col-6 col-md-3 col-lg-2"><div class="rp-card"><div class="rp-label">Trades (geschlossen)</div>
             <div class="rp-value">@ClosedCount</div></div></div>
+        @if (Intra)
+        {
+            <div class="col-6 col-md-3 col-lg-2"><div class="rp-card"><div class="rp-label">Candle Delta (intrabar)</div>
+                <div class="rp-value @PnlCss(Frame.Delta)">@Frame.Delta</div></div></div>
+            <div class="col-6 col-md-3 col-lg-2"><div class="rp-card"><div class="rp-label">CVD (intrabar)</div>
+                <div class="rp-value @PnlCss(Frame.CumulativeDelta)">@Frame.CumulativeDelta</div></div></div>
+            <div class="col-6 col-md-3 col-lg-2"><div class="rp-card"><div class="rp-label">Bar Progress</div>
+                <div class="rp-value">@Frame.BarProgressPercent.ToString("F0") %</div></div></div>
+            <div class="col-6 col-md-3 col-lg-2"><div class="rp-card"><div class="rp-label">Candle Volume</div>
+                <div class="rp-value">@Frame.Volume</div></div></div>
+        }
     </div>
 
     <!-- Price / Candlestick Chart -->
     <div class="rp-chart-wrap">
-        <svg viewBox="0 0 @ChartW @ChartH" preserveAspectRatio="none" class="rp-chart" role="img" aria-label="Replay Chart">
+        <svg viewBox="0 0 @ChartW @ChartH" preserveAspectRatio="xMidYMid meet" class="rp-chart" role="img" aria-label="Replay Chart">
+            @foreach (var g in _priceGrid)
+            {
+                <line x1="@F(PlotL)" y1="@F(g.Y)" x2="@F(PlotR)" y2="@F(g.Y)" class="rp-grid" />
+                @(SvgText(PlotR + 5, g.Y + 3, "rp-axis-label", g.Label))
+            }
+            @foreach (var g in _timeGrid)
+            {
+                <line x1="@F(g.X)" y1="@F(PlotT)" x2="@F(g.X)" y2="@F(PlotB)" class="rp-grid-v" />
+                @(SvgText(g.X, ChartH - 7, "rp-axis-label rp-axis-x", g.Label))
+            }
             @if (_openTrade is not null)
             {
-                <line x1="0" y1="@F(_slY)" x2="@ChartW" y2="@F(_slY)" class="rp-sl" />
-                <line x1="0" y1="@F(_tpY)" x2="@ChartW" y2="@F(_tpY)" class="rp-tp" />
+                <line x1="@F(PlotL)" y1="@F(_slY)" x2="@F(PlotR)" y2="@F(_slY)" class="rp-sl" />
+                @(SvgText(PlotL + 3, _slY - 3, "rp-line-label rp-sl-label", "SL"))
+                <line x1="@F(PlotL)" y1="@F(_tpY)" x2="@F(PlotR)" y2="@F(_tpY)" class="rp-tp" />
+                @(SvgText(PlotL + 3, _tpY - 3, "rp-line-label rp-tp-label", "TP"))
             }
             @foreach (var c in _candles)
             {
                 <line x1="@F(c.X)" y1="@F(c.WickTop)" x2="@F(c.X)" y2="@F(c.WickBot)"
-                      class="@(c.Up ? "rp-wick-up" : "rp-wick-down")" />
-                <rect x="@F(c.X - CandleW / 2)" y="@F(c.BodyY)" width="@F(CandleW)" height="@F(c.BodyH)"
-                      class="@(c.Up ? "rp-body-up" : "rp-body-down")" />
+                      class="@(c.Up ? "rp-wick-up" : "rp-wick-down") @(c.Forming ? "rp-forming" : "")" />
+                <rect x="@F(c.X - CandleW / 2)" y="@F(c.BodyY)" width="@F(CandleW)" height="@F(c.BodyH)" rx="0.6"
+                      class="@(c.Up ? "rp-body-up" : "rp-body-down") @(c.Forming ? "rp-forming" : "")" />
             }
             @foreach (var m in _markers)
             {
                 <polygon points="@m.Points" class="@m.Css" />
             }
         </svg>
-        <div class="rp-chart-scale"><span>@_pMin.ToString("F2")</span><span>@_pMax.ToString("F2")</span></div>
     </div>
 
     <!-- Equity Curve (realisiert) -->
-    <div class="rp-chart-title">Equity Curve (realisiert, bis aktueller Bar)</div>
-    <svg viewBox="0 0 @ChartW 70" preserveAspectRatio="none" class="rp-equity" role="img" aria-label="Equity Curve">
+    <div class="rp-eqhead">
+        <span class="rp-chart-title">Equity Curve (realisiert)</span>
+        <span class="rp-eqrange">min @_eqMin.ToString("F2") $ · max @_eqMax.ToString("F2") $</span>
+    </div>
+    <svg viewBox="0 0 @ChartW @EqH" preserveAspectRatio="none" class="rp-equity" role="img" aria-label="Equity Curve">
         <line x1="0" y1="@F(_eqZeroY)" x2="@ChartW" y2="@F(_eqZeroY)" class="rp-axis" />
+        <polygon points="@_equityArea" class="rp-eq-area" />
         <polyline points="@_equityPoints" class="rp-eq-line" fill="none" />
     </svg>
 
     <!-- Trade Journal -->
-    <h2 class="rp-section">Trade Journal (Demo) — Klick springt zum Entry</h2>
-    <div class="table-responsive">
-        <table class="table table-sm rp-table">
+    <h2 class="rp-section">Trade Journal <span class="rp-section-hint">— Klick springt zum Entry</span></h2>
+    <div class="rp-journal">
+        <table class="table table-sm rp-table mb-0">
             <thead><tr><th>#</th><th>Side</th><th>Entry</th><th>Exit</th><th class="text-end">Entry $</th>
                 <th class="text-end">Exit $</th><th class="text-end">SL</th><th class="text-end">TP</th>
                 <th class="text-end">NetPnL</th><th>Status</th></tr></thead>
             <tbody>
                 @foreach (var t in _session.Trades)
                 {
-                    <tr class="rp-trow @(t.IsOpenAt(_i) ? "rp-open" : "") @(t.EntryIndex <= _i ? "" : "rp-future")"
+                    <tr class="rp-trow @(t.IsOpenAt(_i) ? "rp-open" : "") @(t.EntryIndex == _i ? "rp-active" : "") @(t.EntryIndex <= _i ? "" : "rp-future")"
                         @onclick="() => JumpTo(t)">
                         <td>@t.Id</td>
-                        <td>@SideText(t.Side)</td>
+                        <td><span class="rp-side @(t.Side == PositionSide.Long ? "rp-side-long" : "rp-side-short")">@SideText(t.Side)</span></td>
                         <td>@t.EntryTime.ToString("HH:mm")</td>
                         <td>@t.ExitTime.ToString("HH:mm")</td>
                         <td class="text-end">@t.EntryPrice.ToString("F2")</td>
@@ -160,38 +204,67 @@
     private static readonly (string Label, int Val)[] Speeds =
         { ("x1", 1), ("x10", 4), ("x100", 12), ("x1000", 40) };
 
-    private const double ChartW = 720, ChartH = 320, PadY = 12, Window = 60;
-    private const double CandleW = ChartW / Window * 0.6;
+    private const double ChartW = 760, ChartH = 420, Window = 60;
+    private const double PlotL = 8, PlotR = ChartW - 58, PlotT = 12, PlotB = ChartH - 22;
+    private static readonly double XStep = (PlotR - PlotL) / Window;
+    private static readonly double CandleW = XStep * 0.7;
+    private const double EqH = 120, EqPad = 10;
 
     // Vorberechnete Chart-Geometrie (bei jeder Index-Änderung).
     private readonly List<Candle> _candles = new();
     private readonly List<Marker> _markers = new();
+    private readonly List<(double Y, string Label)> _priceGrid = new();
+    private readonly List<(double X, string Label)> _timeGrid = new();
     private ReplayTradeMarker? _openTrade;
     private double _slY, _tpY, _eqZeroY;
-    private string _equityPoints = "";
-    private decimal _pMin, _pMax;
+    private string _equityPoints = "", _equityArea = "";
+    private decimal _pMin, _pMax, _eqMin, _eqMax;
 
-    private ReplayBar Cur => _session.Bars[_i];
-    private ReplayTradeMarker? OpenTrade() => _session.Trades.FirstOrDefault(t => t.IsOpenAt(_i));
-    private decimal RealizedPnL => _session.RealizedEquityByBar[_i];
+    private bool _sierraMode;
+    private IntrabarReplaySession? _iab;              // Sierra = Intrabar-/Tick-Replay (forming candle)
+    private string? _sierraError;
+    private int _sierraBarMinutes = 5;
+    private int _frameEvery = 25;
+    private int _f;                                    // Frame-Index (Intrabar)
+    private static string SierraDemoPathShort => "A:\\Projects\\MARKET DATA\\...";
+
+    // --- Modus-neutrale Zugriffe (Demo = finale Bars; Sierra = Intrabar mit forming candle) ---
+    private bool Intra => _sierraMode && _iab is not null;
+    private SierraIntrabarFrame Frame => _iab!.Frames[Math.Clamp(_f, 0, _iab.Frames.Count - 1)];
+    private int BarTotal => Intra ? Frame.CompletedBars + 1 : _session.Bars.Count;   // + forming
+    private int EndIdx => BarTotal - 1;
+    private int StatusIdx => Intra ? Math.Max(0, Frame.CompletedBars - 1) : _i;
+    private int ReplayLen => Intra ? _iab!.Frames.Count : _session.BarCount;
+    private int ReplayPos => Intra ? _f : _i;
+
+    private ReplayBar BarAt(int idx)
+    {
+        if (!Intra) return _session.Bars[idx];
+        if (idx < Frame.CompletedBars) return _iab!.CompletedBars[idx];
+        var f = Frame;                                // forming candle aus dem aktuellen Frame
+        return new ReplayBar { Index = idx, Time = f.FormingOpenTime, Open = f.Open, High = f.High, Low = f.Low, Close = f.Close, Volume = f.Volume, Delta = f.Delta };
+    }
+    private IReadOnlyList<ReplayTradeMarker> TradesSrc => Intra ? _iab!.Trades : _session.Trades;
+    private decimal DollarPP => Intra ? _iab!.DollarPerPoint : _session.DollarPerPoint;
+
+    private ReplayBar Cur => BarAt(EndIdx);
+    private ReplayTradeMarker? OpenTrade() => TradesSrc.FirstOrDefault(t => t.IsOpenAt(StatusIdx));
+    private decimal RealizedPnL => Intra
+        ? (Frame.CompletedBars > 0 ? _iab!.RealizedEquityByBar[Frame.CompletedBars - 1] : 0m)
+        : _session.RealizedEquityByBar[_i];
     private decimal CurrentPnL
     {
         get
         {
             if (_openTrade is null) return RealizedPnL;
             decimal sign = _openTrade.Side == PositionSide.Long ? 1m : -1m;
-            decimal unreal = (Cur.Close - _openTrade.EntryPrice) * sign * _session.DollarPerPoint;
+            decimal unreal = (Cur.Close - _openTrade.EntryPrice) * sign * DollarPP;
             return RealizedPnL + Math.Round(unreal, 2);
         }
     }
-    private int ClosedCount => _session.Trades.Count(t => t.IsClosedAt(_i));
+    private int ClosedCount => TradesSrc.Count(t => t.IsClosedAt(StatusIdx));
     private string StatusText => _openTrade is null ? "FLAT" : _openTrade.Side == PositionSide.Long ? "LONG" : "SHORT";
     private string StatusCss => _openTrade is null ? "" : _openTrade.Side == PositionSide.Long ? "text-success" : "text-danger";
-
-    private bool _sierraMode;
-    private SierraReplayResult? _sierra;
-    private string? _sierraError;
-    private static string SierraDemoPathShort => "A:\\Projects\\MARKET DATA\\...";
 
     protected override void OnInitialized()
     {
@@ -211,11 +284,24 @@
     private void LoadSierra()
     {
         _playing = false;
-        _sierra = Sierra.TryBuild();          // read-only, lokal, gecacht; lädt nie automatisch
-        if (_sierra is null) { _sierraError = Sierra.LastError; return; }
+        _iab = Sierra.TryBuildIntrabar(_sierraBarMinutes, _frameEvery);  // read-only, lokal, gecacht
+        if (_iab is null) { _sierraError = Sierra.LastError; _sierraMode = false; return; }
         _sierraError = null; _sierraMode = true;
-        _session = _sierra.Session;
-        _i = 0; BuildChart();
+        _f = 0; BuildChart();
+    }
+
+    private void SetSierraBarSize(int minutes)
+    {
+        if (_sierraBarMinutes == minutes) return;
+        _sierraBarMinutes = minutes;
+        LoadSierra();                                  // baut/holt die gewählte Bar-Größe (gecacht)
+    }
+
+    private void SetFrameEvery(int n)
+    {
+        if (_frameEvery == n) return;
+        _frameEvery = n;
+        LoadSierra();
     }
 
     private async Task Loop(PeriodicTimer timer)
@@ -225,9 +311,10 @@
             while (await timer.WaitForNextTickAsync())
             {
                 if (!_playing) continue;
-                int next = Math.Min(_i + _speed, _session.BarCount - 1);
-                _i = next;
-                if (_i >= _session.BarCount - 1) _playing = false;
+                int len = ReplayLen;
+                int pos = Math.Min(ReplayPos + _speed, len - 1);
+                if (Intra) _f = pos; else _i = pos;
+                if (pos >= len - 1) _playing = false;
                 BuildChart();
                 await InvokeAsync(StateHasChanged);
             }
@@ -235,30 +322,54 @@
         catch (OperationCanceledException) { /* Seite geschlossen */ }
     }
 
-    private void TogglePlay() { if (_i >= _session.BarCount - 1) _i = 0; _playing = !_playing; BuildChart(); }
-    private void Reset() { _playing = false; _i = 0; BuildChart(); }
+    private void TogglePlay()
+    {
+        if (ReplayPos >= ReplayLen - 1) { if (Intra) _f = 0; else _i = 0; }
+        _playing = !_playing; BuildChart();
+    }
+    private void Reset() { _playing = false; if (Intra) _f = 0; else _i = 0; BuildChart(); }
     private void SetSpeed(int v) => _speed = v;
     private void OnSeek(ChangeEventArgs e)
     {
         if (int.TryParse(e.Value?.ToString(), out int v))
-        { _playing = false; _i = Math.Clamp(v, 0, _session.BarCount - 1); BuildChart(); }
+        {
+            _playing = false;
+            int p = Math.Clamp(v, 0, ReplayLen - 1);
+            if (Intra) _f = p; else _i = p;
+            BuildChart();
+        }
     }
-    private void JumpTo(ReplayTradeMarker t) { _playing = false; _i = t.EntryIndex; BuildChart(); }
+    private void JumpTo(ReplayTradeMarker t)
+    {
+        _playing = false;
+        if (Intra)
+        {
+            // erstes Frame, in dem die Entry-Bar bereits abgeschlossen ist
+            int idx = 0;
+            for (int k = 0; k < _iab!.Frames.Count; k++)
+                if (_iab.Frames[k].CompletedBars > t.EntryIndex) { idx = k; break; }
+            _f = idx;
+        }
+        else _i = t.EntryIndex;
+        BuildChart();
+    }
 
     private void BuildChart()
     {
         _candles.Clear();
         _markers.Clear();
+        _priceGrid.Clear();
+        _timeGrid.Clear();
         _openTrade = OpenTrade();
 
-        int end = _i;
+        int end = EndIdx;
         int start = Math.Max(0, end - (int)Window + 1);
-        int n = end - start + 1;
+        int lastClosed = StatusIdx;
 
         decimal pMin = decimal.MaxValue, pMax = decimal.MinValue;
         for (int idx = start; idx <= end; idx++)
         {
-            var b = _session.Bars[idx];
+            var b = BarAt(idx);
             if (b.Low < pMin) pMin = b.Low;
             if (b.High > pMax) pMax = b.High;
         }
@@ -268,44 +379,67 @@
             pMax = Math.Max(pMax, Math.Max(_openTrade.StopLoss, _openTrade.TakeProfit));
         }
         if (pMax <= pMin) pMax = pMin + 1m;
+        decimal padP = (pMax - pMin) * 0.05m;             // etwas Luft oben/unten
+        pMin -= padP; pMax += padP;
         _pMin = pMin; _pMax = pMax;
 
         double range = (double)(pMax - pMin);
-        double usable = ChartH - 2 * PadY;
-        double xStep = ChartW / Window;
-        double X(int idx) => (idx - start) * xStep + xStep / 2;
-        double Y(decimal p) => PadY + usable * (1 - ((double)(p - pMin) / range));
+        double plotH = PlotB - PlotT;
+        double X(int idx) => PlotL + (idx - start) * XStep + XStep / 2;
+        double Y(decimal p) => PlotT + plotH * (1 - ((double)(p - pMin) / range));
 
         for (int idx = start; idx <= end; idx++)
         {
-            var b = _session.Bars[idx];
+            var b = BarAt(idx);
+            bool forming = Intra && idx == end;           // aktuelle, sich bildende Kerze
             double bodyTop = Y(Math.Max(b.Open, b.Close));
             double bodyBot = Y(Math.Min(b.Open, b.Close));
-            _candles.Add(new Candle(X(idx), bodyTop, Math.Max(1, bodyBot - bodyTop), Y(b.High), Y(b.Low), b.IsBullish));
+            _candles.Add(new Candle(X(idx), bodyTop, Math.Max(1.5, bodyBot - bodyTop), Y(b.High), Y(b.Low), b.IsBullish, forming));
         }
 
-        foreach (var t in _session.Trades)
+        foreach (var t in TradesSrc)
         {
-            if (t.EntryIndex >= start && t.EntryIndex <= end && t.EntryIndex <= _i)
+            if (t.EntryIndex >= start && t.EntryIndex <= end && t.EntryIndex <= lastClosed)
                 _markers.Add(EntryMarker(X(t.EntryIndex), Y(t.EntryPrice), t.Side));
-            if (t.ExitIndex >= start && t.ExitIndex <= end && t.IsClosedAt(_i))
+            if (t.ExitIndex >= start && t.ExitIndex <= end && t.IsClosedAt(lastClosed))
                 _markers.Add(ExitMarker(X(t.ExitIndex), Y(t.ExitPrice), t.Side));
         }
 
         if (_openTrade is not null) { _slY = Y(_openTrade.StopLoss); _tpY = Y(_openTrade.TakeProfit); }
+
+        const int levels = 4;                             // Preis-Gridlinien + Labels
+        for (int k = 0; k <= levels; k++)
+        {
+            decimal p = pMin + (pMax - pMin) * k / levels;
+            _priceGrid.Add((Y(p), p.ToString("F2", CultureInfo.InvariantCulture)));
+        }
+        int cols = Math.Min(6, end - start);              // Zeit-Gridlinien + Labels
+        if (cols <= 0)
+            _timeGrid.Add((X(end), BarAt(end).Time.ToString("HH:mm")));
+        else
+            for (int c = 0; c <= cols; c++)
+            {
+                int idx = start + (end - start) * c / cols;
+                _timeGrid.Add((X(idx), BarAt(idx).Time.ToString("HH:mm")));
+            }
 
         BuildEquity();
     }
 
     private void BuildEquity()
     {
-        int end = _i;
-        var eq = _session.RealizedEquityByBar;
+        var eq = Intra ? _iab!.RealizedEquityByBar : _session.RealizedEquityByBar;
+        int end = eq.Count == 0 ? -1 : Math.Min(StatusIdx, eq.Count - 1);
+        if (end < 0)
+        {
+            _eqMin = _eqMax = 0m; _eqZeroY = EqH / 2; _equityPoints = ""; _equityArea = ""; return;
+        }
         double min = 0, max = 0;
         for (int i = 0; i <= end; i++) { double v = (double)eq[i]; if (v < min) min = v; if (v > max) max = v; }
+        _eqMin = (decimal)min; _eqMax = (decimal)max;
         double range = max - min; if (range <= 0) range = 1;
-        double usable = 70 - 12;
-        double Y(double v) => 6 + usable * (1 - (v - min) / range);
+        double usable = EqH - 2 * EqPad;
+        double Y(double v) => EqPad + usable * (1 - (v - min) / range);
         _eqZeroY = Y(0);
         var pts = new List<string>(end + 1);
         for (int i = 0; i <= end; i++)
@@ -314,22 +448,29 @@
             pts.Add($"{F(x)},{F(Y((double)eq[i]))}");
         }
         _equityPoints = string.Join(" ", pts);
+        _equityArea = pts.Count > 0
+            ? $"{F(0)},{F(_eqZeroY)} " + string.Join(" ", pts) + $" {F(end == 0 ? 0 : ChartW)},{F(_eqZeroY)}"
+            : "";
     }
 
-    // Marker: kleines Dreieck (Entry aufwärts/abwärts je Seite), Exit = Raute.
+    // Marker: Dreieck (Long unter Preis, Short über Preis), Exit = Raute. Deutlich größer.
     private static Marker EntryMarker(double x, double y, PositionSide side)
     {
         string css = side == PositionSide.Long ? "rp-m-long" : "rp-m-short";
         string pts = side == PositionSide.Long
-            ? $"{F(x)},{F(y + 10)} {F(x - 6)},{F(y + 20)} {F(x + 6)},{F(y + 20)}"   // Dreieck nach oben (unter Preis)
-            : $"{F(x)},{F(y - 10)} {F(x - 6)},{F(y - 20)} {F(x + 6)},{F(y - 20)}";  // nach unten (über Preis)
+            ? $"{F(x)},{F(y + 11)} {F(x - 8)},{F(y + 26)} {F(x + 8)},{F(y + 26)}"   // nach oben zeigend (unter Preis)
+            : $"{F(x)},{F(y - 11)} {F(x - 8)},{F(y - 26)} {F(x + 8)},{F(y - 26)}";  // nach unten zeigend (über Preis)
         return new Marker(pts, css);
     }
     private static Marker ExitMarker(double x, double y, PositionSide side)
-        => new($"{F(x)},{F(y - 6)} {F(x + 6)},{F(y)} {F(x)},{F(y + 6)} {F(x - 6)},{F(y)}", "rp-m-exit");
+        => new($"{F(x)},{F(y - 8)} {F(x + 8)},{F(y)} {F(x)},{F(y + 8)} {F(x - 8)},{F(y)}", "rp-m-exit");
 
     private string TradeStatus(ReplayTradeMarker t)
         => t.IsOpenAt(_i) ? "offen" : t.IsClosedAt(_i) ? "geschlossen" : "—";
+
+    // SVG-<text> als MarkupString (umgeht Razors reserviertes <text>-Tag).
+    private static MarkupString SvgText(double x, double y, string css, string label)
+        => (MarkupString)$"<text x=\"{F(x)}\" y=\"{F(y)}\" class=\"{css}\">{System.Net.WebUtility.HtmlEncode(label)}</text>";
 
     private static string SideText(PositionSide s) => s == PositionSide.Long ? "Long" : "Short";
     private static string PnlCss(decimal v) => v > 0 ? "text-success" : v < 0 ? "text-danger" : "";
@@ -337,6 +478,6 @@
 
     public void Dispose() => _timer?.Dispose();
 
-    private readonly record struct Candle(double X, double BodyY, double BodyH, double WickTop, double WickBot, bool Up);
+    private readonly record struct Candle(double X, double BodyY, double BodyH, double WickTop, double WickBot, bool Up, bool Forming = false);
     private readonly record struct Marker(string Points, string Css);
 }

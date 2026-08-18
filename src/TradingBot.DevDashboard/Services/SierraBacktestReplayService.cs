@@ -45,17 +45,24 @@ public sealed class SierraBacktestReplayService
     public bool LocalFileAvailable => File.Exists(LocalPath);
     public string? LastError { get; private set; }
 
+    /// <summary>Unterstützte Time-Bar-Größen (Minuten) für das Replay.</summary>
+    public static readonly int[] BarSizeMinutes = { 1, 5, 15 };
+
     private readonly object _sync = new();
-    private SierraReplayResult? _cached;
+    private readonly Dictionary<int, SierraReplayResult> _cache = new();
 
     public SierraBacktestReplayService(string? localPath = null) => LocalPath = localPath ?? DefaultLocalPath;
 
-    /// <summary>Baut (einmalig, gecacht) das Replay-Backtest-Ergebnis; null + LastError bei Fehler.</summary>
-    public SierraReplayResult? TryBuild(long maxRows = 100_000, string symbol = "MES")
+    /// <summary>
+    /// Baut (gecacht je Bar-Größe) das Replay-Backtest-Ergebnis aus 1/5/15-Min Time-Bars;
+    /// null + LastError bei Fehler. Ticks derselben Bar-Periode werden zu EINER Candle aggregiert.
+    /// </summary>
+    public SierraReplayResult? TryBuild(int barMinutes = 1, long maxRows = 100_000, string symbol = "MES")
     {
+        if (barMinutes <= 0) barMinutes = 1;
         lock (_sync)
         {
-            if (_cached is not null) return _cached;
+            if (_cache.TryGetValue(barMinutes, out var hit)) return hit;
             LastError = null;
             try
             {
@@ -64,11 +71,12 @@ public sealed class SierraBacktestReplayService
 
                 var sw = Stopwatch.StartNew();
                 var res = new SierraMarketDataAdapter().LoadFromFile(
-                    LocalPath, symbol, TimeSpan.FromMinutes(1), maxRows: maxRows);
+                    LocalPath, symbol, TimeSpan.FromMinutes(barMinutes), maxRows: maxRows);
                 sw.Stop();
 
-                _cached = BuildResult(res, symbol, sw.ElapsedMilliseconds);
-                return _cached;
+                var built = BuildResult(res, symbol, sw.ElapsedMilliseconds);
+                _cache[barMinutes] = built;
+                return built;
             }
             catch (Exception ex)
             {
@@ -81,6 +89,97 @@ public sealed class SierraBacktestReplayService
     /// <summary>Baut aus einem bereits geladenen Datensatz (für Tests mit synthetischen Ticks).</summary>
     public static SierraReplayResult BuildFrom(SierraMarketDataResult data, string symbol, long elapsedMs = 0)
         => BuildResult(data, symbol, elapsedMs);
+
+    /// <summary>Mögliche Replay-Granularitäten (jeder N-te Tick ein Frame).</summary>
+    public static readonly int[] FrameEveryTicksOptions = { 1, 10, 25 };
+
+    private readonly Dictionary<(int Bars, int Frame), IntrabarReplaySession> _intrabarCache = new();
+
+    /// <summary>
+    /// Baut (gecacht) eine INTRABAR-Replay-Session: streamt die lokale Sierra-Datei, sammelt
+    /// Intrabar-Frames (jeder <paramref name="frameEveryTicks"/>-te Tick) und die finalisierten Bars.
+    /// </summary>
+    public IntrabarReplaySession? TryBuildIntrabar(
+        int barMinutes = 5, int frameEveryTicks = 25, long maxRows = 100_000, string symbol = "MES")
+    {
+        if (barMinutes <= 0) barMinutes = 1;
+        if (frameEveryTicks <= 0) frameEveryTicks = 1;
+        lock (_sync)
+        {
+            if (_intrabarCache.TryGetValue((barMinutes, frameEveryTicks), out var hit)) return hit;
+            LastError = null;
+            try
+            {
+                if (!File.Exists(LocalPath))
+                    throw new FileNotFoundException($"Lokale Sierra-Datei nicht gefunden: {LocalPath}");
+
+                var frames = new List<SierraIntrabarFrame>();
+                var sw = Stopwatch.StartNew();
+                var agg = new SierraOrderFlowBarBuilder().BuildFile(
+                    LocalPath, symbol, TimeSpan.FromMinutes(barMinutes), maxRows: maxRows,
+                    frameEveryTicks: frameEveryTicks, onFrame: frames.Add);
+                sw.Stop();
+
+                var built = BuildIntrabarSession(agg, frames, symbol, barMinutes, frameEveryTicks, sw.ElapsedMilliseconds);
+                _intrabarCache[(barMinutes, frameEveryTicks)] = built;
+                return built;
+            }
+            catch (Exception ex)
+            {
+                LastError = ex.Message;
+                return null;
+            }
+        }
+    }
+
+    /// <summary>Baut eine Intrabar-Session aus Aggregations-Ergebnis + Frames (für Tests offen).</summary>
+    public static IntrabarReplaySession BuildIntrabarSession(
+        SierraAggregationResult agg, IReadOnlyList<SierraIntrabarFrame> frames,
+        string symbol, int barMinutes, int frameEveryTicks, long elapsedMs = 0)
+    {
+        var bars = new List<ReplayBar>(agg.Bars.Count);
+        for (int i = 0; i < agg.Bars.Count; i++)
+        {
+            var b = agg.Bars[i].Bar;
+            bars.Add(new ReplayBar
+            {
+                Index = i, Time = b.OpenTime,
+                Open = b.Open, High = b.High, Low = b.Low, Close = b.Close,
+                Volume = b.TotalVolume, Delta = b.Delta
+            });
+        }
+
+        var trades = RunDemoRule(bars);
+        var equity = new decimal[bars.Count];
+        decimal running = 0m; int t = 0;
+        var byExit = trades.OrderBy(x => x.ExitIndex).ToList();
+        for (int i = 0; i < bars.Count; i++)
+        {
+            while (t < byExit.Count && byExit[t].ExitIndex <= i) running += byExit[t++].NetPnL;
+            equity[i] = running;
+        }
+
+        return new IntrabarReplaySession
+        {
+            Symbol = $"{symbol} (Sierra local)",
+            BarMinutes = barMinutes,
+            FrameEveryTicks = frameEveryTicks,
+            CompletedBars = bars,
+            Frames = frames,
+            Trades = trades,
+            RealizedEquityByBar = equity,
+            DollarPerPoint = DollarPerPoint,
+            TotalNetPnL = trades.Sum(x => x.NetPnL),
+            BarsProcessed = agg.RowsProcessed,
+            ParseErrors = agg.ParseErrors,
+            NetDelta = agg.NetDelta,
+            FinalCumulativeDelta = agg.FinalCumulativeDelta,
+            From = agg.FirstBarTime,
+            To = agg.LastBarTime,
+            DeltaCvdAvailable = agg.Capabilities.SupportsDeltaCvd,
+            ElapsedMs = elapsedMs
+        };
+    }
 
     private static SierraReplayResult BuildResult(SierraMarketDataResult data, string symbol, long elapsedMs)
     {

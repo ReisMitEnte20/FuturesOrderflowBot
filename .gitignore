@@ -16,6 +16,9 @@ Thumbs.db
 config/**/*.local.json
 *.secrets.json
 
+## Lokale Kilo-MCP-Config (enthaelt Hindsight-Auth-Token, NICHT committen)
+.kilo/
+
 ## Lokale Marktdaten-Exporte (NIE committen; .gitkeep bleibt)
 samples/sierra/raw/*.txt
 samples/sierra/raw/*.csv

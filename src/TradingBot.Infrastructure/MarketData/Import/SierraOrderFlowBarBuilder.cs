@@ -11,6 +11,29 @@ public sealed record SierraFootprintLevel(decimal Price, decimal Volume, decimal
 }
 
 /// <summary>
+/// Intrabar-Momentaufnahme (forming candle) beim Durchspielen der Ticks: zeigt, wie sich die aktuelle
+/// Bar aus den historischen Ticks aufbaut (High/Low/Close/Volume/Bid/Ask/Delta/CVD wachsen intrabar).
+/// </summary>
+public sealed record SierraIntrabarFrame
+{
+    public long TickIndex { get; init; }
+    public DateTimeOffset TickTimeUtc { get; init; }
+    public decimal CurrentPrice { get; init; }
+    public int CompletedBars { get; init; }          // Anzahl bereits finalisierter Bars vor dieser
+    public DateTimeOffset FormingOpenTime { get; init; }
+    public decimal Open { get; init; }
+    public decimal High { get; init; }
+    public decimal Low { get; init; }
+    public decimal Close { get; init; }
+    public decimal Volume { get; init; }
+    public decimal BidVolume { get; init; }
+    public decimal AskVolume { get; init; }
+    public decimal Delta => AskVolume - BidVolume;
+    public decimal CumulativeDelta { get; init; }    // inkl. der sich bildenden Bar
+    public double BarProgressPercent { get; init; }
+}
+
+/// <summary>
 /// Eine streamend gebaute Time-<see cref="OrderFlowBar"/> plus Sierra-Zusatzinfos
 /// (NumberOfTrades, optionale Footprint-Preislevels). MinPrice/MaxPrice == Bar.Low/High.
 /// </summary>
@@ -82,19 +105,21 @@ public sealed class SierraOrderFlowBarBuilder
     public SierraAggregationResult BuildFile(
         string path, string symbol, TimeSpan barInterval, long? maxRows = null,
         DateTimeOffset? fromUtc = null, DateTimeOffset? toUtc = null,
-        bool buildFootprint = true, Action<long>? onProgress = null)
+        bool buildFootprint = true, Action<long>? onProgress = null,
+        int frameEveryTicks = 0, Action<SierraIntrabarFrame>? onFrame = null)
     {
         if (!File.Exists(path)) throw new FileNotFoundException($"Datei nicht gefunden: '{path}'.", path);
         long size = new FileInfo(path).Length;
         using var reader = new StreamReader(path);
-        return Build(reader, symbol, barInterval, maxRows, fromUtc, toUtc, buildFootprint, onProgress)
+        return Build(reader, symbol, barInterval, maxRows, fromUtc, toUtc, buildFootprint, onProgress, frameEveryTicks, onFrame)
             with { FileSizeBytes = size };
     }
 
     public SierraAggregationResult Build(
         TextReader reader, string symbol, TimeSpan barInterval, long? maxRows = null,
         DateTimeOffset? fromUtc = null, DateTimeOffset? toUtc = null,
-        bool buildFootprint = true, Action<long>? onProgress = null)
+        bool buildFootprint = true, Action<long>? onProgress = null,
+        int frameEveryTicks = 0, Action<SierraIntrabarFrame>? onFrame = null)
     {
         ArgumentNullException.ThrowIfNull(reader);
         if (string.IsNullOrWhiteSpace(symbol))
@@ -178,6 +203,10 @@ public sealed class SierraOrderFlowBarBuilder
                 acc = new BarAccumulator(bucket, bucket + barInterval);
             }
             acc.Add(price.Value, volume.Value, bid, ask, numTrades > 0m ? numTrades : 1m, aggressor);
+
+            // Intrabar-Frame (optional, gesampelt): Momentaufnahme der sich bildenden Bar.
+            if (frameEveryTicks > 0 && onFrame is not null && valid % frameEveryTicks == 0)
+                onFrame(acc.Snapshot(valid, bars.Count, cumulativeDelta, ts.Value, barInterval));
         }
         Flush();
 
@@ -271,6 +300,19 @@ public sealed class SierraOrderFlowBarBuilder
             decimal addAsk = side == AggressorSide.Buy ? volume : 0m;
             var cur = _levels.TryGetValue(price, out var v) ? v : (0m, 0m);
             _levels[price] = (cur.Item1 + addBid, cur.Item2 + addAsk);
+        }
+
+        public SierraIntrabarFrame Snapshot(long tickIndex, int completedBars, decimal finalizedCvd, DateTimeOffset tickTime, TimeSpan interval)
+        {
+            double prog = interval.Ticks <= 0 ? 0
+                : Math.Clamp((double)(tickTime.UtcTicks - BucketStart.UtcTicks) / interval.Ticks * 100.0, 0, 100);
+            return new SierraIntrabarFrame
+            {
+                TickIndex = tickIndex, TickTimeUtc = tickTime, CurrentPrice = _close, CompletedBars = completedBars,
+                FormingOpenTime = BucketStart, Open = _open, High = _high, Low = _low, Close = _close,
+                Volume = _total, BidVolume = _bid, AskVolume = _ask,
+                CumulativeDelta = finalizedCvd + (_ask - _bid), BarProgressPercent = prog
+            };
         }
 
         public SierraOrderFlowBar Build(string symbol, ref decimal cumulativeDelta, bool buildFootprint)

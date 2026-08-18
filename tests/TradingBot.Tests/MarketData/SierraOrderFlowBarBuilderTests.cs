@@ -152,6 +152,35 @@ public class SierraOrderFlowBarBuilderTests
     }
 
     [Fact]
+    public void Intrabar_frames_show_forming_candle_building_up()
+    {
+        // 4 Ticks im 5-Min-Bucket [23:00,23:05), dann 1 Tick im nächsten Bucket. frameEveryTicks=1.
+        var csv = Header + "\n" +
+            "2025/12/28, 23:00:10, 100.00,0,0,100.00, 1, 1, 0, 1\n" +   // buy
+            "2025/12/28, 23:01:00, 101.00,0,0,101.00, 2, 1, 0, 2\n" +   // buy, neues High
+            "2025/12/28, 23:02:00, 99.00,0,0,99.00, 1, 1, 1, 0\n" +     // sell, neues Low
+            "2025/12/28, 23:03:00, 100.50,0,0,100.50, 1, 1, 0, 1\n" +   // buy
+            "2025/12/28, 23:06:00, 102.00,0,0,102.00, 1, 1, 0, 1\n";    // neuer Bucket
+
+        var frames = new List<SierraIntrabarFrame>();
+        var agg = new SierraOrderFlowBarBuilder().Build(
+            R(csv), "MES", TimeSpan.FromMinutes(5), frameEveryTicks: 1, onFrame: frames.Add);
+
+        frames.Should().HaveCount(5);                 // je Tick ein Frame (mehr als 2 finale Bars)
+        agg.BarsCreated.Should().Be(2);
+
+        frames[0].CompletedBars.Should().Be(0);
+        frames[0].High.Should().Be(100m); frames[0].Low.Should().Be(100m); frames[0].Volume.Should().Be(1m);
+        frames[1].High.Should().Be(101m); frames[1].Close.Should().Be(101m); frames[1].Volume.Should().Be(3m); frames[1].Delta.Should().Be(3m);
+        frames[2].Low.Should().Be(99m);   frames[2].Volume.Should().Be(4m); frames[2].Delta.Should().Be(2m); // ask3 - bid1
+        frames[3].Close.Should().Be(100.50m); frames[3].Volume.Should().Be(5m);
+        frames[4].CompletedBars.Should().Be(1);       // Bar-Grenze überschritten -> neue forming candle
+        frames[4].Open.Should().Be(102m);
+        frames[4].CumulativeDelta.Should().Be(4m);    // finalisierte Bar0-Delta 3 + forming +1
+        frames.Select(f => f.TickTimeUtc.Offset).Should().OnlyContain(o => o == TimeSpan.Zero);
+    }
+
+    [Fact]
     public void Five_minute_interval_groups_ticks()
     {
         var csv = Header + "\n" +
