@@ -247,6 +247,23 @@
     private IReadOnlyList<ReplayTradeMarker> TradesSrc => Intra ? _iab!.Trades : _session.Trades;
     private decimal DollarPP => Intra ? _iab!.DollarPerPoint : _session.DollarPerPoint;
 
+    /// <summary>
+    /// Bar-Fortschritt (0..1) für den Exit-Marker: bei SL/TP-Exit die exakte Intrabar-Frame-Position
+    /// innerhalb der Exit-Bar; bei Zeit-Exit (Exit == Bar-Close) bleibt es beim Bar-Ende (1.0).
+    /// Nur für den Sierra-Intrabar-Modus relevant (Demo-Modus hat keine Intrabar-Frames).
+    /// </summary>
+    private double ExitProgress(ReplayTradeMarker t)
+    {
+        if (!Intra) return 0.5;
+        bool isLong = t.Side == PositionSide.Long;
+        bool? touchHigh = t.ExitPrice == t.TakeProfit ? isLong
+            : t.ExitPrice == t.StopLoss ? !isLong
+            : (bool?)null;                                  // Zeit-Exit am Bar-Close -> Bar-Ende
+        if (touchHigh is null) return 1.0;
+        return SierraBacktestReplayService.FindIntrabarExitProgress(
+            _iab!.Frames, t.ExitIndex, t.ExitPrice, touchHigh.Value);
+    }
+
     private ReplayBar Cur => BarAt(EndIdx);
     private ReplayTradeMarker? OpenTrade() => TradesSrc.FirstOrDefault(t => t.IsOpenAt(StatusIdx));
     private decimal RealizedPnL => Intra
@@ -386,6 +403,8 @@
         double range = (double)(pMax - pMin);
         double plotH = PlotB - PlotT;
         double X(int idx) => PlotL + (idx - start) * XStep + XStep / 2;
+        // Exakte Intrabar-Position innerhalb der Bar-Spalte (0 = Bar-Open, 1 = Bar-Close/Finalisierung).
+        double XAt(int idx, double progress) => PlotL + (idx - start) * XStep + XStep * Math.Clamp(progress, 0.0, 1.0);
         double Y(decimal p) => PlotT + plotH * (1 - ((double)(p - pMin) / range));
 
         for (int idx = start; idx <= end; idx++)
@@ -399,10 +418,14 @@
 
         foreach (var t in TradesSrc)
         {
+            // Entry wird laut Demo-Regel erst NACH Bar-Close bestätigt (kein Lookahead) -> Marker am
+            // Bar-Ende der Entry-Bar (Progress 1.0), nicht mehr an der Spalten-Mitte.
             if (t.EntryIndex >= start && t.EntryIndex <= end && t.EntryIndex <= lastClosed)
-                _markers.Add(EntryMarker(X(t.EntryIndex), Y(t.EntryPrice), t.Side));
+                _markers.Add(EntryMarker(XAt(t.EntryIndex, Intra ? 1.0 : 0.5), Y(t.EntryPrice), t.Side));
+            // Exit exakt intrabar: bei SL/TP-Treffer die Frame-Position innerhalb der Exit-Bar
+            // suchen, statt den Marker pauschal an die Bar-Finalisierung zu setzen.
             if (t.ExitIndex >= start && t.ExitIndex <= end && t.IsClosedAt(lastClosed))
-                _markers.Add(ExitMarker(X(t.ExitIndex), Y(t.ExitPrice), t.Side));
+                _markers.Add(ExitMarker(XAt(t.ExitIndex, ExitProgress(t)), Y(t.ExitPrice), t.Side));
         }
 
         if (_openTrade is not null) { _slY = Y(_openTrade.StopLoss); _tpY = Y(_openTrade.TakeProfit); }

@@ -299,4 +299,24 @@ public sealed class SierraBacktestReplayService
             EntryPrice = entry, ExitPrice = exit, StopLoss = sl, TakeProfit = tp, NetPnL = net
         };
     }
+
+    /// <summary>
+    /// Findet, rein für die Replay-Visualisierung, den Bar-Fortschritt (0..1) INNERHALB der Exit-Bar,
+    /// an dem die Intrabar-Ticks den Zielpreis (SL/TP) zuerst erreichen — statt den Exit-Marker immer
+    /// an die Bar-Grenze (Bar-Finalisierung) zu setzen. Ändert NICHTS an der Backtest-/Signal-Logik
+    /// (kein Lookahead: Exit-Bar bleibt wie von <see cref="RunDemoRule"/> ermittelt), nur die
+    /// Marker-Position innerhalb dieser Bar. Fallback 1.0 (Bar-Ende), z.B. bei Zeit-Exit am Bar-Close
+    /// oder wenn keine Frames für diese Bar vorliegen (sollte nicht vorkommen).
+    /// </summary>
+    public static double FindIntrabarExitProgress(
+        IReadOnlyList<SierraIntrabarFrame> frames, int barIndex, decimal targetPrice, bool touchHigh)
+    {
+        foreach (var f in frames)
+        {
+            if (f.CompletedBars != barIndex) continue;
+            bool hit = touchHigh ? f.High >= targetPrice : f.Low <= targetPrice;
+            if (hit) return Math.Clamp(f.BarProgressPercent / 100.0, 0.0, 1.0);
+        }
+        return 1.0;
+    }
 }
