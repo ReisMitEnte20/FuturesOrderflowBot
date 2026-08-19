@@ -31,8 +31,10 @@
     <div class="rp-controls mb-2">
         <button class="btn btn-sm @(_sierraMode ? "btn-outline-secondary" : "btn-secondary")"
                 @onclick="LoadDemo">Demo</button>
-        <button class="btn btn-sm @(_sierraMode ? "btn-secondary" : "btn-outline-secondary")"
+        <button class="btn btn-sm @(_sierraMode && !_rangeMode ? "btn-secondary" : "btn-outline-secondary")"
                 @onclick="LoadSierra" disabled="@(!Sierra.LocalFileAvailable)">Sierra Local Sample / Backtest Replay</button>
+        <button class="btn btn-sm @(_rangeMode ? "btn-secondary" : "btn-outline-secondary")"
+                @onclick="() => LoadSierraRange(_sierraRangePoints)" disabled="@(!Sierra.LocalFileAvailable)">Sierra Range Chart</button>
         @if (!Sierra.LocalFileAvailable)
         {
             <span class="rp-hint">Lokale Sierra-Datei nicht gefunden (@SierraDemoPathShort) – Demo bleibt aktiv.</span>
@@ -41,7 +43,7 @@
         {
             <span class="rp-hint text-danger">Sierra-Replay-Fehler: @_sierraError</span>
         }
-        @if (_sierraMode)
+        @if (_sierraMode && !_rangeMode)
         {
             <span class="rp-speeds">
                 @foreach (var mnt in SierraBacktestReplayService.BarSizeMinutes)
@@ -58,6 +60,16 @@
                 }
             </span>
         }
+        @if (_rangeMode)
+        {
+            <span class="rp-speeds">
+                @foreach (var r in SierraBacktestReplayService.RangeSizePoints)
+                {
+                    <button class="btn btn-sm @(_sierraRangePoints == r ? "btn-secondary" : "btn-outline-secondary")"
+                            @onclick="() => SetSierraRange(r)">@r pt</button>
+                }
+            </span>
+        }
     </div>
 
     @if (Intra)
@@ -70,6 +82,18 @@
             @(_iab.From?.ToString("yyyy-MM-dd HH:mm"))–@(_iab.To?.ToString("HH:mm")) ·
             Delta/CVD: @(_iab.DeltaCvdAvailable ? "ja" : "nein") · @_iab.ElapsedMs ms.
             <em>Forming candle baut sich aus historischen Ticks auf — simple Demo-Regel, keine Edge-Bestätigung.</em>
+        </div>
+    }
+    @if (_rangeMode && _rangeResult is not null)
+    {
+        <div class="alert alert-secondary py-2 rp-note">
+            Sierra Range Chart · <strong>@_sierraRangePoints pt Range-Bars</strong> (Bar-Wechsel bei
+            Preisbewegung statt Zeit) · Bars: <strong>@_rangeResult.Session.BarCount</strong> ·
+            Trades: <strong>@_rangeResult.Session.Trades.Count</strong> (W/L @_rangeResult.Wins/@_rangeResult.Losses) ·
+            NetPnL: <strong>@_rangeResult.Session.TotalNetPnL.ToString("F2") $</strong> ·
+            @(_rangeResult.From?.ToString("yyyy-MM-dd HH:mm"))–@(_rangeResult.To?.ToString("HH:mm")) ·
+            Delta/CVD: @(_rangeResult.DeltaCvdAvailable ? "ja" : "nein") · @_rangeResult.ElapsedMs ms.
+            <em>Range-Bars aus historischen Ticks (kein Lookahead) — simple Demo-Regel, keine Edge-Bestätigung.</em>
         </div>
     }
 
@@ -226,6 +250,9 @@
     private int _sierraBarMinutes = 5;
     private int _frameEvery = 25;
     private int _f;                                    // Frame-Index (Intrabar)
+    private bool _rangeMode;                            // Sierra Range-Chart (Bar-Wechsel bei Preisbewegung)
+    private SierraReplayResult? _rangeResult;
+    private decimal _sierraRangePoints = 2m;
     private static string SierraDemoPathShort => "A:\\Projects\\MARKET DATA\\...";
 
     // --- Modus-neutrale Zugriffe (Demo = finale Bars; Sierra = Intrabar mit forming candle) ---
@@ -293,7 +320,7 @@
 
     private void LoadDemo()
     {
-        _sierraMode = false; _sierraError = null;
+        _sierraMode = false; _rangeMode = false; _sierraError = null;
         _session = Replay.GetSession();
         _playing = false; _i = 0; BuildChart();
     }
@@ -303,7 +330,7 @@
         _playing = false;
         _iab = Sierra.TryBuildIntrabar(_sierraBarMinutes, _frameEvery);  // read-only, lokal, gecacht
         if (_iab is null) { _sierraError = Sierra.LastError; _sierraMode = false; return; }
-        _sierraError = null; _sierraMode = true;
+        _sierraError = null; _sierraMode = true; _rangeMode = false;
         _f = 0; BuildChart();
     }
 
@@ -319,6 +346,22 @@
         if (_frameEvery == n) return;
         _frameEvery = n;
         LoadSierra();
+    }
+
+    private void LoadSierraRange(decimal rangePoints)
+    {
+        _playing = false;
+        var result = Sierra.TryBuildRange(rangePoints);   // read-only, lokal, gecacht
+        if (result is null) { _sierraError = Sierra.LastError; _rangeMode = false; return; }
+        _sierraError = null; _rangeResult = result; _session = result.Session;
+        _iab = null; _sierraMode = true; _rangeMode = true; _sierraRangePoints = rangePoints;
+        _i = 0; BuildChart();
+    }
+
+    private void SetSierraRange(decimal rangePoints)
+    {
+        if (_sierraRangePoints == rangePoints && _rangeMode) return;
+        LoadSierraRange(rangePoints);
     }
 
     private async Task Loop(PeriodicTimer timer)

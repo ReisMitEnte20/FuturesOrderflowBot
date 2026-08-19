@@ -50,6 +50,26 @@ public sealed class SierraMarketDataAdapter
         return new SierraMarketDataResult { Dataset = ToDataset(symbol, agg), Aggregation = agg };
     }
 
+    /// <summary>Wie <see cref="LoadFromFile"/>, aber Range-Bars (Bar-Wechsel bei Preisbewegung statt Zeit).</summary>
+    public SierraMarketDataResult LoadRangeFromFile(
+        string path, string symbol, decimal rangeSize, long? maxRows = null,
+        DateTimeOffset? fromUtc = null, DateTimeOffset? toUtc = null,
+        bool buildFootprint = true, Action<long>? onProgress = null)
+    {
+        var agg = _builder.BuildRangeFile(path, symbol, rangeSize, maxRows, fromUtc, toUtc, buildFootprint, onProgress);
+        return new SierraMarketDataResult { Dataset = ToDataset(symbol, agg), Aggregation = agg };
+    }
+
+    /// <summary>Wie <see cref="Load"/>, aber Range-Bars (Bar-Wechsel bei Preisbewegung statt Zeit).</summary>
+    public SierraMarketDataResult LoadRange(
+        TextReader reader, string symbol, decimal rangeSize, long? maxRows = null,
+        DateTimeOffset? fromUtc = null, DateTimeOffset? toUtc = null,
+        bool buildFootprint = true, Action<long>? onProgress = null)
+    {
+        var agg = _builder.BuildRange(reader, symbol, rangeSize, maxRows, fromUtc, toUtc, buildFootprint, onProgress);
+        return new SierraMarketDataResult { Dataset = ToDataset(symbol, agg), Aggregation = agg };
+    }
+
     /// <summary>Mappt den Aggregations-Report auf das kanonische <see cref="ImportedMarketDataSet"/>.</summary>
     private static ImportedMarketDataSet ToDataset(string symbol, SierraAggregationResult agg)
     {

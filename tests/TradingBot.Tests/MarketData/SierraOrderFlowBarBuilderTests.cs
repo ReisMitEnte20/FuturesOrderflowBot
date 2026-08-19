@@ -193,4 +193,73 @@ public class SierraOrderFlowBarBuilderTests
         r.Bars[0].Bar.TotalVolume.Should().Be(2m);
         r.Bars[1].Bar.TotalVolume.Should().Be(1m);
     }
+
+    // ---- Range-Bars (Phase: Replay Range-Chart) — Bar-Wechsel bei Preisbewegung statt Zeit ----
+
+    private const string RangeTicks = Header + "\n" +
+        "2025/12/28, 23:00:00, 0,0,0, 100.00, 1, 1, 0, 1\n" +   // buy, Bar1 open
+        "2025/12/28, 23:00:01, 0,0,0, 100.30, 1, 1, 0, 1\n" +   // buy, Range 0.30
+        "2025/12/28, 23:00:02, 0,0,0, 100.60, 1, 1, 1, 0\n" +   // sell, Range 0.60
+        "2025/12/28, 23:00:03, 0,0,0, 101.10, 1, 1, 0, 1\n" +   // buy, Range 1.10 >= 1 -> Bar1 schließt
+        "2025/12/28, 23:00:04, 0,0,0, 101.20, 1, 1, 0, 1\n" +   // buy, Bar2 open
+        "2025/12/28, 23:00:05, 0,0,0, 100.00, 1, 1, 1, 0\n";    // sell, Range 1.20 >= 1 -> Bar2 schließt
+
+    [Fact]
+    public void Range_bars_close_when_high_low_reaches_target_range()
+    {
+        var r = new SierraOrderFlowBarBuilder().BuildRange(R(RangeTicks), "MES", rangeSize: 1m);
+
+        r.BarsCreated.Should().Be(2);
+
+        var b0 = r.Bars[0].Bar;
+        b0.OpenTime.Should().Be(new DateTimeOffset(2025, 12, 28, 23, 0, 0, TimeSpan.Zero));
+        b0.CloseTime.Should().Be(new DateTimeOffset(2025, 12, 28, 23, 0, 3, TimeSpan.Zero)); // Tick, der die Range erreicht
+        b0.Open.Should().Be(100.00m);
+        b0.High.Should().Be(101.10m);
+        b0.Low.Should().Be(100.00m);
+        b0.Close.Should().Be(101.10m);
+        b0.TotalVolume.Should().Be(4m);
+        b0.AskVolume.Should().Be(3m);
+        b0.BidVolume.Should().Be(1m);
+        b0.Delta.Should().Be(2m);
+
+        var b1 = r.Bars[1].Bar;
+        b1.OpenTime.Should().Be(new DateTimeOffset(2025, 12, 28, 23, 0, 4, TimeSpan.Zero));
+        b1.CloseTime.Should().Be(new DateTimeOffset(2025, 12, 28, 23, 0, 5, TimeSpan.Zero));
+        b1.Open.Should().Be(101.20m);
+        b1.High.Should().Be(101.20m);
+        b1.Low.Should().Be(100.00m);
+        b1.Close.Should().Be(100.00m);
+        b1.TotalVolume.Should().Be(2m);
+    }
+
+    [Fact]
+    public void Range_bars_flush_trailing_incomplete_bar_at_end_of_data()
+    {
+        // 3. Tick erreicht die Zielspanne nicht mehr -> unvollständige Bar wird am Dateiende geflusht.
+        var csv = RangeTicks + "2025/12/28, 23:00:06, 0,0,0, 100.10, 1, 1, 0, 1\n";
+        var r = new SierraOrderFlowBarBuilder().BuildRange(R(csv), "MES", rangeSize: 1m);
+
+        r.BarsCreated.Should().Be(3);
+        r.Bars[2].Bar.Open.Should().Be(100.10m);
+        r.Bars[2].Bar.Close.Should().Be(100.10m);
+        r.Bars[2].Bar.TotalVolume.Should().Be(1m);
+    }
+
+    [Fact]
+    public void Range_bars_reuse_same_honest_capabilities_as_time_bars()
+    {
+        var r = new SierraOrderFlowBarBuilder().BuildRange(R(RangeTicks), "MES", rangeSize: 1m);
+
+        r.Capabilities.SupportsDeltaCvd.Should().BeTrue();
+        r.Capabilities.SupportsStackedImbalances.Should().BeTrue();
+        r.Granularity.Should().Be(SierraGranularity.SingleTick);
+    }
+
+    [Fact]
+    public void Range_size_must_be_positive()
+    {
+        var act = () => new SierraOrderFlowBarBuilder().BuildRange(R(RangeTicks), "MES", rangeSize: 0m);
+        act.Should().Throw<ArgumentOutOfRangeException>();
+    }
 }

@@ -256,6 +256,160 @@ public sealed class SierraOrderFlowBarBuilder
         };
     }
 
+    public SierraAggregationResult BuildRangeFile(
+        string path, string symbol, decimal rangeSize, long? maxRows = null,
+        DateTimeOffset? fromUtc = null, DateTimeOffset? toUtc = null,
+        bool buildFootprint = true, Action<long>? onProgress = null)
+    {
+        if (!File.Exists(path)) throw new FileNotFoundException($"Datei nicht gefunden: '{path}'.", path);
+        long size = new FileInfo(path).Length;
+        using var reader = new StreamReader(path);
+        return BuildRange(reader, symbol, rangeSize, maxRows, fromUtc, toUtc, buildFootprint, onProgress)
+            with { FileSizeBytes = size };
+    }
+
+    /// <summary>
+    /// Aggregiert Sierra-Ticks STREAMEND zu Range-Bars: eine Bar schließt, sobald High-Low die
+    /// Zielspanne <paramref name="rangeSize"/> (in Punkten) erreicht — Bar-Wechsel folgt der
+    /// Preisbewegung, nicht der Zeit. Die nächste Bar beginnt beim nächsten Tick (kein künstlicher
+    /// Preis-Gap erzwungen). Gleiche Bid/Ask/Delta/Footprint-Aggregation wie bei Time-Bars
+    /// (<see cref="Build"/>) und identische Data-Quality-/Capabilities-Regeln — nur die
+    /// Bar-Abschluss-Regel unterscheidet sich. Kein Lookahead: eine Bar schließt ausschließlich
+    /// anhand bereits gesehener Ticks.
+    /// </summary>
+    public SierraAggregationResult BuildRange(
+        TextReader reader, string symbol, decimal rangeSize, long? maxRows = null,
+        DateTimeOffset? fromUtc = null, DateTimeOffset? toUtc = null,
+        bool buildFootprint = true, Action<long>? onProgress = null)
+    {
+        ArgumentNullException.ThrowIfNull(reader);
+        if (string.IsNullOrWhiteSpace(symbol))
+            throw new ArgumentException("Symbol muss angegeben werden (Sierra-CSV hat keine Symbol-Spalte).", nameof(symbol));
+        if (rangeSize <= 0m)
+            throw new ArgumentOutOfRangeException(nameof(rangeSize), "rangeSize muss > 0 sein.");
+
+        string? header = ReadNonEmptyLine(reader) ?? throw new CsvMarketDataException("Leere Datei oder fehlende Kopfzeile.");
+        var columns = IndexColumns(header);
+        RequireColumns(columns, "date", "time", "last", "volume");
+
+        bool hasBidAsk = Has(columns, "bidvolume") && Has(columns, "askvolume");
+        bool hasNumTrades = Has(columns, "numberoftrades");
+
+        long rows = 0, valid = 0, parseErrors = 0, unclassified = 0;
+        bool truncated = false, allSingleTrade = hasNumTrades;
+        decimal totalVol = 0m, sumBid = 0m, sumAsk = 0m, cumulativeDelta = 0m;
+        decimal? minPrice = null, maxPrice = null;
+        DateTimeOffset? firstTick = null, lastTick = null, previous = null;
+        var issues = new List<DataQualityIssue>();
+        var bars = new List<SierraOrderFlowBar>();
+        BarAccumulator? acc = null;
+
+        void AddIssue(DataQualityIssue i) { if (issues.Count < MaxStoredIssues) issues.Add(i); }
+        void Flush() { if (acc is not null) { bars.Add(acc.Build(symbol, ref cumulativeDelta, buildFootprint)); acc = null; } }
+
+        string? line;
+        int lineNo = 1;
+        while ((line = reader.ReadLine()) is not null)
+        {
+            lineNo++;
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            if (maxRows is long max && rows >= max) { truncated = true; break; }
+            rows++;
+
+            var f = SplitTrim(line);
+            var ts = CombineTimestamp(f, columns);
+            var price = Dec(f, columns, "last");
+            var volume = Dec(f, columns, "volume");
+
+            if (ts is null || price is null || price <= 0m || volume is null || volume < 0m)
+            {
+                parseErrors++;
+                AddIssue(CsvGrid.Error("ParseError", "Zeile nicht verwertbar (ts/last/volume).", lineNo));
+                continue;
+            }
+            if (previous is not null && ts < previous)
+            {
+                AddIssue(CsvGrid.Warning("NonChronological", $"Zeitstempel {ts:O} vor Vorgänger {previous:O}.", lineNo, ts));
+                continue; // out-of-order Tick nicht in Bars mischen
+            }
+            previous = ts;
+
+            decimal numTrades = hasNumTrades ? Dec(f, columns, "numberoftrades") ?? 0m : 0m;
+            if (!(hasNumTrades && numTrades == 1m)) allSingleTrade = false;
+
+            decimal bid = hasBidAsk ? Dec(f, columns, "bidvolume") ?? 0m : 0m;
+            decimal ask = hasBidAsk ? Dec(f, columns, "askvolume") ?? 0m : 0m;
+            var aggressor = Classify(hasBidAsk, bid, ask);
+            if (hasBidAsk && aggressor == AggressorSide.Unknown) unclassified++;
+
+            if (rows % ProgressEvery == 0) onProgress?.Invoke(rows);
+
+            // Zeitfilter (optional) – gefilterte Ticks zählen als verarbeitet, aber nicht aggregiert.
+            if (fromUtc is not null && ts < fromUtc) continue;
+            if (toUtc is not null && ts > toUtc) continue;
+
+            valid++;
+            totalVol += volume.Value;
+            sumBid += bid;
+            sumAsk += ask;
+            minPrice = minPrice is null ? price : Math.Min(minPrice.Value, price.Value);
+            maxPrice = maxPrice is null ? price : Math.Max(maxPrice.Value, price.Value);
+            firstTick ??= ts;
+            lastTick = ts;
+
+            acc ??= new BarAccumulator(ts.Value, ts.Value);
+            acc.Add(price.Value, volume.Value, bid, ask, numTrades > 0m ? numTrades : 1m, aggressor, ts.Value);
+
+            if (acc.High - acc.Low >= rangeSize)
+                Flush(); // Zielspanne erreicht -> Bar abgeschlossen; nächste Bar startet beim Folge-Tick
+        }
+        Flush();
+
+        bool singleTick = allSingleTrade && valid > 0;
+        if (singleTick)
+            AddIssue(CsvGrid.Info("SierraSingleTick", "1-Tick-Export (NumberOfTrades == 1) – geeignet für Orderflow-Forschung."));
+        else
+            AddIssue(CsvGrid.Warning("SierraAggregatedRecords",
+                "Aggregiert oder Granularität unbekannt (NumberOfTrades > 1 bzw. Spalte fehlt) – KEINE Tick-Garantie."));
+        if (hasBidAsk && valid > 0 && unclassified > 0)
+            AddIssue(CsvGrid.Warning("PartialClassification",
+                $"{unclassified} Ticks ohne eindeutige Bid/Ask-Klassifikation – Delta/CVD NICHT erlaubt."));
+
+        bool fullyClassified = hasBidAsk && valid > 0 && unclassified == 0;
+        var caps = fullyClassified
+            ? new OrderFlowCapabilities
+            {
+                SupportsDeltaCvd = true,
+                SupportsAbsorption = true,
+                SupportsBarImbalance = true,
+                SupportsStackedImbalances = buildFootprint && bars.Count > 0,
+                SupportsHvnLvn = false
+            }
+            : OrderFlowCapabilities.None;
+
+        return new SierraAggregationResult
+        {
+            RowsProcessed = rows,
+            ValidTicks = valid,
+            ParseErrors = parseErrors,
+            Truncated = truncated,
+            Bars = bars,
+            FirstTickTime = firstTick,
+            LastTickTime = lastTick,
+            FirstBarTime = bars.Count > 0 ? bars[0].Bar.OpenTime : null,
+            LastBarTime = bars.Count > 0 ? bars[^1].Bar.OpenTime : null,
+            TotalVolume = totalVol,
+            SumBidVolume = sumBid,
+            SumAskVolume = sumAsk,
+            FinalCumulativeDelta = cumulativeDelta,
+            MinPrice = minPrice,
+            MaxPrice = maxPrice,
+            Granularity = singleTick ? SierraGranularity.SingleTick : SierraGranularity.AggregatedOrUnknown,
+            Capabilities = caps,
+            Issues = issues
+        };
+    }
+
     /// <summary>Untere Intervallgrenze (UTC-getaktet ab DateTime-Epoche), z. B. volle Minute.</summary>
     private static DateTimeOffset BucketStart(DateTimeOffset ts, TimeSpan interval)
     {
@@ -276,7 +430,7 @@ public sealed class SierraOrderFlowBarBuilder
     private sealed class BarAccumulator
     {
         public DateTimeOffset BucketStart { get; }
-        private readonly DateTimeOffset _closeTime;
+        private DateTimeOffset _closeTime;
         private decimal _open, _close, _high, _low, _total, _bid, _ask, _numTrades;
         private bool _first = true;
         private readonly Dictionary<decimal, (decimal Bid, decimal Ask)> _levels = new();
@@ -284,7 +438,12 @@ public sealed class SierraOrderFlowBarBuilder
         public BarAccumulator(DateTimeOffset bucketStart, DateTimeOffset closeTime)
         { BucketStart = bucketStart; _closeTime = closeTime; }
 
-        public void Add(decimal price, decimal volume, decimal bid, decimal ask, decimal numTrades, AggressorSide side)
+        public decimal High => _high;
+        public decimal Low => _low;
+        public decimal Close => _close;
+
+        public void Add(decimal price, decimal volume, decimal bid, decimal ask, decimal numTrades, AggressorSide side,
+            DateTimeOffset? tickTime = null)
         {
             if (_first) { _open = _high = _low = price; _first = false; }
             if (price > _high) _high = price;
@@ -294,6 +453,9 @@ public sealed class SierraOrderFlowBarBuilder
             _bid += bid;
             _ask += ask;
             _numTrades += numTrades;
+            // Range-Bars (kein festes Zeitfenster) aktualisieren die Close-Time pro Tick statt sie
+            // an die feste Bar-Grenze zu binden; Time-Bars übergeben tickTime nicht (Verhalten unverändert).
+            if (tickTime is DateTimeOffset tt) _closeTime = tt;
 
             // Footprint aus Ticks: Volumen dem Bid oder Ask am Preislevel zuordnen (echte Aggregation).
             decimal addBid = side == AggressorSide.Sell ? volume : 0m;

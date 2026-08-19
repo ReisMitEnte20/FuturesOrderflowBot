@@ -90,6 +90,46 @@ public sealed class SierraBacktestReplayService
     public static SierraReplayResult BuildFrom(SierraMarketDataResult data, string symbol, long elapsedMs = 0)
         => BuildResult(data, symbol, elapsedMs);
 
+    /// <summary>Unterstützte Range-Bar-Größen (Punkte) für das Range-Chart-Replay.</summary>
+    public static readonly decimal[] RangeSizePoints = { 1m, 2m, 5m };
+
+    private readonly Dictionary<decimal, SierraReplayResult> _rangeCache = new();
+
+    /// <summary>
+    /// Baut (gecacht je Range-Größe) das Replay-Backtest-Ergebnis aus Range-Bars (Bar-Wechsel bei
+    /// Preisbewegung statt Zeit, z.B. für ein Range-Chart) — read-only, lokal, Simulation-only,
+    /// gleiche Demo-Regel wie Time-Bars. Ticks derselben Range-Spanne werden zu EINER Candle
+    /// aggregiert; null + LastError bei Fehler.
+    /// </summary>
+    public SierraReplayResult? TryBuildRange(decimal rangeSize, long maxRows = 100_000, string symbol = "MES")
+    {
+        if (rangeSize <= 0m) rangeSize = 1m;
+        lock (_sync)
+        {
+            if (_rangeCache.TryGetValue(rangeSize, out var hit)) return hit;
+            LastError = null;
+            try
+            {
+                if (!File.Exists(LocalPath))
+                    throw new FileNotFoundException($"Lokale Sierra-Datei nicht gefunden: {LocalPath}");
+
+                var sw = Stopwatch.StartNew();
+                var res = new SierraMarketDataAdapter().LoadRangeFromFile(
+                    LocalPath, symbol, rangeSize, maxRows: maxRows);
+                sw.Stop();
+
+                var built = BuildResult(res, symbol, sw.ElapsedMilliseconds);
+                _rangeCache[rangeSize] = built;
+                return built;
+            }
+            catch (Exception ex)
+            {
+                LastError = ex.Message;
+                return null;
+            }
+        }
+    }
+
     /// <summary>Mögliche Replay-Granularitäten (jeder N-te Tick ein Frame).</summary>
     public static readonly int[] FrameEveryTicksOptions = { 1, 10, 25 };
 
