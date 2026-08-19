@@ -20,7 +20,7 @@ namespace TradingBot.Application.Strategies.OrderFlow;
 /// Liquidity Sweep, CVD, Volume Spike, Reversal, Breakout, Bar-Imbalance) müssen mindestens
 /// <c>RequiredConfirmations</c> erfüllt sein. Qualifizieren BEIDE Richtungen → kein Signal.
 /// </summary>
-public sealed class OrderFlowSetupTemplateStrategy : IStrategy
+public sealed class OrderFlowSetupTemplateStrategy : IOrderFlowStrategy
 {
     private OrderFlowTemplateParameters _p = new();
     private OrderFlowConditionEvaluator _evaluator;

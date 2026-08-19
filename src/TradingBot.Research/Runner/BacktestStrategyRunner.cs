@@ -1,7 +1,9 @@
 using TradingBot.Backtesting;
 using TradingBot.Domain.Models;
+using TradingBot.Domain.Enums;
 using TradingBot.Infrastructure.MarketData;
 using TradingBot.Infrastructure.MarketData.Import;
+using TradingBot.Application.Strategies.OrderFlow;
 
 namespace TradingBot.Research.Runner;
 
@@ -31,7 +33,7 @@ public sealed class BacktestStrategyRunner : IStrategyBacktestRunner
         var adapter = new SierraMarketDataAdapter();
         var ticks = adapter.StreamTicksFromFile(sierraPath, symbol, maxRows, fromUtc, toUtc);
         var agg = adapter.LoadFromFile(sierraPath, symbol, TimeSpan.FromMinutes(1), maxRows, fromUtc, toUtc);
-        
+
         return new StrategyRunInputs
         {
             Candidate = candidate,
@@ -49,12 +51,55 @@ public sealed class BacktestStrategyRunner : IStrategyBacktestRunner
         };
     }
 
+    /// <summary>
+    /// Hilfsmethode für Research-Läufe: lädt Sierra-Ticks + Capabilities und baut einen
+    /// <see cref="ResearchRequest"/> mit einem OrderFlow-Kandidaten. Die StrategyEngine erhält
+    /// die rohen Ticks; der <see cref="OrderFlowBarAggregatorStrategy"/>-Wrapper (automatisch
+    /// aktiv in <see cref="RunAsync"/> bei <see cref="IOrderFlowStrategy"/>) bündelt sie zu
+    /// OrderFlowBars. Keine Broker-API, keine Live-Execution, kein Fake-Orderflow.
+    /// </summary>
+    public static ResearchRequest CreateResearchRequestFromSierraFile(
+        string sierraPath, string symbol, StrategyCandidate candidate, StrategyConfig config,
+        InstrumentProfile instrument, FeeProfile fee, BrokerProfile broker,
+        RiskConfig risk, TradingAccount account, decimal? slippageOverride = null,
+        long? maxRows = null, DateTimeOffset? fromUtc = null, DateTimeOffset? toUtc = null,
+        ResearchConfiguration? researchConfig = null)
+    {
+        var adapter = new SierraMarketDataAdapter();
+        var ticks = adapter.StreamTicksFromFile(sierraPath, symbol, maxRows, fromUtc, toUtc);
+        var agg = adapter.LoadFromFile(sierraPath, symbol, TimeSpan.FromMinutes(1), maxRows, fromUtc, toUtc);
+
+        return new ResearchRequest
+        {
+            Candidates = new List<StrategyCandidate> { candidate },
+            Ticks = ticks,
+            Symbol = symbol,
+            Instrument = instrument,
+            Fee = fee,
+            Broker = broker,
+            Risk = risk,
+            Account = account,
+            SlippageTicksOverride = slippageOverride,
+            DataQualityOk = agg.Aggregation.Capabilities.SupportsDeltaCvd,
+            CapabilitiesSufficient = agg.Aggregation.Capabilities.SupportsDeltaCvd,
+            Configuration = researchConfig ?? new ResearchConfiguration()
+        };
+    }
+
     public async Task<StrategyRunResult> RunAsync(StrategyRunInputs inputs, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(inputs);
 
-        // Frische Strategie-Instanz, mit der effektiven Config initialisiert.
+// Frische Strategie-Instanz, mit der effektiven Config initialisiert.
         var strategy = inputs.Candidate.Build(inputs.Config);
+
+        // OrderFlow-Strategien brauchen OrderFlowBars – wir wrappen mit einem Aggregator,
+        // der rohe Ticks zu OrderFlowBars bündelt und an die innere Strategie delegiert.
+        if (strategy is IOrderFlowStrategy)
+        {
+            strategy = new OrderFlowBarAggregatorStrategy(strategy, ticksPerBar: 100);
+        }
+
         strategy.Initialize(new StrategyExecutionContext
         {
             Symbol = inputs.Symbol,

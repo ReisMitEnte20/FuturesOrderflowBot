@@ -8,6 +8,7 @@
     <ProjectReference Include="..\TradingBot.Execution\TradingBot.Execution.csproj" />
     <ProjectReference Include="..\TradingBot.Backtesting\TradingBot.Backtesting.csproj" />
     <ProjectReference Include="..\TradingBot.PaperTrading\TradingBot.PaperTrading.csproj" />
+    <ProjectReference Include="..\TradingBot.Research\TradingBot.Research.csproj" />
   </ItemGroup>
 
   <PropertyGroup>
