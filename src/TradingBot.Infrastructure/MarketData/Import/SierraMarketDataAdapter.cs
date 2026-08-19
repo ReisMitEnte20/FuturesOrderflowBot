@@ -70,6 +70,25 @@ public sealed class SierraMarketDataAdapter
         return new SierraMarketDataResult { Dataset = ToDataset(symbol, agg), Aggregation = agg };
     }
 
+    /// <summary>
+    /// Streamt die rohen, klassifizierten Sierra-Ticks (für Replay/Backtest/Research) aus einer Datei.
+    /// Liefert <see cref="MarketTick"/>, die direkt an <see cref="Infrastructure.MarketData.ReplayMarketDataProvider"/>
+    /// übergeben werden können — so fliessen echte Sierra-OrderFlow-Daten in die Backtest-/Research-Pipeline,
+    /// ohne neue Architektur-Abhängigkeiten. Keine Broker-API, keine Live-Execution, kein Fake-Orderflow.
+    /// </summary>
+    public IReadOnlyList<MarketTick> StreamTicksFromFile(
+        string path, string symbol, long? maxRows = null,
+        DateTimeOffset? fromUtc = null, DateTimeOffset? toUtc = null,
+        Action<long>? onProgress = null)
+        => SierraOrderFlowBarBuilder.StreamTicksFile(path, symbol, maxRows, fromUtc, toUtc, onProgress);
+
+    /// <summary>Wie <see cref="StreamTicksFromFile"/>, aber über TextReader (Tests).</summary>
+    public IReadOnlyList<MarketTick> StreamTicks(
+        TextReader reader, string symbol, long? maxRows = null,
+        DateTimeOffset? fromUtc = null, DateTimeOffset? toUtc = null,
+        Action<long>? onProgress = null)
+        => SierraOrderFlowBarBuilder.StreamTicks(reader, symbol, maxRows, fromUtc, toUtc, onProgress);
+
     /// <summary>Mappt den Aggregations-Report auf das kanonische <see cref="ImportedMarketDataSet"/>.</summary>
     private static ImportedMarketDataSet ToDataset(string symbol, SierraAggregationResult agg)
     {

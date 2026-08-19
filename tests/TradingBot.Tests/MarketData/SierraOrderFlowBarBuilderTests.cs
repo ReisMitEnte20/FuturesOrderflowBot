@@ -1,4 +1,5 @@
 using FluentAssertions;
+using TradingBot.Domain.Enums;
 using TradingBot.Infrastructure.MarketData;
 using TradingBot.Infrastructure.MarketData.Import;
 using Xunit;
@@ -261,5 +262,40 @@ public class SierraOrderFlowBarBuilderTests
     {
         var act = () => new SierraOrderFlowBarBuilder().BuildRange(R(RangeTicks), "MES", rangeSize: 0m);
         act.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
+    // ---- StreamTicks (rohe Ticks für Replay/Backtest/Research) ----
+
+    [Fact]
+    public void StreamTicks_returns_classified_market_ticks_with_correct_aggressor()
+    {
+        var ticks = SierraOrderFlowBarBuilder.StreamTicks(R(RangeTicks), "MES");
+
+        ticks.Should().HaveCount(6);
+        ticks[0].Aggressor.Should().Be(AggressorSide.Buy);
+        ticks[1].Aggressor.Should().Be(AggressorSide.Buy);
+        ticks[2].Aggressor.Should().Be(AggressorSide.Sell);
+        ticks[3].Aggressor.Should().Be(AggressorSide.Buy);
+        ticks[4].Aggressor.Should().Be(AggressorSide.Buy);
+        ticks[5].Aggressor.Should().Be(AggressorSide.Sell);
+        ticks.All(t => t.Symbol == "MES").Should().BeTrue();
+        ticks.All(t => t.Price > 0).Should().BeTrue();
+        ticks.All(t => t.Volume > 0).Should().BeTrue();
+    }
+
+    [Fact]
+    public void StreamTicks_respects_maxRows_and_time_filter()
+    {
+        var ticks = SierraOrderFlowBarBuilder.StreamTicks(R(RangeTicks), "MES", maxRows: 3);
+        ticks.Should().HaveCount(3);
+        ticks[0].Timestamp.Should().Be(new DateTimeOffset(2025, 12, 28, 23, 0, 0, TimeSpan.Zero));
+        ticks[2].Timestamp.Should().Be(new DateTimeOffset(2025, 12, 28, 23, 0, 2, TimeSpan.Zero));
+    }
+
+    [Fact]
+    public void StreamTicks_throws_on_missing_symbol_or_file()
+    {
+        var act = () => SierraOrderFlowBarBuilder.StreamTicks(R(RangeTicks), "");
+        act.Should().Throw<ArgumentException>().WithMessage("*Symbol*");
     }
 }

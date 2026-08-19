@@ -1,6 +1,7 @@
 using TradingBot.Backtesting;
 using TradingBot.Domain.Models;
 using TradingBot.Infrastructure.MarketData;
+using TradingBot.Infrastructure.MarketData.Import;
 
 namespace TradingBot.Research.Runner;
 
@@ -14,6 +15,39 @@ public sealed class BacktestStrategyRunner : IStrategyBacktestRunner
     private readonly IBacktestEngine _engine;
 
     public BacktestStrategyRunner(IBacktestEngine? engine = null) => _engine = engine ?? new BacktestEngine();
+
+    /// <summary>
+    /// Erzeugt <see cref="StrategyRunInputs"/> aus einer lokalen Sierra-CSV-Datei (Time-Bars oder
+    /// Range-Bars egal — hier werden **rohe Ticks** gestreamt und direkt in den Replay-Provider
+    /// eingespeist). So fliesst echte Sierra-OrderFlow-Daten in die Backtest-/Research-Pipeline
+    /// ohne Architektur-Bruch. Liefert auch die Capabilities/Quality-Flags für Robustheits-Prüfung.
+    /// </summary>
+    public static StrategyRunInputs CreateFromSierraFile(
+        string sierraPath, string symbol, StrategyCandidate candidate, StrategyConfig config,
+        InstrumentProfile instrument, FeeProfile fee, BrokerProfile broker,
+        RiskConfig risk, TradingAccount account, decimal? slippageOverride = null,
+        long? maxRows = null, DateTimeOffset? fromUtc = null, DateTimeOffset? toUtc = null)
+    {
+        var adapter = new SierraMarketDataAdapter();
+        var ticks = adapter.StreamTicksFromFile(sierraPath, symbol, maxRows, fromUtc, toUtc);
+        var agg = adapter.LoadFromFile(sierraPath, symbol, TimeSpan.FromMinutes(1), maxRows, fromUtc, toUtc);
+        
+        return new StrategyRunInputs
+        {
+            Candidate = candidate,
+            Config = config,
+            Ticks = ticks,
+            Symbol = symbol,
+            Instrument = instrument,
+            Fee = fee,
+            Broker = broker,
+            Risk = risk,
+            Account = account,
+            SlippageTicksOverride = slippageOverride,
+            DataQualityOk = agg.Aggregation.Capabilities.SupportsDeltaCvd,
+            CapabilitiesSufficient = agg.Aggregation.Capabilities.SupportsDeltaCvd
+        };
+    }
 
     public async Task<StrategyRunResult> RunAsync(StrategyRunInputs inputs, CancellationToken cancellationToken = default)
     {

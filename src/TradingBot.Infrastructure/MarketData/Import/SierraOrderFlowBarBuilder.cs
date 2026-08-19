@@ -410,6 +410,94 @@ public sealed class SierraOrderFlowBarBuilder
         };
     }
 
+    /// <summary>
+    /// Streamt Sierra-CSV-Ticks zu <see cref="MarketTick"/> (ohne Aggregation) für Replay/Backtest.
+    /// Nutzt dieselbe Streaming-Pipeline und Validierung wie <see cref="Build"/>/<see cref="BuildRange"/>,
+    /// liefert aber die **klassifizierten Ticks** direkt zurück — so können sie von
+    /// <see cref="Infrastructure.MarketData.ReplayMarketDataProvider"/> konsumiert werden
+    /// (BacktestEngine, ResearchEngine, PaperTrading). Keine Broker-API, keine Live-Execution,
+    /// keine Fake-Orderflow: fehlen Bid/Ask → Aggressor=Unknown, Tick wird trotzdem geliefert.
+    /// </summary>
+    public static IReadOnlyList<MarketTick> StreamTicksFile(
+        string path, string symbol, long? maxRows = null,
+        DateTimeOffset? fromUtc = null, DateTimeOffset? toUtc = null,
+        Action<long>? onProgress = null)
+    {
+        if (!File.Exists(path)) throw new FileNotFoundException($"Datei nicht gefunden: '{path}'.", path);
+        using var reader = new StreamReader(path);
+        return StreamTicks(reader, symbol, maxRows, fromUtc, toUtc, onProgress);
+    }
+
+    /// <summary>Streaming-Variante über TextReader (für Tests/Unit-Tests mit StringReader).</summary>
+    public static IReadOnlyList<MarketTick> StreamTicks(
+        TextReader reader, string symbol, long? maxRows = null,
+        DateTimeOffset? fromUtc = null, DateTimeOffset? toUtc = null,
+        Action<long>? onProgress = null)
+    {
+        ArgumentNullException.ThrowIfNull(reader);
+        if (string.IsNullOrWhiteSpace(symbol))
+            throw new ArgumentException("Symbol muss angegeben werden (Sierra-CSV hat keine Symbol-Spalte).", nameof(symbol));
+
+        string? header = ReadNonEmptyLine(reader) ?? throw new CsvMarketDataException("Leere Datei oder fehlende Kopfzeile.");
+        var self = new SierraOrderFlowBarBuilder();
+        var columns = self.IndexColumns(header);
+        self.RequireColumns(columns, "date", "time", "last", "volume");
+
+        bool hasBidAsk = self.Has(columns, "bidvolume") && self.Has(columns, "askvolume");
+        bool hasNumTrades = self.Has(columns, "numberoftrades");
+
+        long rows = 0, valid = 0, parseErrors = 0;
+        bool truncated = false;
+        var ticks = new List<MarketTick>();
+
+        string? line;
+        int lineNo = 1;
+        while ((line = reader.ReadLine()) is not null)
+        {
+            lineNo++;
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            if (maxRows is long max && rows >= max) { truncated = true; break; }
+            rows++;
+
+            var f = self.SplitTrim(line);
+            var ts = self.CombineTimestamp(f, columns);
+            var price = self.Dec(f, columns, "last");
+            var volume = self.Dec(f, columns, "volume");
+
+            if (ts is null || price is null || price <= 0m || volume is null || volume < 0m)
+            {
+                parseErrors++;
+                continue;
+            }
+
+            decimal numTrades = hasNumTrades ? self.Dec(f, columns, "numberoftrades") ?? 0m : 0m;
+            decimal bid = hasBidAsk ? self.Dec(f, columns, "bidvolume") ?? 0m : 0m;
+            decimal ask = hasBidAsk ? self.Dec(f, columns, "askvolume") ?? 0m : 0m;
+            var aggressor = Classify(hasBidAsk, bid, ask);
+
+            if (rows % ProgressEvery == 0) onProgress?.Invoke(rows);
+
+            if (fromUtc is not null && ts < fromUtc) continue;
+            if (toUtc is not null && ts > toUtc) continue;
+
+            valid++;
+            ticks.Add(new MarketTick
+            {
+                Symbol = symbol,
+                Timestamp = ts.Value,
+                Price = price.Value,
+                Bid = bid,
+                Ask = ask,
+                BidSize = bid,
+                AskSize = ask,
+                Volume = volume.Value,
+                Aggressor = aggressor
+            });
+        }
+
+        return ticks;
+    }
+
     /// <summary>Untere Intervallgrenze (UTC-getaktet ab DateTime-Epoche), z. B. volle Minute.</summary>
     private static DateTimeOffset BucketStart(DateTimeOffset ts, TimeSpan interval)
     {
