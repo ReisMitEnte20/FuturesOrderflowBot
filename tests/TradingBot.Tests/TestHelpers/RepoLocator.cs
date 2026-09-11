@@ -1,4 +1,4 @@
-namespace TradingBot.DevDashboard.Services;
+namespace TradingBot.Tests.TestHelpers;
 
 /// <summary>Findet das Repo-Wurzelverzeichnis (Ordner mit TradingBot.sln) read-only.</summary>
 public static class RepoLocator

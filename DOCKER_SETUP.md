@@ -35,11 +35,11 @@ docker run -it -v $(pwd):/app tradingbot-dev:latest
 # 4. Innerhalb des Containers:
 dotnet build
 dotnet test
-dotnet run --project src/TradingBot.DevDashboard
+dotnet run --project src/TradingBot.Console
 ```
 
 ## Dashboards zugreifen:
-- **Anwendungs-Dashboard**: http://localhost:5000
+- **Trading-Dashboard**: extern über [HKUDS/Vibe-Trading](https://github.com/HKUDS/Vibe-Trading) (eigenständiges Repo)
 - **Kibana (Logging/Monitoring)**: http://localhost:5601
 - **Elasticsearch**: http://localhost:9200
 

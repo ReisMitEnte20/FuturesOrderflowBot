@@ -16,7 +16,9 @@
 - **Phase 8B — Deterministic Backtest Engine:** Fill-Modell, Slippage/Fees, Kennzahlen; Market-Fill am Folge-Tick (kein Lookahead).
 - **Phase 8C — Exit-aware Risk Handling:** OrderIntent (Entry/Add/Reduce/Close/Flatten); Exits nicht durch Entry-Limits blockiert; technische Hard-Stops blocken weiter.
 - **Phase 9 — Paper Trading Engine:** langlebige Session (Start/Stop/Pause/Resume), simulierte Fills, In-Memory-Journal — vollständig simuliert.
-- **Phase 10A — Paper Trading Monitor (DevDashboard):** read-only Live-Monitor (`/paper`), lokale Demo per Sample-CSV, „PAPER SIMULATION ONLY".
+- **Phase 10A — Paper Trading Monitor (entfernt):** war ein read-only Live-Monitor (`/paper`) im
+  ehemaligen DevDashboard. Das DevDashboard wurde entfernt; als Dashboard wird jetzt das externe
+  Projekt [HKUDS/Vibe-Trading](https://github.com/HKUDS/Vibe-Trading) referenziert.
 - **Phase 11 — Strategy Framework:** Registry + Engine (Enable/Disable, Symbol-/Datentyp-Routing, Signal-Sammlung), Dummy-Strategien, CompositeStrategy.
 - **Phase 12 — Orderflow Strategy Template:** modulare Checks (Delta-Divergenz/Absorption/Sweep/CVD/…), konfigurierbar; Stacked-Imbalances/HVN-LVN ehrlich `InsufficientData`.
 - **Phase 12B — ATAS / Data Import + Data Quality Layer:** CSV-Import (Tick/Bar/Footprint/Profile) mit Mapping-Profil, `OrderFlowCapabilities` als Fake-Daten-Sperre, `OrderFlowDataQualityReport`.

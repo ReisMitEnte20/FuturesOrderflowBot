@@ -60,14 +60,12 @@ STEP 5: Inside the container, build and run
     # Run all tests
     dotnet test
     
-    # Start the web dashboard
-    dotnet run --project src/TradingBot.DevDashboard
+    # Run the console app
+    dotnet run --project src/TradingBot.Console
 
 STEP 6: Access the dashboards
 ──────────────────────────────
-    • Application Dashboard:     http://localhost:5000
-    • Paper Trading Monitor:     http://localhost:5000/paper
-    • Research Dashboard:        http://localhost:5000/research
+    • Trading Dashboard:         https://github.com/HKUDS/Vibe-Trading (external project)
     • Kibana (Logs/Monitoring):  http://localhost:5601
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -98,15 +96,18 @@ This script will:
     ✓ Restore dependencies
     ✓ Compile the entire solution
     ✓ Run unit tests
-    ✓ Build the DevDashboard
+    ✓ Build the Console app
 
 STEP 3: Run components
 ──────────────────────
-    # Start web dashboard with live reload
-    dotnet watch --project src/TradingBot.DevDashboard run
+    # Run the console app with live reload
+    dotnet watch --project src/TradingBot.Console run
     
     # Run tests in watch mode
     dotnet test --watch
+
+    # Dashboard: use the external HKUDS/Vibe-Trading project
+    # https://github.com/HKUDS/Vibe-Trading
     
     # Run backtest console
     dotnet run --project src/TradingBot.Console
@@ -124,7 +125,6 @@ src/
   ├── TradingBot.Backtesting         # Backtest engine
   ├── TradingBot.PaperTrading        # Paper trading engine
   ├── TradingBot.Console             # CLI entry point
-  ├── TradingBot.DevDashboard        # Web UI (ASP.NET Core)
   └── TradingBot.Research            # Analytics & research
 
 tests/
@@ -160,13 +160,12 @@ Test:
     dotnet test --verbosity detailed                # Detailed output
 
 Run:
-    dotnet run --project src/TradingBot.DevDashboard    # Start dashboard
-    dotnet watch --project src/TradingBot.DevDashboard run  # With hot reload
     dotnet run --project src/TradingBot.Console          # Run CLI
+    # Dashboard: use the external HKUDS/Vibe-Trading project
+    # https://github.com/HKUDS/Vibe-Trading
 
 Debug:
     # In VS Code: F5 to debug (with C# Dev Kit installed)
-    # Or use breakpoints in DevDashboard
 
 Format & Analyze:
     dotnet format                                    # Format code
@@ -213,8 +212,8 @@ Format & Analyze:
 IMMEDIATE (Today):
   1. Choose Docker or Native .NET
   2. Run the build process
-  3. Start the DevDashboard
-  4. Explore /paper and /research routes
+  3. Run the Console app / tests
+  4. See the external HKUDS/Vibe-Trading dashboard: https://github.com/HKUDS/Vibe-Trading
 
 SHORT TERM (This week):
   1. Review docs/ARCHITECTURE.md to understand the system
