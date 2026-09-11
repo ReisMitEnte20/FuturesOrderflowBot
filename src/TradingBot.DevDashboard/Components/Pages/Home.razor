@@ -110,7 +110,7 @@
                         </div>
                         <div class="watch-value-wrap">
                             <span class="watch-value">@item.Value</span>
-                            <span class="watch-change @WatchDeltaClass(item.Change)">@WatchDeltaText(item.Change)</span>
+                            <span class="watch-change @WatchDeltaClass(item.Change)">@WatchDeltaText(item)</span>
                         </div>
                     </li>
                 }
@@ -185,7 +185,10 @@
 
     <section class="panel mb-4">
         <h2 class="section-title">Config-Übersicht (read-only)</h2>
-        <div class="visually-hidden" aria-live="polite" role="status" aria-atomic="true">Config-Status: @ConfigLoadState</div>
+        @if (_config is not null)
+        {
+            <div class="visually-hidden" aria-live="polite" role="status" aria-atomic="true">Config-Status: @ConfigLoadState</div>
+        }
         @if (_config is null)
         {
             <p>Lade Config…</p>
@@ -310,7 +313,7 @@
         var all = done + open;
         var ratioValue = open == 0 ? "∞" : Math.Round(done / (decimal)open, 2).ToString("0.##", CultureInfo.InvariantCulture);
         var openPressure = all == 0 ? 0m : -Math.Round(open * 100m / all, 2);
-        var doneLead = open == 0 ? 100m : done == 0 ? 0m : Math.Round((done - open) * 100m / done, 2);
+        var doneLead = open == 0 ? 0m : done == 0 ? 0m : Math.Round((done - open) * 100m / done, 2);
 
         return new[]
         {
@@ -371,12 +374,18 @@
 
     private string ConfigLoadState => _config is null ? "Loading Config" : _config.Error is null ? "Config Loaded" : "Config Error";
     private static string WatchDeltaClass(decimal change) => change > 0m ? "up" : change < 0m ? "down" : "neutral";
-    private static string WatchDeltaText(decimal change)
-        => change > 0m
+    private static string WatchDeltaText(WatchItem item)
+    {
+        if (item.Symbol == "RATIO" && item.Value == "∞")
+            return "No open module";
+
+        var change = item.Change;
+        return change > 0m
             ? $"Gain +{change.ToString("0.##", CultureInfo.InvariantCulture)}%"
             : change < 0m
                 ? $"Loss {change.ToString("0.##", CultureInfo.InvariantCulture)}%"
                 : "Flat 0.00%";
+    }
 
     private sealed record MarketTile(string Title, string Value, string Sub, string Symbol);
     private sealed record WatchItem(string Symbol, string Name, string Value, decimal Change);
