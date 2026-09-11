@@ -100,7 +100,6 @@
                 <h2>Watchlist</h2>
                 <span class="panel-tag">Read-only</span>
             </div>
-            <div class="visually-hidden" aria-live="polite" role="status" aria-atomic="true">Config-Status: @ConfigLoadState</div>
             <ul class="watchlist">
                 @foreach (var item in watch)
                 {
@@ -186,6 +185,7 @@
 
     <section class="panel mb-4">
         <h2 class="section-title">Config-Übersicht (read-only)</h2>
+        <div class="visually-hidden" aria-live="polite" role="status" aria-atomic="true">Config-Status: @ConfigLoadState</div>
         @if (_config is null)
         {
             <p>Lade Config…</p>
@@ -308,16 +308,16 @@
         var done = Status.DoneModules.Count;
         var open = Status.OpenModules.Count;
         var all = done + open;
-        var ratio = open == 0 ? 0m : Math.Round(done / (decimal)open, 2);
+        var ratioValue = open == 0 ? "∞" : Math.Round(done / (decimal)open, 2).ToString("0.##", CultureInfo.InvariantCulture);
         var openPressure = all == 0 ? 0m : -Math.Round(open * 100m / all, 2);
-        var doneLead = done == 0 ? 0m : Math.Round((done - open) * 100m / done, 2);
+        var doneLead = open == 0 ? 100m : done == 0 ? 0m : Math.Round((done - open) * 100m / done, 2);
 
         return new[]
         {
             new WatchItem("PHASE", "Delivery-Stand", Status.CurrentPhase, 0m),
             new WatchItem("PIPE", "Pipeline Steps", Status.Pipeline.Count.ToString(CultureInfo.InvariantCulture), openPressure),
             new WatchItem("DUMMY", "Strategie-Templates", Status.DummyStrategies.Count.ToString(CultureInfo.InvariantCulture), 0m),
-            new WatchItem("RATIO", "Done/Open", ratio.ToString("0.##", CultureInfo.InvariantCulture), doneLead)
+            new WatchItem("RATIO", "Done/Open", ratioValue, doneLead)
         };
     }
 
