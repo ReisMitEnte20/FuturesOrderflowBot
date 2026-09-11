@@ -233,13 +233,12 @@
 
 .pipe-arrow {
     align-self: center;
-    font-size: 0;
+    font-size: 1.05rem;
     color: #64748b;
 }
 
-.pipe-arrow::before {
-    content: "→";
-    font-size: 1.05rem;
+.pipe-arrow-mobile {
+    display: none;
 }
 
 .watch-panel {
@@ -416,7 +415,11 @@
         align-self: center;
     }
 
-    .pipe-arrow::before {
-        content: "↓";
+    .pipe-arrow-desktop {
+        display: none;
+    }
+
+    .pipe-arrow-mobile {
+        display: inline;
     }
 }

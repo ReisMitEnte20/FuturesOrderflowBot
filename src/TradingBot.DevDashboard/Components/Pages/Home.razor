@@ -84,7 +84,11 @@
                     </div>
                     @if (i < Status.Pipeline.Count - 1)
                     {
-                        <div class="pipe-arrow" aria-hidden="true"></div>
+                        <div class="pipe-arrow">
+                            <span class="pipe-arrow-desktop" aria-hidden="true">→</span>
+                            <span class="pipe-arrow-mobile" aria-hidden="true">↓</span>
+                            <span class="visually-hidden">nächster Schritt</span>
+                        </div>
                     }
                 }
             </div>
@@ -266,7 +270,7 @@
     private ConfigOverview? _config;
     private DateTime _lastUpdated = DateTime.Now;
 
-    private static IReadOnlyList<decimal> MomentumSeries => new decimal[] { 41m, 47m, 50m, 58m, 63m, 69m, 77m, 84m };
+    private static IReadOnlyList<decimal> MomentumSeries => new decimal[] { 41m, 58m, 77m, 84m };
     private string ChartDescription => $"Serie mit {MomentumSeries.Count} Punkten: {string.Join(", ", MomentumSeries.Select((v, i) => $"P{i + 1}={v.ToString("0.##", CultureInfo.InvariantCulture)}"))}.";
 
     protected override async Task OnInitializedAsync()
