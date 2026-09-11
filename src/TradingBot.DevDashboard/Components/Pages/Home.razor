@@ -115,8 +115,7 @@
                         <span class="watch-name">Config Domains</span>
                     </div>
                     <div class="watch-value-wrap">
-                        <span class="watch-value">@ConfigStatusValue</span>
-                        <span class="watch-change @ConfigStatusClass">@ConfigStatusChange</span>
+                        <span class="watch-value">@ConfigLoadState</span>
                     </div>
                 </li>
             </ul>
@@ -344,11 +343,7 @@
 
     private static string YesNo(bool b) => b ? "✓" : "—";
 
-    private string ConfigStatusValue => _config is null ? "loading" : _config.Error is null ? "ok" : "error";
-    private string ConfigStatusClass => _config is null ? "neutral" : _config.Error is null ? "up" : "down";
-    private string ConfigStatusChange => _config is null
-        ? "loading"
-        : (_config.Error is null ? "ready" : "check");
+    private string ConfigLoadState => _config is null ? "Loading Config" : _config.Error is null ? "Config Loaded" : "Config Error";
 
     private sealed record MarketTile(string Title, string Value, decimal Change, string Sub, string Symbol);
     private sealed record WatchItem(string Symbol, string Name, string Value, decimal Change);
