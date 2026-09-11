@@ -17,6 +17,7 @@
         var git = Git.Read();
         var tiles = BuildMarketTiles();
         var watch = BuildWatchlist();
+        var chartPoints = BuildChartPointsData();
     }
 
     <header class="hero">
@@ -58,10 +59,10 @@
                 <desc>@ChartDescription</desc>
                 <line x1="24" y1="220" x2="676" y2="220" class="axis" />
                 <line x1="24" y1="40" x2="24" y2="220" class="axis" />
-                <polyline class="trend-line" points="@BuildChartPoints()" />
-                @for (var i = 0; i < MomentumSeries.Count; i++)
+                <polyline class="trend-line" points="@BuildChartPolyline(chartPoints)" />
+                @for (var i = 0; i < chartPoints.Count; i++)
                 {
-                    var point = ChartPoint(i);
+                    var point = chartPoints[i];
                     var label = MomentumLabels[i];
                     <circle cx="@point.X" cy="@point.Y" r="4" class="trend-dot" />
                     <text x="@point.X" y="@(point.Y - 10m)" class="chart-point-label">@label</text>
@@ -307,34 +308,31 @@
     {
         var done = Status.DoneModules.Count;
         var open = Status.OpenModules.Count;
+        var all = done + open;
         var ratio = open == 0 ? 0m : Math.Round(done / (decimal)open, 2);
+        var openPressure = all == 0 ? 0m : -Math.Round(open * 100m / all, 2);
+        var doneLead = done == 0 ? 0m : Math.Round((done - open) * 100m / done, 2);
 
         return new[]
         {
-            new WatchItem("PHASE", "Delivery-Stand", Status.CurrentPhase, 1.1m),
-            new WatchItem("PIPE", "Pipeline Steps", Status.Pipeline.Count.ToString(CultureInfo.InvariantCulture), 0.4m),
-            new WatchItem("DUMMY", "Strategie-Templates", Status.DummyStrategies.Count.ToString(CultureInfo.InvariantCulture), 0.3m),
-            new WatchItem("RATIO", "Done/Open", ratio.ToString("0.##", CultureInfo.InvariantCulture), 0.7m)
+            new WatchItem("PHASE", "Delivery-Stand", Status.CurrentPhase, 0m),
+            new WatchItem("PIPE", "Pipeline Steps", Status.Pipeline.Count.ToString(CultureInfo.InvariantCulture), openPressure),
+            new WatchItem("DUMMY", "Strategie-Templates", Status.DummyStrategies.Count.ToString(CultureInfo.InvariantCulture), 0m),
+            new WatchItem("RATIO", "Done/Open", ratio.ToString("0.##", CultureInfo.InvariantCulture), doneLead)
         };
     }
 
-    private string BuildChartPoints()
+    private IReadOnlyList<(decimal X, decimal Y)> BuildChartPointsData()
     {
-        return string.Join(' ', MomentumSeries.Select((v, i) =>
-        {
-            var (x, y) = ComputeChartPoint(v, i);
-            return FormattableString.Invariant($"{x:0.##},{y:0.##}");
-        }));
+        return MomentumSeries.Select((value, index) => ComputeChartPoint(value, index, MomentumSeries.Count)).ToArray();
     }
 
-    private (decimal X, decimal Y) ChartPoint(int index)
+    private static string BuildChartPolyline(IReadOnlyList<(decimal X, decimal Y)> points)
     {
-        var value = MomentumSeries[index];
-        var (x, y) = ComputeChartPoint(value, index);
-        return (Math.Round(x, 2), Math.Round(y, 2));
+        return string.Join(' ', points.Select(p => FormattableString.Invariant($"{p.X:0.##},{p.Y:0.##}")));
     }
 
-    private static (decimal X, decimal Y) ComputeChartPoint(decimal value, int index)
+    private static (decimal X, decimal Y) ComputeChartPoint(decimal value, int index, int count)
     {
         const decimal minX = 38m;
         const decimal maxX = 662m;
@@ -344,11 +342,13 @@
         var min = MomentumSeries.Min();
         var max = MomentumSeries.Max();
         var spread = max - min == 0 ? 1m : max - min;
-
-        var x = minX + index * (maxX - minX) / (MomentumSeries.Count - 1);
+        var denominator = count > 1 ? count - 1 : 1;
+        var x = count > 1
+            ? minX + index * (maxX - minX) / denominator
+            : (minX + maxX) / 2m;
         var normalized = (value - min) / spread;
         var y = maxY - normalized * (maxY - minY);
-        return (x, y);
+        return (Math.Round(x, 2), Math.Round(y, 2));
     }
 
     private static string YesNo(bool b) => b ? "✓" : "—";
