@@ -27,7 +27,7 @@
         <div class="hero-meta">
             <div><span>Branch</span><strong>@git.Branch</strong></div>
             <div><span>Commit</span><strong><code>@git.Commit</code></strong></div>
-            <div><span>Aktualisiert</span><strong>@DateTime.Now.ToString("dd.MM.yyyy HH:mm")</strong></div>
+            <div><span>Aktualisiert</span><strong>@_lastUpdated.ToString("dd.MM.yyyy HH:mm")</strong></div>
         </div>
     </header>
 
@@ -84,7 +84,7 @@
                     </div>
                     @if (i < Status.Pipeline.Count - 1)
                     {
-                        <div class="pipe-arrow">→</div>
+                        <div class="pipe-arrow" aria-hidden="true"></div>
                     }
                 }
             </div>
@@ -265,12 +265,16 @@
 
 @code {
     private ConfigOverview? _config;
+    private DateTime _lastUpdated = DateTime.Now;
 
     private static IReadOnlyList<decimal> MomentumSeries => new decimal[] { 41m, 47m, 50m, 58m, 63m, 69m, 77m, 84m };
     private string ChartDescription => $"Serie mit {MomentumSeries.Count} Punkten: {string.Join(", ", MomentumSeries.Select((v, i) => $"P{i + 1}={v.ToString("0.##", CultureInfo.InvariantCulture)}"))}.";
 
     protected override async Task OnInitializedAsync()
-        => _config = await Config.LoadAsync();
+    {
+        _config = await Config.LoadAsync();
+        _lastUpdated = DateTime.Now;
+    }
 
     private IReadOnlyList<MarketTile> BuildMarketTiles()
     {
@@ -341,10 +345,10 @@
     private static string YesNo(bool b) => b ? "✓" : "—";
 
     private string ConfigStatusValue => _config is null ? "loading" : _config.Error is null ? "ok" : "error";
-    private string ConfigStatusClass => _config is null ? "" : _config.Error is null ? "up" : "down";
+    private string ConfigStatusClass => _config is null ? "neutral" : _config.Error is null ? "up" : "down";
     private string ConfigStatusChange => _config is null
-        ? "0.00%"
-        : (_config.Error is null ? "+0.20%" : "-0.50%");
+        ? "loading"
+        : (_config.Error is null ? "ready" : "check");
 
     private sealed record MarketTile(string Title, string Value, decimal Change, string Sub, string Symbol);
     private sealed record WatchItem(string Symbol, string Name, string Value, decimal Change);
