@@ -59,9 +59,23 @@
 }
 
 .market-grid {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 0.8rem;
+    display: block;
+}
+
+.market-grid > * + * {
+    margin-top: 0.8rem;
+}
+
+@supports (display: grid) {
+    .market-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0.8rem;
+    }
+
+    .market-grid > * + * {
+        margin-top: 0;
+    }
 }
 
 .market-card {
@@ -104,9 +118,23 @@
 }
 
 .main-panels {
-    display: grid;
-    grid-template-columns: minmax(0, 2.15fr) minmax(300px, 1fr);
-    gap: 0.9rem;
+    display: block;
+}
+
+.main-panels > * + * {
+    margin-top: 0.9rem;
+}
+
+@supports (display: grid) {
+    .main-panels {
+        display: grid;
+        grid-template-columns: minmax(0, 2.15fr) minmax(300px, 1fr);
+        gap: 0.9rem;
+    }
+
+    .main-panels > * + * {
+        margin-top: 0;
+    }
 }
 
 .panel {
@@ -311,9 +339,23 @@
 }
 
 .grid-two {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.9rem;
+    display: block;
+}
+
+.grid-two > * + * {
+    margin-top: 0.9rem;
+}
+
+@supports (display: grid) {
+    .grid-two {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.9rem;
+    }
+
+    .grid-two > * + * {
+        margin-top: 0;
+    }
 }
 
 .module-list {

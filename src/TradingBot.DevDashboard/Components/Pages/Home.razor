@@ -17,7 +17,7 @@
         var git = Git.Read();
         var tiles = BuildMarketTiles();
         var watch = BuildWatchlist();
-        var chartPoints = BuildChartPointsData();
+        var chartData = BuildChartData();
     }
 
     <header class="hero">
@@ -56,16 +56,15 @@
 
             <svg class="momentum-chart" viewBox="0 0 700 280" role="img" aria-label="Projekt-Momentum als Linienchart">
                 <title>Project-Momentum der letzten Meilensteine</title>
-                <desc>@ChartDescription</desc>
+                <desc>@BuildChartDescription(chartData)</desc>
                 <line x1="24" y1="220" x2="676" y2="220" class="axis" />
                 <line x1="24" y1="40" x2="24" y2="220" class="axis" />
-                <polyline class="trend-line" points="@BuildChartPolyline(chartPoints)" />
-                @for (var i = 0; i < chartPoints.Count; i++)
+                <polyline class="trend-line" points="@BuildChartPolyline(chartData)" />
+                @for (var i = 0; i < chartData.Count; i++)
                 {
-                    var point = chartPoints[i];
-                    var label = MomentumLabels[i];
+                    var point = chartData[i];
                     <circle cx="@point.X" cy="@point.Y" r="4" class="trend-dot" />
-                    <text x="@point.X" y="@(point.Y - 10m)" class="chart-point-label">@label</text>
+                    <text x="@point.X" y="@(point.Y - 10m)" class="chart-point-label">@point.Label</text>
                 }
             </svg>
             <div class="chart-scale">
@@ -278,7 +277,6 @@
 
     private static IReadOnlyList<decimal> MomentumSeries => new decimal[] { 41m, 58m, 77m, 84m };
     private static IReadOnlyList<string> MomentumLabels => new[] { "Kickoff", "Module-Aufbau", "Paper + Research", "Jetzt" };
-    private string ChartDescription => $"Serie mit {MomentumSeries.Count} Punkten: {string.Join(", ", MomentumSeries.Select((v, i) => $"{MomentumLabels[i]}={v.ToString("0.##", CultureInfo.InvariantCulture)}"))}.";
 
     protected override async Task OnInitializedAsync()
     {
@@ -322,15 +320,32 @@
         };
     }
 
-    private IReadOnlyList<(decimal X, decimal Y)> BuildChartPointsData()
+    private IReadOnlyList<ChartPointData> BuildChartData()
     {
-        return MomentumSeries.Select((value, index) => ComputeChartPoint(value, index, MomentumSeries.Count)).ToArray();
+        var count = MomentumSeries.Count;
+        return MomentumSeries
+            .Select((value, index) =>
+            {
+                var label = index < MomentumLabels.Count ? MomentumLabels[index] : $"P{index + 1}";
+                var (x, y) = ComputeChartPoint(value, index, count);
+                return new ChartPointData(label, value, x, y);
+            })
+            .ToArray();
     }
 
-    private static string BuildChartPolyline(IReadOnlyList<(decimal X, decimal Y)> points)
+    private static string BuildChartPolyline(IReadOnlyList<ChartPointData> points)
     {
+        if (points.Count == 1)
+        {
+            var p = points[0];
+            return FormattableString.Invariant($"{p.X:0.##},{p.Y:0.##} {p.X + 0.01m:0.##},{p.Y:0.##}");
+        }
+
         return string.Join(' ', points.Select(p => FormattableString.Invariant($"{p.X:0.##},{p.Y:0.##}")));
     }
+
+    private static string BuildChartDescription(IReadOnlyList<ChartPointData> points)
+        => $"Serie mit {points.Count} Punkten: {string.Join(", ", points.Select(p => $"{p.Label}={p.Value.ToString("0.##", CultureInfo.InvariantCulture)}"))}.";
 
     private static (decimal X, decimal Y) ComputeChartPoint(decimal value, int index, int count)
     {
@@ -364,4 +379,5 @@
 
     private sealed record MarketTile(string Title, string Value, string Sub, string Symbol);
     private sealed record WatchItem(string Symbol, string Name, string Value, decimal Change);
+    private sealed record ChartPointData(string Label, decimal Value, decimal X, decimal Y);
 }
