@@ -33,9 +33,23 @@
 }
 
 .hero-meta {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(130px, 1fr));
-    gap: 0.6rem;
+    display: block;
+}
+
+.hero-meta > div + div {
+    margin-top: 0.6rem;
+}
+
+@supports (display: grid) {
+    .hero-meta {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(130px, 1fr));
+        gap: 0.6rem;
+    }
+
+    .hero-meta > div + div {
+        margin-top: 0;
+    }
 }
 
 .hero-meta > div {
@@ -432,8 +446,13 @@
     }
 
     .hero-meta {
-        grid-template-columns: 1fr;
         width: 100%;
+    }
+
+    @supports (display: grid) {
+        .hero-meta {
+            grid-template-columns: 1fr;
+        }
     }
 
     .pipeline {
