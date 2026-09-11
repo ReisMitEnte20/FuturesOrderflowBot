@@ -23,27 +23,23 @@ Brokerunabhängig über JSON-Profile (Broker / Instrument / Fee / Risk).
 - OrderManager + PositionManager (Dedup, Lifecycle, SL/TP/Bracket/BE/Trailing, Netting/PnL)
 - MarketData (CSV-Reader, Replay-Feed, Heartbeat, Time/Tick/Volume/OrderFlow-Aggregation)
 - Backtest Engine (deterministisch, Fill-Modell, Kennzahlen) + Paper Trading Engine (Session)
-- DevDashboard mit **Paper Trading Monitor** (`/paper`, PAPER SIMULATION ONLY — Demo per Sample-CSV)
-  und **Research Dashboard** (`/research`, RESEARCH / SIMULATION ONLY — Monte Carlo · Walk Forward ·
-  Ranking · Robustness · Sensitivity · Equity/Drawdown, siehe [docs/RESEARCH_DASHBOARD.md](docs/RESEARCH_DASHBOARD.md))
 - **Strategy Framework** (Registry + Engine: Enable/Disable, Routing, Signal-Sammlung — siehe [docs/STRATEGY_FRAMEWORK.md](docs/STRATEGY_FRAMEWORK.md))
 - **Orderflow Strategy Template** (modulare Checks: Divergenz/Absorption/Sweep/CVD/… — siehe [docs/ORDERFLOW_STRATEGY_TEMPLATE.md](docs/ORDERFLOW_STRATEGY_TEMPLATE.md))
 - **Data Import + Quality Layer** (ATAS-CSV: Tick/Bar/Footprint/Profile, Capabilities, QualityReport — siehe [docs/DATA_IMPORT_AND_QUALITY.md](docs/DATA_IMPORT_AND_QUALITY.md))
 - **Research Analytics Layer** (Monte Carlo · Walk Forward · Parameter Sweep · Sensitivity · Ranking — siehe [docs/RESEARCH_ANALYTICS.md](docs/RESEARCH_ANALYTICS.md))
 
 **Noch offen:**
-- Phase 10 (Rest): finales Dashboard
+- Dashboard: das eigene DevDashboard wurde entfernt. Als Dashboard wird stattdessen das externe
+  Projekt **[HKUDS/Vibe-Trading](https://github.com/HKUDS/Vibe-Trading)** verlinkt/verwendet
+  (separates Repo, nicht Teil dieser Solution).
 - Phase 13/14: Live-Broker-Adapter + Safety Audit
 
-**Dashboard starten** (Seiten: `/` Status · `/paper` Paper Monitor · `/research` Research Dashboard):
-
-```powershell
-dotnet run --project src\TradingBot.DevDashboard\TradingBot.DevDashboard.csproj
-# oder mit Live-Reload:
-dotnet watch --project src\TradingBot.DevDashboard\TradingBot.DevDashboard.csproj run
-```
-
 Details: siehe [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) und [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Dashboard
+Das interne DevDashboard wurde entfernt. Als Trading-Dashboard wird das externe Repo
+**[HKUDS/Vibe-Trading](https://github.com/HKUDS/Vibe-Trading)** referenziert — es ist ein
+eigenständiges Projekt (Python/FastAPI + React) und nicht Teil dieser .NET-Solution.
 
 ## Sicherheits-Grundregel
 Die Strategie erzeugt **nur Signale**. Sie sendet **niemals** Orders.

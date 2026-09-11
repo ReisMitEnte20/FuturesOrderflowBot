@@ -243,7 +243,7 @@ Example cURL Commands:
 2. ✓ Add Hindsight registration to Program.cs
 3. ✓ Develop a strategy using IHindsightClient
 4. ✓ Run unit tests: dotnet test -k HindsightClientTests
-5. ✓ Run the application: dotnet run --project src/TradingBot.DevDashboard
+5. ✓ Run the application: dotnet run --project src/TradingBot.Console
 6. ✓ Monitor API calls in Kibana: http://localhost:5601
 
 ═══════════════════════════════════════════════════════════════════════════

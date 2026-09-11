@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FluentAssertions;
-using TradingBot.DevDashboard.Services;
+using TradingBot.Tests.TestHelpers;
 using TradingBot.Domain.Enums;
 using TradingBot.Infrastructure.MarketData;
 using TradingBot.Infrastructure.MarketData.Import;

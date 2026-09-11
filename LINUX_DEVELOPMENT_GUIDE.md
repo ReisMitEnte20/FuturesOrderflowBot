@@ -17,7 +17,7 @@ This script will:
 - ✓ Restore NuGet packages
 - ✓ Build the entire solution
 - ✓ Run unit tests
-- ✓ Prepare DevDashboard
+- ✓ Build the Console app
 
 ### Option 2: Docker Development (No installation required)
 
@@ -31,7 +31,7 @@ docker run -it -v $(pwd):/app tradingbot-dev
 # Inside container, you can now run:
 dotnet build
 dotnet test
-dotnet run --project src/TradingBot.DevDashboard
+dotnet run --project src/TradingBot.Console
 ```
 
 ### Option 3: Docker Compose (Easiest)
@@ -153,24 +153,11 @@ dotnet test /p:CollectCoverage=true /p:CoverageFormat=opencover
 
 ## Running Components
 
-### 1. DevDashboard (Web Interface)
-```bash
-# Standard
-dotnet run --project src/TradingBot.DevDashboard
+### 1. Dashboard
 
-# With Live Reload (watches for changes)
-dotnet watch --project src/TradingBot.DevDashboard run
-
-# Custom port
-dotnet run --project src/TradingBot.DevDashboard -- --urls "http://localhost:8080"
-```
-
-Then open: http://localhost:5000
-
-**Features:**
-- `/` - System Status Dashboard
-- `/paper` - Paper Trading Monitor
-- `/research` - Research & Analysis Dashboard
+The internal DevDashboard (web interface) has been removed. Use the external
+[HKUDS/Vibe-Trading](https://github.com/HKUDS/Vibe-Trading) project as the trading dashboard —
+it is a separate repository, not part of this .NET solution.
 
 ### 2. Console Application (Backtest Runner)
 ```bash
@@ -202,7 +189,6 @@ FuturesOrderflowBot/
 │   ├── TradingBot.Backtesting/         # Backtest engine
 │   ├── TradingBot.PaperTrading/        # Paper trading simulation
 │   ├── TradingBot.Console/             # CLI entry point
-│   ├── TradingBot.DevDashboard/        # Web dashboard (ASP.NET Core)
 │   └── TradingBot.Research/            # Research analytics
 ├── tests/
 │   └── TradingBot.Tests/               # Unit tests (xUnit)
@@ -238,12 +224,14 @@ dotnet watch build
 ### 3. Running Components
 
 ```bash
-# Start web dashboard
-dotnet run --project src/TradingBot.DevDashboard
+# Start the console app
+dotnet run --project src/TradingBot.Console
 
 # In another terminal, run tests
 dotnet test --watch
 ```
+
+Dashboard: use the external [HKUDS/Vibe-Trading](https://github.com/HKUDS/Vibe-Trading) project.
 
 ### 4. Debugging
 
@@ -298,11 +286,7 @@ dotnet test --blame-hang-timeout 60000
 dotnet test -k "not Performance"
 ```
 
-### Problem: Port 5000 already in use
-```bash
-# Use different port
-dotnet run --project src/TradingBot.DevDashboard -- --urls "http://localhost:5001"
-```
+
 
 ## Performance Tips
 
@@ -361,7 +345,6 @@ dotnet test                             # Run tests
 dotnet watch build                      # Rebuild on changes
 
 # Run Components
-dotnet run --project src/TradingBot.DevDashboard          # Start web UI
 dotnet run --project src/TradingBot.Console               # Run backtest
 
 # Development
@@ -382,7 +365,7 @@ docker-compose up -d                                      # Start full stack
 3. **Filebeat Integration**: Read [docs/FILEBEAT_INTEGRATION.md](docs/FILEBEAT_INTEGRATION.md)
 4. **Example Strategies**: Look in `samples/` directory
 5. **Run Tests**: `dotnet test` to verify setup
-6. **Start Dashboard**: `dotnet run --project src/TradingBot.DevDashboard`
+6. **Dashboard**: use the external [HKUDS/Vibe-Trading](https://github.com/HKUDS/Vibe-Trading) project
 
 ## Support & Issues
 
