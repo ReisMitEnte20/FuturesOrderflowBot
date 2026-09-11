@@ -27,7 +27,7 @@
         <div class="hero-meta">
             <div><span>Branch</span><strong>@git.Branch</strong></div>
             <div><span>Commit</span><strong><code>@git.Commit</code></strong></div>
-            <div><span>Aktualisiert</span><strong>@_lastUpdated.ToString("dd.MM.yyyy HH:mm")</strong></div>
+            <div><span>Aktualisiert</span><strong>@_lastUpdatedUtc.ToString("dd.MM.yyyy HH:mm 'UTC'")</strong></div>
         </div>
     </header>
 
@@ -37,7 +37,6 @@
             <article class="market-card">
                 <div class="market-head">
                     <span class="market-symbol">@tile.Symbol</span>
-                    <span class="market-change @(tile.Change >= 0 ? "up" : "down")">@(tile.Change >= 0 ? "+" : "")@tile.Change.ToString("0.##", CultureInfo.InvariantCulture)%</span>
                 </div>
                 <div class="market-title">@tile.Title</div>
                 <div class="market-value">@tile.Value</div>
@@ -63,7 +62,9 @@
                 @for (var i = 0; i < MomentumSeries.Count; i++)
                 {
                     var point = ChartPoint(i);
+                    var label = MomentumLabels[i];
                     <circle cx="@point.X" cy="@point.Y" r="4" class="trend-dot" />
+                    <text x="@point.X" y="@(point.Y - 10m)" class="chart-point-label">@label</text>
                 }
             </svg>
             <div class="chart-scale">
@@ -268,15 +269,16 @@
 
 @code {
     private ConfigOverview? _config;
-    private DateTime _lastUpdated = DateTime.Now;
+    private DateTimeOffset _lastUpdatedUtc = DateTimeOffset.UtcNow;
 
     private static IReadOnlyList<decimal> MomentumSeries => new decimal[] { 41m, 58m, 77m, 84m };
+    private static IReadOnlyList<string> MomentumLabels => new[] { "Kickoff", "Module-Aufbau", "Paper + Research", "Jetzt" };
     private string ChartDescription => $"Serie mit {MomentumSeries.Count} Punkten: {string.Join(", ", MomentumSeries.Select((v, i) => $"P{i + 1}={v.ToString("0.##", CultureInfo.InvariantCulture)}"))}.";
 
     protected override async Task OnInitializedAsync()
     {
         _config = await Config.LoadAsync();
-        _lastUpdated = DateTime.Now;
+        _lastUpdatedUtc = DateTimeOffset.UtcNow;
     }
 
     private IReadOnlyList<MarketTile> BuildMarketTiles()
@@ -290,10 +292,10 @@
 
         return new[]
         {
-            new MarketTile("Tests", Status.TestStatus, 1.8m, "aktuelle Test-Suite", "TEST"),
-            new MarketTile("Module Completion", $"{completion.ToString("0.##", CultureInfo.InvariantCulture)}%", 2.6m, $"{done}/{all} Module abgeschlossen", "MOD"),
-            new MarketTile("Safety Health", $"{safetyShare.ToString("0.##", CultureInfo.InvariantCulture)}%", 0.9m, $"{safetyOk}/{Status.Safety.Count} Checks ok", "SAFE"),
-            new MarketTile("Open Workstreams", open.ToString(CultureInfo.InvariantCulture), -0.8m, "nächste Delivery-Ziele", "OPEN")
+            new MarketTile("Tests", Status.TestStatus, "aktuelle Test-Suite", "TEST"),
+            new MarketTile("Module Completion", $"{completion.ToString("0.##", CultureInfo.InvariantCulture)}%", $"{done}/{all} Module abgeschlossen", "MOD"),
+            new MarketTile("Safety Health", $"{safetyShare.ToString("0.##", CultureInfo.InvariantCulture)}%", $"{safetyOk}/{Status.Safety.Count} Checks ok", "SAFE"),
+            new MarketTile("Open Workstreams", open.ToString(CultureInfo.InvariantCulture), "nächste Delivery-Ziele", "OPEN")
         };
     }
 
@@ -349,6 +351,6 @@
 
     private string ConfigLoadState => _config is null ? "Loading Config" : _config.Error is null ? "Config Loaded" : "Config Error";
 
-    private sealed record MarketTile(string Title, string Value, decimal Change, string Sub, string Symbol);
+    private sealed record MarketTile(string Title, string Value, string Sub, string Symbol);
     private sealed record WatchItem(string Symbol, string Name, string Value, decimal Change);
 }

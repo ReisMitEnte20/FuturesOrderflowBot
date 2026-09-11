@@ -84,23 +84,6 @@
     letter-spacing: 0.06em;
 }
 
-.market-change {
-    font-size: 0.7rem;
-    padding: 0.1rem 0.4rem;
-    border-radius: 999px;
-    font-weight: 600;
-}
-
-.market-change.up {
-    color: #4ade80;
-    background: rgba(20, 83, 45, 0.5);
-}
-
-.market-change.down {
-    color: #f87171;
-    background: rgba(127, 29, 29, 0.55);
-}
-
 .market-title {
     margin-top: 0.45rem;
     color: #94a3b8;
@@ -186,6 +169,12 @@
     fill: #60a5fa;
     stroke: #0f172a;
     stroke-width: 1;
+}
+
+.chart-point-label {
+    fill: #93c5fd;
+    font-size: 12px;
+    text-anchor: middle;
 }
 
 .chart-scale {
