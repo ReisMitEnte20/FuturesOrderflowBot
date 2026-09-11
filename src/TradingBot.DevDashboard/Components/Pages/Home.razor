@@ -109,6 +109,16 @@
                         </div>
                     </li>
                 }
+                <li>
+                    <div>
+                        <span class="watch-symbol">CFG</span>
+                        <span class="watch-name">Config Domains</span>
+                    </div>
+                    <div class="watch-value-wrap">
+                        <span class="watch-value">@ConfigStatusValue</span>
+                        <span class="watch-change @ConfigStatusClass">@ConfigStatusChange</span>
+                    </div>
+                </li>
             </ul>
 
             <h3 class="section-title">Safety-Status</h3>
@@ -291,8 +301,7 @@
             new WatchItem("PHASE", "Delivery-Stand", Status.CurrentPhase, 1.1m),
             new WatchItem("PIPE", "Pipeline Steps", Status.Pipeline.Count.ToString(CultureInfo.InvariantCulture), 0.4m),
             new WatchItem("DUMMY", "Strategie-Templates", Status.DummyStrategies.Count.ToString(CultureInfo.InvariantCulture), 0.3m),
-            new WatchItem("RATIO", "Done/Open", ratio.ToString("0.##", CultureInfo.InvariantCulture), 0.7m),
-            new WatchItem("CFG", "Config Domains", _config is null ? "…" : _config.Error is null ? "ok" : "error", _config is null ? 0m : _config.Error is null ? 0.2m : -0.5m)
+            new WatchItem("RATIO", "Done/Open", ratio.ToString("0.##", CultureInfo.InvariantCulture), 0.7m)
         };
     }
 
@@ -330,6 +339,12 @@
     }
 
     private static string YesNo(bool b) => b ? "✓" : "—";
+
+    private string ConfigStatusValue => _config is null ? "loading" : _config.Error is null ? "ok" : "error";
+    private string ConfigStatusClass => _config is null ? "" : _config.Error is null ? "up" : "down";
+    private string ConfigStatusChange => _config is null
+        ? "0.00%"
+        : (_config.Error is null ? "+0.20%" : "-0.50%");
 
     private sealed record MarketTile(string Title, string Value, decimal Change, string Sub, string Symbol);
     private sealed record WatchItem(string Symbol, string Name, string Value, decimal Change);
