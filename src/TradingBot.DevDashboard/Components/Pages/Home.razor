@@ -345,7 +345,7 @@
     }
 
     private static string BuildChartDescription(IReadOnlyList<ChartPointData> points)
-        => $"Serie mit {points.Count} Punkten: {string.Join(", ", points.Select(p => $"{p.Label}={p.Value.ToString("0.##", CultureInfo.InvariantCulture)}"))}.";
+        => $"Serie mit {points.Count} Punkten. Jeder Wert ist ein Momentum-Score des Projektfortschritts: {string.Join(", ", points.Select(p => $"{p.Label} Momentum-Score {p.Value.ToString("0.##", CultureInfo.InvariantCulture)}"))}.";
 
     private static (decimal X, decimal Y) ComputeChartPoint(decimal value, int index, int count)
     {
