@@ -56,7 +56,7 @@
 
             <svg class="momentum-chart" viewBox="0 0 700 280" role="img" aria-label="Projekt-Momentum als Linienchart">
                 <title>Project-Momentum der letzten Meilensteine</title>
-                <desc>Kickoff 41, Module-Aufbau 58, Paper plus Research 77, aktueller Stand 84.</desc>
+                <desc>@ChartDescription</desc>
                 <line x1="24" y1="220" x2="676" y2="220" class="axis" />
                 <line x1="24" y1="40" x2="24" y2="220" class="axis" />
                 <polyline class="trend-line" points="@BuildChartPoints()" />
@@ -257,6 +257,7 @@
     private ConfigOverview? _config;
 
     private static IReadOnlyList<decimal> MomentumSeries => new decimal[] { 41m, 47m, 50m, 58m, 63m, 69m, 77m, 84m };
+    private string ChartDescription => $"Serie mit {MomentumSeries.Count} Punkten: {string.Join(", ", MomentumSeries.Select((v, i) => $"P{i + 1}={v.ToString("0.##", CultureInfo.InvariantCulture)}"))}.";
 
     protected override async Task OnInitializedAsync()
         => _config = await Config.LoadAsync();
