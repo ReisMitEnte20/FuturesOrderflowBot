@@ -185,7 +185,7 @@
 
     <section class="panel mb-4">
         <h2 class="section-title">Config-Übersicht (read-only)</h2>
-        @if (_config is not null)
+        @if (_shouldAnnounceConfigStatus)
         {
             <div class="visually-hidden" aria-live="polite" role="status" aria-atomic="true">Config-Status: @ConfigLoadState</div>
         }
@@ -278,6 +278,7 @@
 @code {
     private ConfigOverview? _config;
     private DateTimeOffset _lastUpdatedUtc = DateTimeOffset.UtcNow;
+    private bool _shouldAnnounceConfigStatus;
 
     private static IReadOnlyList<decimal> MomentumSeries => new decimal[] { 41m, 58m, 77m, 84m };
     private static IReadOnlyList<string> MomentumLabels => new[] { "Kickoff", "Module-Aufbau", "Paper + Research", "Jetzt" };
@@ -286,6 +287,15 @@
     {
         _config = await Config.LoadAsync();
         _lastUpdatedUtc = DateTimeOffset.UtcNow;
+    }
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (_config is not null && !_shouldAnnounceConfigStatus)
+        {
+            _shouldAnnounceConfigStatus = true;
+            StateHasChanged();
+        }
     }
 
     private IReadOnlyList<MarketTile> BuildMarketTiles()
