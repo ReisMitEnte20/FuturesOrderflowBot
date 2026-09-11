@@ -1,4 +1,5 @@
 @page "/"
+@using System.Globalization
 @using TradingBot.DevDashboard.Services
 @inject ProjectStatusService Status
 @inject GitInfoService Git
@@ -6,43 +7,124 @@
 
 <PageTitle>TradingBot · DevDashboard</PageTitle>
 
-<div class="dash">
+<div class="dash-v2">
     <div class="alert alert-warning ro-banner" role="alert">
         🔒 <strong>Read-only Dev-Dashboard.</strong> Keine Live-Execution · keine Broker-API ·
         keine Order-/Flatten-Buttons. Nur Anzeige von Status, Modulen, Safety und Config.
     </div>
 
-    <h1 class="mb-3">FuturesOrderflowBot — Projektstatus</h1>
+    @{ 
+        var git = Git.Read();
+        var tiles = BuildMarketTiles();
+        var watch = BuildWatchlist();
+    }
 
-    @{ var git = Git.Read(); }
-    <div class="row g-3 mb-4">
-        <div class="col-sm-6 col-lg-3"><div class="stat-card"><div class="stat-label">Aktuelle Phase</div><div class="stat-value">@Status.CurrentPhase</div></div></div>
-        <div class="col-sm-6 col-lg-3"><div class="stat-card"><div class="stat-label">Tests</div><div class="stat-value text-success">@Status.TestStatus</div></div></div>
-        <div class="col-sm-6 col-lg-3"><div class="stat-card"><div class="stat-label">Branch</div><div class="stat-value">@git.Branch</div></div></div>
-        <div class="col-sm-6 col-lg-3"><div class="stat-card"><div class="stat-label">Letzter Commit</div><div class="stat-value"><code>@git.Commit</code></div></div></div>
-    </div>
+    <header class="hero">
+        <div>
+            <h1>FuturesOrderflowBot Dashboard</h1>
+            <p class="hero-sub">Projekt- und Risikoüberblick im Stil eines Trading-Dashboards (read-only)</p>
+        </div>
+        <div class="hero-meta">
+            <div><span>Branch</span><strong>@git.Branch</strong></div>
+            <div><span>Commit</span><strong><code>@git.Commit</code></strong></div>
+            <div><span>Aktualisiert</span><strong>@DateTime.Now.ToString("dd.MM.yyyy HH:mm")</strong></div>
+        </div>
+    </header>
 
-    <!-- Architecture / Pipeline -->
-    <h2 class="section-title">Architektur-Pipeline</h2>
-    <div class="pipeline mb-4">
-        @for (int i = 0; i < Status.Pipeline.Count; i++)
+    <section class="market-grid mb-4">
+        @foreach (var tile in tiles)
         {
-            var stage = Status.Pipeline[i];
-            <div class="pipe-box">
-                <div class="pipe-name">@stage.Name</div>
-                <div class="pipe-sub">@stage.Sub</div>
-            </div>
-            @if (i < Status.Pipeline.Count - 1)
-            {
-                <div class="pipe-arrow">→</div>
-            }
+            <article class="market-card">
+                <div class="market-head">
+                    <span class="market-symbol">@tile.Symbol</span>
+                    <span class="market-change @(tile.Positive ? "up" : "down")">@(tile.Change >= 0 ? "+" : "")@tile.Change.ToString("0.##", CultureInfo.InvariantCulture)%</span>
+                </div>
+                <div class="market-title">@tile.Title</div>
+                <div class="market-value">@tile.Value</div>
+                <div class="market-sub">@tile.Sub</div>
+            </article>
         }
-    </div>
+    </section>
 
-    <div class="row g-4">
-        <!-- Fertige Module -->
-        <div class="col-lg-6">
-            <h2 class="section-title">Fertige Module</h2>
+    <section class="main-panels mb-4">
+        <article class="panel chart-panel">
+            <div class="panel-head">
+                <h2>Project Momentum</h2>
+                <span class="panel-tag">Demo Trend</span>
+            </div>
+            <p class="panel-note">Visualisiert den Fortschritt der letzten Projektmeilensteine.</p>
+
+            <svg class="momentum-chart" viewBox="0 0 700 280" role="img" aria-label="Projekt-Momentum als Linienchart">
+                <line x1="24" y1="220" x2="676" y2="220" class="axis" />
+                <line x1="24" y1="40" x2="24" y2="220" class="axis" />
+                <polyline class="trend-line" points="@BuildChartPoints()" />
+                @for (var i = 0; i < MomentumSeries.Count; i++)
+                {
+                    var point = ChartPoint(i);
+                    <circle cx="@point.X" cy="@point.Y" r="4" class="trend-dot" />
+                }
+            </svg>
+            <div class="chart-scale">
+                <span>Kickoff</span>
+                <span>Module-Aufbau</span>
+                <span>Paper + Research</span>
+                <span>Jetzt</span>
+            </div>
+
+            <h3 class="section-title">Architektur-Pipeline</h3>
+            <div class="pipeline">
+                @for (int i = 0; i < Status.Pipeline.Count; i++)
+                {
+                    var stage = Status.Pipeline[i];
+                    <div class="pipe-box">
+                        <div class="pipe-name">@stage.Name</div>
+                        <div class="pipe-sub">@stage.Sub</div>
+                    </div>
+                    @if (i < Status.Pipeline.Count - 1)
+                    {
+                        <div class="pipe-arrow">→</div>
+                    }
+                }
+            </div>
+        </article>
+
+        <aside class="panel watch-panel">
+            <div class="panel-head">
+                <h2>Watchlist</h2>
+                <span class="panel-tag">Read-only</span>
+            </div>
+            <ul class="watchlist">
+                @foreach (var item in watch)
+                {
+                    <li>
+                        <div>
+                            <span class="watch-symbol">@item.Symbol</span>
+                            <span class="watch-name">@item.Name</span>
+                        </div>
+                        <div class="watch-value-wrap">
+                            <span class="watch-value">@item.Value</span>
+                            <span class="watch-change @(item.Change >= 0 ? "up" : "down")">@(item.Change >= 0 ? "+" : "")@item.Change.ToString("0.##", CultureInfo.InvariantCulture)%</span>
+                        </div>
+                    </li>
+                }
+            </ul>
+
+            <h3 class="section-title">Safety-Status</h3>
+            <div class="safety-list">
+                @foreach (var s in Status.Safety)
+                {
+                    <div class="safety-item">
+                        <span class="badge @(s.Ok ? "bg-success" : "bg-danger")">@(s.Ok ? "✓" : "✗")</span>
+                        @s.Label
+                    </div>
+                }
+            </div>
+        </aside>
+    </section>
+
+    <section class="grid-two mb-4">
+        <article class="panel">
+            <h2 class="section-title">Fertige Module (@Status.DoneModules.Count)</h2>
             <ul class="module-list">
                 @foreach (var m in Status.DoneModules)
                 {
@@ -53,11 +135,10 @@
                     </li>
                 }
             </ul>
-        </div>
+        </article>
 
-        <!-- Offene Module -->
-        <div class="col-lg-6">
-            <h2 class="section-title">Offene Module</h2>
+        <article class="panel">
+            <h2 class="section-title">Offene Module (@Status.OpenModules.Count)</h2>
             <ul class="module-list">
                 @foreach (var m in Status.OpenModules)
                 {
@@ -67,120 +148,103 @@
                     </li>
                 }
             </ul>
-        </div>
-    </div>
 
-    <!-- Safety -->
-    <h2 class="section-title mt-4">Safety-Status</h2>
-    <div class="row g-2 mb-4">
-        @foreach (var s in Status.Safety)
+            <h3 class="section-title">Strategy Framework — Dummy-Strategien</h3>
+            <ul class="module-list">
+                @foreach (var s in Status.DummyStrategies)
+                {
+                    <li>
+                        <span class="badge bg-info text-dark">Dummy</span>
+                        <span class="m-name">@s.Name</span>
+                        <span class="m-desc">@s.Description</span>
+                    </li>
+                }
+            </ul>
+        </article>
+    </section>
+
+    <section class="panel mb-4">
+        <h2 class="section-title">Config-Übersicht (read-only)</h2>
+        @if (_config is null)
         {
-            <div class="col-md-6 col-lg-4">
-                <div class="safety-item">
-                    <span class="badge @(s.Ok ? "bg-success" : "bg-danger")">@(s.Ok ? "✓" : "✗")</span>
-                    @s.Label
-                </div>
+            <p>Lade Config…</p>
+        }
+        else if (_config.Error is not null)
+        {
+            <div class="alert alert-secondary">Config nicht ladbar: @_config.Error</div>
+        }
+        else
+        {
+            <div class="alert alert-info py-2">
+                ⚠️ <strong>Example values only.</strong> Echte Broker-Gebühren / Tick-Werte müssen später
+                ersetzt werden. Pfad: <code>@_config.ConfigPath</code>
             </div>
-        }
-    </div>
 
-    <!-- Strategien (read-only) -->
-    <h2 class="section-title">Strategy Framework — Dummy-Strategien</h2>
-    <div class="alert alert-info py-2">
-        ℹ️ Strategien erzeugen ausschließlich <strong>TradeSignals</strong> – niemals Orders.
-        Ob und wie gehandelt wird, entscheiden RiskManager und OrderManager.
-    </div>
-    <ul class="module-list">
-        @foreach (var s in Status.DummyStrategies)
-        {
-            <li>
-                <span class="badge bg-info text-dark">Dummy</span>
-                <span class="m-name">@s.Name</span>
-                <span class="m-desc">@s.Description</span>
-            </li>
-        }
-    </ul>
+            <h3 class="cfg-title">Broker-Profile (@_config.Brokers.Count)</h3>
+            <table class="table table-sm cfg-table">
+                <thead><tr><th>Broker</th><th>Provider</th><th>AccountType</th><th>Market</th><th>Limit</th><th>Stop</th></tr></thead>
+                <tbody>
+                    @foreach (var b in _config.Brokers)
+                    {
+                        <tr><td>@b.BrokerName</td><td>@b.ExecutionProvider</td><td>@b.AccountType</td>
+                            <td>@YesNo(b.SupportsMarketOrders)</td><td>@YesNo(b.SupportsLimitOrders)</td><td>@YesNo(b.SupportsStopOrders)</td></tr>
+                    }
+                </tbody>
+            </table>
 
-    <!-- Config -->
-    <h2 class="section-title">Config-Übersicht (read-only)</h2>
-    @if (_config is null)
-    {
-        <p>Lade Config…</p>
-    }
-    else if (_config.Error is not null)
-    {
-        <div class="alert alert-secondary">Config nicht ladbar: @_config.Error</div>
-    }
-    else
-    {
-        <div class="alert alert-info py-2">
-            ⚠️ <strong>Example values only.</strong> Echte Broker-Gebühren / Tick-Werte müssen später
-            ersetzt werden. Pfad: <code>@_config.ConfigPath</code>
+            <h3 class="cfg-title">Instrument-Profile (@_config.Instruments.Count)</h3>
+            <table class="table table-sm cfg-table">
+                <thead><tr><th>Symbol</th><th>BrokerSymbol</th><th>Exchange</th><th>TickSize</th><th>TickValue</th><th>MaxContracts</th></tr></thead>
+                <tbody>
+                    @foreach (var i in _config.Instruments)
+                    {
+                        <tr><td>@i.Symbol</td><td>@i.BrokerSymbol</td><td>@i.Exchange</td><td>@i.TickSize</td><td>@i.TickValue</td><td>@i.MaxContracts</td></tr>
+                    }
+                </tbody>
+            </table>
+
+            <h3 class="cfg-title">Fee-Profile (@_config.Fees.Count) — Example only</h3>
+            <table class="table table-sm cfg-table">
+                <thead><tr><th>Broker</th><th>Provider</th><th>Instrument</th><th>Commission/Side</th><th>Exchange/Side</th><th>NFA/Side</th></tr></thead>
+                <tbody>
+                    @foreach (var f in _config.Fees)
+                    {
+                        <tr><td>@f.BrokerName</td><td>@f.ExecutionProvider</td><td>@f.Instrument</td><td>@f.CommissionPerSide</td><td>@f.ExchangeFeePerSide</td><td>@f.NfaFeePerSide</td></tr>
+                    }
+                </tbody>
+            </table>
+
+            <h3 class="cfg-title">Risk-Configs (@_config.Risks.Count)</h3>
+            <table class="table table-sm cfg-table">
+                <thead><tr><th>MaxDailyLoss</th><th>MaxLoss/Trade</th><th>MaxTrades/Day</th><th>MaxContracts</th><th>MaxOpenPos</th><th>MaxConsecLosses</th></tr></thead>
+                <tbody>
+                    @foreach (var r in _config.Risks)
+                    {
+                        <tr><td>@r.MaxDailyLoss</td><td>@r.MaxLossPerTrade</td><td>@r.MaxTradesPerDay</td><td>@r.MaxContracts</td><td>@r.MaxOpenPositions</td><td>@r.MaxConsecutiveLosses</td></tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </section>
+
+    <section class="panel">
+        <h2 class="section-title">ATAS Data Import Status</h2>
+        <div class="alert alert-warning py-2">
+            📄 <strong>No real ATAS CSV loaded yet.</strong> · <strong>No fake orderflow.</strong>
+            Vorbereitung: Export-Guide + Beispiel-Mapping-Profile vorhanden, echte Exporte fehlen noch.
+            Fehlt ein Datenlevel, meldet das System <code>InsufficientData</code>.
         </div>
-
-        <h3 class="cfg-title">Broker-Profile (@_config.Brokers.Count)</h3>
-        <table class="table table-sm cfg-table">
-            <thead><tr><th>Broker</th><th>Provider</th><th>AccountType</th><th>Market</th><th>Limit</th><th>Stop</th></tr></thead>
-            <tbody>
-                @foreach (var b in _config.Brokers)
-                {
-                    <tr><td>@b.BrokerName</td><td>@b.ExecutionProvider</td><td>@b.AccountType</td>
-                        <td>@YesNo(b.SupportsMarketOrders)</td><td>@YesNo(b.SupportsLimitOrders)</td><td>@YesNo(b.SupportsStopOrders)</td></tr>
-                }
-            </tbody>
-        </table>
-
-        <h3 class="cfg-title">Instrument-Profile (@_config.Instruments.Count)</h3>
-        <table class="table table-sm cfg-table">
-            <thead><tr><th>Symbol</th><th>BrokerSymbol</th><th>Exchange</th><th>TickSize</th><th>TickValue</th><th>MaxContracts</th></tr></thead>
-            <tbody>
-                @foreach (var i in _config.Instruments)
-                {
-                    <tr><td>@i.Symbol</td><td>@i.BrokerSymbol</td><td>@i.Exchange</td><td>@i.TickSize</td><td>@i.TickValue</td><td>@i.MaxContracts</td></tr>
-                }
-            </tbody>
-        </table>
-
-        <h3 class="cfg-title">Fee-Profile (@_config.Fees.Count) — Example only</h3>
-        <table class="table table-sm cfg-table">
-            <thead><tr><th>Broker</th><th>Provider</th><th>Instrument</th><th>Commission/Side</th><th>Exchange/Side</th><th>NFA/Side</th></tr></thead>
-            <tbody>
-                @foreach (var f in _config.Fees)
-                {
-                    <tr><td>@f.BrokerName</td><td>@f.ExecutionProvider</td><td>@f.Instrument</td><td>@f.CommissionPerSide</td><td>@f.ExchangeFeePerSide</td><td>@f.NfaFeePerSide</td></tr>
-                }
-            </tbody>
-        </table>
-
-        <h3 class="cfg-title">Risk-Configs (@_config.Risks.Count)</h3>
-        <table class="table table-sm cfg-table">
-            <thead><tr><th>MaxDailyLoss</th><th>MaxLoss/Trade</th><th>MaxTrades/Day</th><th>MaxContracts</th><th>MaxOpenPos</th><th>MaxConsecLosses</th></tr></thead>
-            <tbody>
-                @foreach (var r in _config.Risks)
-                {
-                    <tr><td>@r.MaxDailyLoss</td><td>@r.MaxLossPerTrade</td><td>@r.MaxTradesPerDay</td><td>@r.MaxContracts</td><td>@r.MaxOpenPositions</td><td>@r.MaxConsecutiveLosses</td></tr>
-                }
-            </tbody>
-        </table>
-    }
-
-    <!-- ATAS Data Import (Vorbereitung, Phase 12E-A) -->
-    <h2 class="section-title mt-4">ATAS Data Import Status</h2>
-    <div class="alert alert-warning py-2">
-        📄 <strong>No real ATAS CSV loaded yet.</strong> · <strong>No fake orderflow.</strong>
-        Vorbereitung: Export-Guide + Beispiel-Mapping-Profile vorhanden, echte Exporte fehlen noch.
-        Fehlt ein Datenlevel, meldet das System <code>InsufficientData</code>.
-    </div>
-    <ul class="module-list">
-        <li><span class="badge bg-secondary">OHLCV</span> <span class="m-desc">nur Candle-/Volume-Strategien</span></li>
-        <li><span class="badge bg-secondary">Aggressor / Bid-Ask</span> <span class="m-desc">nötig für Delta · CVD · Absorption</span></li>
-        <li><span class="badge bg-secondary">Footprint</span> <span class="m-desc">nötig für Stacked Imbalances</span></li>
-        <li><span class="badge bg-secondary">Volume Profile</span> <span class="m-desc">nötig für HVN / LVN</span></li>
-    </ul>
-    <div class="alert alert-secondary py-2">
-        Anleitung: <code>docs/ATAS_EXPORT_GUIDE.md</code> · Ablage: <code>samples/atas/raw/</code> ·
-        Vorlagen: <code>config/import-profiles/atas-*.example.json</code>
-    </div>
+        <ul class="module-list">
+            <li><span class="badge bg-secondary">OHLCV</span> <span class="m-desc">nur Candle-/Volume-Strategien</span></li>
+            <li><span class="badge bg-secondary">Aggressor / Bid-Ask</span> <span class="m-desc">nötig für Delta · CVD · Absorption</span></li>
+            <li><span class="badge bg-secondary">Footprint</span> <span class="m-desc">nötig für Stacked Imbalances</span></li>
+            <li><span class="badge bg-secondary">Volume Profile</span> <span class="m-desc">nötig für HVN / LVN</span></li>
+        </ul>
+        <div class="alert alert-secondary py-2 mb-0">
+            Anleitung: <code>docs/ATAS_EXPORT_GUIDE.md</code> · Ablage: <code>samples/atas/raw/</code> ·
+            Vorlagen: <code>config/import-profiles/atas-*.example.json</code>
+        </div>
+    </section>
 
     <footer class="dash-footer">
         Read-only Übersicht · generiert aus Code &amp; config/ · keine Trading-Funktion.
@@ -190,8 +254,85 @@
 @code {
     private ConfigOverview? _config;
 
+    private static IReadOnlyList<decimal> MomentumSeries => new decimal[] { 41m, 47m, 50m, 58m, 63m, 69m, 77m, 84m };
+
     protected override async Task OnInitializedAsync()
         => _config = await Config.LoadAsync();
 
+    private IReadOnlyList<MarketTile> BuildMarketTiles()
+    {
+        var done = Status.DoneModules.Count;
+        var open = Status.OpenModules.Count;
+        var all = done + open;
+        var completion = all == 0 ? 0m : Math.Round(done * 100m / all, 2);
+        var safetyOk = Status.Safety.Count(s => s.Ok);
+        var safetyShare = Status.Safety.Count == 0 ? 0m : Math.Round(safetyOk * 100m / Status.Safety.Count, 2);
+
+        return new[]
+        {
+            new MarketTile("Tests", Status.TestStatus, 1.8m, true, "aktuelle Test-Suite", "TEST"),
+            new MarketTile("Module Completion", $"{completion.ToString("0.##", CultureInfo.InvariantCulture)}%", 2.6m, true, $"{done}/{all} Module abgeschlossen", "MOD"),
+            new MarketTile("Safety Health", $"{safetyShare.ToString("0.##", CultureInfo.InvariantCulture)}%", 0.9m, true, $"{safetyOk}/{Status.Safety.Count} Checks ok", "SAFE"),
+            new MarketTile("Open Workstreams", open.ToString(CultureInfo.InvariantCulture), -0.8m, false, "nächste Delivery-Ziele", "OPEN")
+        };
+    }
+
+    private IReadOnlyList<WatchItem> BuildWatchlist()
+    {
+        var done = Status.DoneModules.Count;
+        var open = Status.OpenModules.Count;
+        var ratio = open == 0 ? 0m : Math.Round(done / (decimal)open, 2);
+
+        return new[]
+        {
+            new WatchItem("PHASE", "Delivery-Stand", Status.CurrentPhase, 1.1m),
+            new WatchItem("PIPE", "Pipeline Steps", Status.Pipeline.Count.ToString(CultureInfo.InvariantCulture), 0.4m),
+            new WatchItem("DUMMY", "Strategie-Templates", Status.DummyStrategies.Count.ToString(CultureInfo.InvariantCulture), 0.3m),
+            new WatchItem("RATIO", "Done/Open", ratio.ToString("0.##", CultureInfo.InvariantCulture), 0.7m),
+            new WatchItem("CFG", "Config Domains", _config is null ? "…" : _config.Error is null ? "ok" : "error", _config?.Error is null ? 0.2m : -0.5m)
+        };
+    }
+
+    private string BuildChartPoints()
+    {
+        const decimal minX = 38m;
+        const decimal maxX = 662m;
+        const decimal minY = 58m;
+        const decimal maxY = 210m;
+
+        var min = MomentumSeries.Min();
+        var max = MomentumSeries.Max();
+        var spread = max - min == 0 ? 1m : max - min;
+
+        return string.Join(' ', MomentumSeries.Select((v, i) =>
+        {
+            var x = minX + i * (maxX - minX) / (MomentumSeries.Count - 1);
+            var normalized = (v - min) / spread;
+            var y = maxY - normalized * (maxY - minY);
+            return FormattableString.Invariant($"{x:0.##},{y:0.##}");
+        }));
+    }
+
+    private (decimal X, decimal Y) ChartPoint(int index)
+    {
+        const decimal minX = 38m;
+        const decimal maxX = 662m;
+        const decimal minY = 58m;
+        const decimal maxY = 210m;
+
+        var min = MomentumSeries.Min();
+        var max = MomentumSeries.Max();
+        var spread = max - min == 0 ? 1m : max - min;
+        var value = MomentumSeries[index];
+
+        var x = minX + index * (maxX - minX) / (MomentumSeries.Count - 1);
+        var normalized = (value - min) / spread;
+        var y = maxY - normalized * (maxY - minY);
+        return (Math.Round(x, 2), Math.Round(y, 2));
+    }
+
     private static string YesNo(bool b) => b ? "✓" : "—";
+
+    private sealed record MarketTile(string Title, string Value, decimal Change, bool Positive, string Sub, string Symbol);
+    private sealed record WatchItem(string Symbol, string Name, string Value, decimal Change);
 }
