@@ -279,6 +279,8 @@
     private ConfigOverview? _config;
     private DateTimeOffset _lastUpdatedUtc = DateTimeOffset.UtcNow;
     private bool _shouldAnnounceConfigStatus;
+    private bool _hasObservedConfigState;
+    private string? _lastObservedConfigState;
 
     private static IReadOnlyList<decimal> MomentumSeries => new decimal[] { 41m, 58m, 77m, 84m };
     private static IReadOnlyList<string> MomentumLabels => new[] { "Kickoff", "Module-Aufbau", "Paper + Research", "Jetzt" };
@@ -291,8 +293,18 @@
 
     protected override void OnAfterRender(bool firstRender)
     {
-        if (_config is not null && !_shouldAnnounceConfigStatus)
+        var currentState = ConfigLoadState;
+
+        if (!_hasObservedConfigState)
         {
+            _hasObservedConfigState = true;
+            _lastObservedConfigState = currentState;
+            return;
+        }
+
+        if (!string.Equals(_lastObservedConfigState, currentState, StringComparison.Ordinal))
+        {
+            _lastObservedConfigState = currentState;
             _shouldAnnounceConfigStatus = true;
             StateHasChanged();
         }
