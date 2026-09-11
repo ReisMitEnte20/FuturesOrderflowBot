@@ -100,6 +100,7 @@
                 <h2>Watchlist</h2>
                 <span class="panel-tag">Read-only</span>
             </div>
+            <div class="visually-hidden" aria-live="polite">Config-Status: @ConfigLoadState</div>
             <ul class="watchlist">
                 @foreach (var item in watch)
                 {
@@ -120,7 +121,7 @@
                         <span class="watch-name">Config Domains</span>
                     </div>
                     <div class="watch-value-wrap">
-                        <span class="watch-value" aria-live="polite">@ConfigLoadState</span>
+                        <span class="watch-value">@ConfigLoadState</span>
                     </div>
                 </li>
             </ul>
