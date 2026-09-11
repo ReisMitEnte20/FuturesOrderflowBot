@@ -110,7 +110,7 @@
                         </div>
                         <div class="watch-value-wrap">
                             <span class="watch-value">@item.Value</span>
-                            <span class="watch-change @(item.Change >= 0 ? "up" : "down")">@(item.Change >= 0 ? "Gain " : "Loss ")@(item.Change >= 0 ? "+" : "")@item.Change.ToString("0.##", CultureInfo.InvariantCulture)%</span>
+                            <span class="watch-change @WatchDeltaClass(item.Change)">@WatchDeltaText(item.Change)</span>
                         </div>
                     </li>
                 }
@@ -277,7 +277,7 @@
 
     private static IReadOnlyList<decimal> MomentumSeries => new decimal[] { 41m, 58m, 77m, 84m };
     private static IReadOnlyList<string> MomentumLabels => new[] { "Kickoff", "Module-Aufbau", "Paper + Research", "Jetzt" };
-    private string ChartDescription => $"Serie mit {MomentumSeries.Count} Punkten: {string.Join(", ", MomentumSeries.Select((v, i) => $"P{i + 1}={v.ToString("0.##", CultureInfo.InvariantCulture)}"))}.";
+    private string ChartDescription => $"Serie mit {MomentumSeries.Count} Punkten: {string.Join(", ", MomentumSeries.Select((v, i) => $"{MomentumLabels[i]}={v.ToString("0.##", CultureInfo.InvariantCulture)}"))}.";
 
     protected override async Task OnInitializedAsync()
     {
@@ -354,6 +354,13 @@
     private static string YesNo(bool b) => b ? "✓" : "—";
 
     private string ConfigLoadState => _config is null ? "Loading Config" : _config.Error is null ? "Config Loaded" : "Config Error";
+    private static string WatchDeltaClass(decimal change) => change > 0m ? "up" : change < 0m ? "down" : "neutral";
+    private static string WatchDeltaText(decimal change)
+        => change > 0m
+            ? $"Gain +{change.ToString("0.##", CultureInfo.InvariantCulture)}%"
+            : change < 0m
+                ? $"Loss {change.ToString("0.##", CultureInfo.InvariantCulture)}%"
+                : "Flat 0.00%";
 
     private sealed record MarketTile(string Title, string Value, string Sub, string Symbol);
     private sealed record WatchItem(string Symbol, string Name, string Value, decimal Change);
