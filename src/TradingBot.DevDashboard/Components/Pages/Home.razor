@@ -110,7 +110,7 @@
                         </div>
                         <div class="watch-value-wrap">
                             <span class="watch-value">@item.Value</span>
-                            <span class="watch-change @(item.Change >= 0 ? "up" : "down")">@(item.Change >= 0 ? "+" : "")@item.Change.ToString("0.##", CultureInfo.InvariantCulture)%</span>
+                            <span class="watch-change @(item.Change >= 0 ? "up" : "down")">@(item.Change >= 0 ? "Gain " : "Loss ")@(item.Change >= 0 ? "+" : "")@item.Change.ToString("0.##", CultureInfo.InvariantCulture)%</span>
                         </div>
                     </li>
                 }
@@ -166,6 +166,10 @@
             </ul>
 
             <h3 class="section-title">Strategy Framework — Dummy-Strategien</h3>
+            <div class="alert alert-info py-2">
+                ℹ️ Strategien erzeugen ausschließlich <strong>TradeSignals</strong> – niemals Orders.
+                Ob und wie gehandelt wird, entscheiden RiskManager und OrderManager.
+            </div>
             <ul class="module-list">
                 @foreach (var s in Status.DummyStrategies)
                 {
