@@ -46,6 +46,11 @@ public sealed class PaperTradingSession
     private readonly OrderManager _orderManager;
     private readonly FeedHealthMonitor _feedHealth;
     private readonly InMemoryTradeJournal _journal = new();
+    private readonly object _dashboardSync = new();
+    private readonly List<DashboardTickPoint> _dashboardTicks = [];
+    private readonly List<DashboardPositionEvent> _dashboardPositionEvents = [];
+    private readonly Dictionary<Guid, (decimal? StopLossPrice, decimal? TakeProfitPrice)> _signalMarkers = [];
+    private readonly int _dashboardTickBufferSize;
 
     private volatile bool _paused;
     private volatile bool _stopRequested;
@@ -57,6 +62,7 @@ public sealed class PaperTradingSession
     public PaperTradingSession(PaperTradingRequest request)
     {
         _request = request ?? throw new ArgumentNullException(nameof(request));
+        _dashboardTickBufferSize = Math.Max(100, request.Config.DashboardTickBufferSize);
 
         var feeCalc = new FeeCalculator();
         var pnlCalc = new PnLCalculator(feeCalc);
@@ -138,6 +144,7 @@ public sealed class PaperTradingSession
             {
                 if (token.IsCancellationRequested) break;
 
+                var positionBefore = _positions.GetPosition(_request.Symbol);
                 _clock.Set(tick.Timestamp);
                 _feedHealth.RecordTick(tick);
                 _adapter.ProcessTick(tick);          // Fills offener Orders VOR der Strategie
@@ -147,6 +154,7 @@ public sealed class PaperTradingSession
                     var signal = _request.Strategy.OnTick(tick);
                     if (signal is not null)
                     {
+                        TrackSignalMarkers(signal);
                         Interlocked.Increment(ref _signals);
                         var state = await _orderManager.ProcessSignalAsync(signal, cancellationToken: token)
                             .ConfigureAwait(false);
@@ -166,6 +174,10 @@ public sealed class PaperTradingSession
                         }
                     }
                 }
+
+                var positionAfter = _positions.GetPosition(_request.Symbol);
+                AppendDashboardTick(tick, positionAfter);
+                AppendDashboardPositionEvent(tick, positionBefore, positionAfter);
 
                 // Zähler erst NACH vollständiger Tick-Verarbeitung (inkl. Strategie) erhöhen,
                 // damit "TicksProcessed >= n" bedeutet: Tick n ist fertig verarbeitet.
@@ -266,6 +278,48 @@ public sealed class PaperTradingSession
         };
     }
 
+    /// <summary>
+    /// Read-only Snapshot für externe Dashboards. Enthält Tick-Serie + Positions-Overlay-Events
+    /// und hat bewusst keine Steuer- oder Orderfunktionen.
+    /// </summary>
+    public DashboardSnapshot GetDashboardSnapshot(int maxTicks = 1000)
+    {
+        if (maxTicks <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxTicks), "maxTicks muss > 0 sein.");
+
+        var state = GetState();
+        List<DashboardTickPoint> ticks;
+        List<DashboardPositionEvent> events;
+        lock (_dashboardSync)
+        {
+            int skip = Math.Max(0, _dashboardTicks.Count - maxTicks);
+            ticks = _dashboardTicks.Skip(skip).ToList();
+            events = _dashboardPositionEvents.ToList();
+        }
+
+        return new DashboardSnapshot
+        {
+            SessionId = state.SessionId,
+            Symbol = state.CurrentSymbol,
+            TradingMode = state.TradingMode,
+            SessionStatus = state.Status.ToString(),
+            CapturedAt = _clock.UtcNow,
+            IsReadOnly = true,
+            IsExecutionControlEnabled = false,
+            TicksProcessed = state.TicksProcessed,
+            GrossPnL = state.GrossPnL,
+            NetPnL = state.NetPnL,
+            TotalFees = state.TotalFees,
+            TotalSlippage = state.TotalSlippage,
+            UnrealizedGrossPnL = state.UnrealizedGrossPnL,
+            FeedHealthStatus = state.FeedHealthStatus,
+            RiskStatus = state.RiskStatus,
+            KillSwitchActive = state.KillSwitchActive,
+            TickSeries = ticks,
+            PositionEvents = events
+        };
+    }
+
     /// <summary>Journal der Session (Trades mit Kontext, Mode = Paper).</summary>
     public IReadOnlyList<TradeJournalEntry> JournalEntries => _journal.Entries;
 
@@ -293,5 +347,137 @@ public sealed class PaperTradingSession
         public void Info(string message) { }
         public void Warning(string message) { }
         public void Error(string message, Exception? exception = null) { }
+    }
+
+    private void AppendDashboardTick(MarketTick tick, Position? position)
+    {
+        var point = new DashboardTickPoint
+        {
+            Symbol = tick.Symbol,
+            Timestamp = tick.Timestamp,
+            Price = tick.Price,
+            Bid = tick.Bid,
+            Ask = tick.Ask,
+            Volume = tick.Volume,
+            PositionSide = position?.Side ?? PositionSide.Flat,
+            PositionQuantity = position?.Quantity ?? 0,
+            UnrealizedGrossPnL = position?.UnrealizedGrossPnL ?? 0m
+        };
+
+        lock (_dashboardSync)
+        {
+            _dashboardTicks.Add(point);
+            if (_dashboardTicks.Count > _dashboardTickBufferSize)
+                _dashboardTicks.RemoveRange(0, _dashboardTicks.Count - _dashboardTickBufferSize);
+        }
+    }
+
+    private void AppendDashboardPositionEvent(MarketTick tick, Position? before, Position? after)
+    {
+        var eventType = ClassifyPositionEvent(before, after);
+        if (eventType is null)
+            return;
+
+        var marker = FindLatestMarker(tick.Symbol);
+
+        var evt = new DashboardPositionEvent
+        {
+            EventType = eventType.Value,
+            Symbol = tick.Symbol,
+            Timestamp = tick.Timestamp,
+            PositionSide = after?.Side ?? PositionSide.Flat,
+            PositionQuantity = after?.Quantity ?? 0,
+            Price = tick.Price,
+            RealizedGrossPnL = after?.RealizedGrossPnL ?? before?.RealizedGrossPnL ?? 0m,
+            RealizedNetPnL = after?.RealizedNetPnL ?? before?.RealizedNetPnL ?? 0m,
+            StopLossPrice = marker.StopLossPrice,
+            TakeProfitPrice = marker.TakeProfitPrice,
+            SourceOrderId = marker.OrderId
+        };
+
+        lock (_dashboardSync)
+            _dashboardPositionEvents.Add(evt);
+    }
+
+    private static DashboardPositionEventType? ClassifyPositionEvent(Position? before, Position? after)
+    {
+        int beforeQty = before?.Quantity ?? 0;
+        int afterQty = after?.Quantity ?? 0;
+        var beforeSide = before?.Side ?? PositionSide.Flat;
+        var afterSide = after?.Side ?? PositionSide.Flat;
+
+        bool wasFlat = beforeSide == PositionSide.Flat || beforeQty == 0;
+        bool isFlat = afterSide == PositionSide.Flat || afterQty == 0;
+
+        if (wasFlat && !isFlat)
+            return DashboardPositionEventType.Entry;
+        if (!wasFlat && isFlat)
+            return DashboardPositionEventType.Exit;
+        if (!wasFlat && !isFlat && beforeSide != afterSide)
+            return DashboardPositionEventType.Flip;
+        if (afterQty > beforeQty)
+            return DashboardPositionEventType.Add;
+        if (afterQty < beforeQty)
+            return DashboardPositionEventType.Reduce;
+
+        return null;
+    }
+
+    private void TrackSignalMarkers(TradeSignal signal)
+    {
+        if (_request.Instrument is null)
+            return;
+
+        decimal? stop = null;
+        decimal? take = null;
+        decimal tickSize = _request.Instrument.TickSize;
+
+        if (signal.SuggestedStopLossTicks is int slTicks && slTicks > 0)
+        {
+            stop = signal.Direction == SignalDirection.Long
+                ? signal.ReferencePrice - slTicks * tickSize
+                : signal.ReferencePrice + slTicks * tickSize;
+        }
+
+        if (signal.SuggestedTakeProfitTicks is int tpTicks && tpTicks > 0)
+        {
+            take = signal.Direction == SignalDirection.Long
+                ? signal.ReferencePrice + tpTicks * tickSize
+                : signal.ReferencePrice - tpTicks * tickSize;
+        }
+
+        if (stop is null && take is null)
+            return;
+
+        lock (_dashboardSync)
+            _signalMarkers[signal.SignalId] = (stop, take);
+    }
+
+    private (Guid? OrderId, decimal? StopLossPrice, decimal? TakeProfitPrice) FindLatestMarker(string symbol)
+    {
+        foreach (var order in _orderManager.Orders
+                     .Where(o => o.Symbol == symbol)
+                     .OrderByDescending(o => o.UpdatedAt))
+        {
+            decimal? stop = order.StopLossPrice;
+            decimal? take = order.TakeProfitPrice;
+
+            if ((stop is null && take is null) && order.SourceSignalId is Guid signalId)
+            {
+                lock (_dashboardSync)
+                {
+                    if (_signalMarkers.TryGetValue(signalId, out var tracked))
+                    {
+                        stop = tracked.StopLossPrice;
+                        take = tracked.TakeProfitPrice;
+                    }
+                }
+            }
+
+            if (stop is not null || take is not null)
+                return (order.OrderId, stop, take);
+        }
+
+        return (null, null, null);
     }
 }

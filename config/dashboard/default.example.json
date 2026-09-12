@@ -1,6 +1,10 @@
 {
   "note": "Example values only.",
   "enabled": false,
+  "readOnly": true,
+  "enableTickChart": true,
+  "maxTickPoints": 2000,
+  "externalProjectRepository": "https://github.com/HKUDS/Vibe-Trading",
   "host": "localhost",
   "port": 5005,
   "refreshIntervalMs": 1000

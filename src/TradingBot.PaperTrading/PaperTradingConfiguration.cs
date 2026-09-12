@@ -18,4 +18,7 @@ public sealed record PaperTradingConfiguration
 
     /// <summary>Teilfüllungen (vorbereitet, Standard aus = volle Fills).</summary>
     public bool AllowPartialFills { get; init; }
+
+    /// <summary>Maximale Anzahl zuletzt gehaltener Tick-Punkte für Dashboard-Chart-Snapshots.</summary>
+    public int DashboardTickBufferSize { get; init; } = 2000;
 }

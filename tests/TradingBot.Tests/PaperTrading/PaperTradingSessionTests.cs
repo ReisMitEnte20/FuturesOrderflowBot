@@ -269,6 +269,38 @@ public class PaperTradingSessionTests
         session.JournalEntries[0].Trade.NetPnL.Should().Be(195.70m);
     }
 
+    [Fact]
+    public async Task Dashboard_snapshot_is_read_only_and_keeps_tick_order()
+    {
+        var ticks = BacktestTestData.RisingTicks(6);
+        var session = Engine.Start(Request(new TestSignalStrategy(intervalTicks: 2), ticks));
+        await session.Completion;
+
+        var snapshot = session.GetDashboardSnapshot(maxTicks: 4);
+        var expectedTimestamps = ticks.Skip(2).Select(t => t.Timestamp).ToList();
+
+        snapshot.IsReadOnly.Should().BeTrue();
+        snapshot.IsExecutionControlEnabled.Should().BeFalse();
+        snapshot.Symbol.Should().Be("NQ");
+        snapshot.TickSeries.Should().HaveCount(4);
+        snapshot.TickSeries.Select(t => t.Timestamp).Should().ContainInOrder(expectedTimestamps);
+    }
+
+    [Fact]
+    public async Task Dashboard_snapshot_contains_position_events_and_stoploss_markers()
+    {
+        var session = Engine.Start(Request(new TestSignalStrategy(intervalTicks: 2), BacktestTestData.RisingTicks(8)));
+        await session.Completion;
+
+        var snapshot = session.GetDashboardSnapshot();
+
+        snapshot.PositionEvents.Should().NotBeEmpty();
+        snapshot.PositionEvents.Should().Contain(e =>
+            e.EventType == DashboardPositionEventType.Entry &&
+            e.StopLossPrice.HasValue);
+        snapshot.PositionEvents.Should().Contain(e => e.EventType == DashboardPositionEventType.Exit);
+    }
+
     // ----------------------------- Safety by construction --------------------
 
     [Fact]
