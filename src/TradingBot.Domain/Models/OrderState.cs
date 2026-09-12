@@ -24,6 +24,8 @@ public sealed record OrderState
     public string? BrokerOrderId { get; init; }
     public string Message { get; init; } = string.Empty;
     public Guid? BracketGroupId { get; init; }
+    public decimal? StopLossPrice { get; init; }
+    public decimal? TakeProfitPrice { get; init; }
 
     public DateTimeOffset CreatedAt { get; init; }
     public DateTimeOffset UpdatedAt { get; init; }

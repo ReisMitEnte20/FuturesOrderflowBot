@@ -41,6 +41,10 @@ Das interne DevDashboard wurde entfernt. Als Trading-Dashboard wird das externe 
 **[HKUDS/Vibe-Trading](https://github.com/HKUDS/Vibe-Trading)** referenziert — es ist ein
 eigenständiges Projekt (Python/FastAPI + React) und nicht Teil dieser .NET-Solution.
 
+Für die Anbindung stellt `TradingBot.PaperTrading` einen read-only Snapshot-Contract bereit
+(`GetDashboardSnapshot`) mit Session/Position/PnL/Feed/Risk sowie Tick-Serie und
+Positions-Events (Entry/Add/Reduce/Exit/Flip) inkl. SL/TP-Markern für Chart-Overlays.
+
 ## Sicherheits-Grundregel
 Die Strategie erzeugt **nur Signale**. Sie sendet **niemals** Orders.
 Über Ausführung entscheiden ausschließlich: **RiskManager → OrderManager → BrokerExecutionAdapter**.

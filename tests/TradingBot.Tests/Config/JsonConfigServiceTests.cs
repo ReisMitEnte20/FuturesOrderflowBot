@@ -14,7 +14,17 @@ public class JsonConfigServiceTests
     {
         using var dir = new TempDir();
         var path = dir.File("dashboard.json");
-        var original = new DashboardConfig { Enabled = true, Host = "127.0.0.1", Port = 8080, RefreshIntervalMs = 500 };
+        var original = new DashboardConfig
+        {
+            Enabled = true,
+            ReadOnly = true,
+            EnableTickChart = true,
+            MaxTickPoints = 5000,
+            ExternalProjectRepository = "https://github.com/HKUDS/Vibe-Trading",
+            Host = "127.0.0.1",
+            Port = 8080,
+            RefreshIntervalMs = 500
+        };
 
         await _sut.SaveAsync(path, original);
         var loaded = await _sut.LoadAsync<DashboardConfig>(path);

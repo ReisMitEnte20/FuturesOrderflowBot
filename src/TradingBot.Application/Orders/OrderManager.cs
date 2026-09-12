@@ -145,6 +145,8 @@ public sealed class OrderManager : IOrderManager, IDisposable
                     OrderType = order.OrderType,
                     RequestedQuantity = order.Quantity,
                     Lifecycle = OrderLifecycleState.Created,
+                    StopLossPrice = order.StopLossPrice,
+                    TakeProfitPrice = order.TakeProfitPrice,
                     CreatedAt = now,
                     UpdatedAt = now
                 }
