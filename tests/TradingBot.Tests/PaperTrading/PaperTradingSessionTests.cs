@@ -284,6 +284,7 @@ public class PaperTradingSessionTests
         snapshot.Symbol.Should().Be("NQ");
         snapshot.TickSeries.Should().HaveCount(4);
         snapshot.TickSeries.Select(t => t.Timestamp).Should().ContainInOrder(expectedTimestamps);
+        snapshot.TickData.Should().BeEquivalentTo(snapshot.TickSeries, options => options.WithStrictOrdering());
     }
 
     [Fact]

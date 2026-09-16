@@ -29,5 +29,9 @@ public sealed record DashboardSnapshot
     public bool KillSwitchActive { get; init; }
 
     public IReadOnlyList<DashboardTickPoint> TickSeries { get; init; } = Array.Empty<DashboardTickPoint>();
+    /// <summary>
+    /// Alias für externe Dashboard-Clients, die Tick-Chart-Daten unter "tickData" erwarten.
+    /// </summary>
+    public IReadOnlyList<DashboardTickPoint> TickData => TickSeries;
     public IReadOnlyList<DashboardPositionEvent> PositionEvents { get; init; } = Array.Empty<DashboardPositionEvent>();
 }
