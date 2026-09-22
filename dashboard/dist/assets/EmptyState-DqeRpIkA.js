@@ -1,0 +1,2 @@
+import{t as e}from"./vendor-react-v_zadc44.js";var t=e();function n({title:e,description:n,icon:r,action:i}){return(0,t.jsxs)(`div`,{className:`flex flex-col items-center justify-center py-12 gap-3`,children:[r&&(0,t.jsx)(`div`,{className:`text-[var(--fg-faint)]`,children:r}),(0,t.jsx)(`p`,{className:`text-sm text-[var(--fg-dim)]`,children:e}),n&&(0,t.jsx)(`p`,{className:`text-xs text-[var(--fg-faint)]`,children:n}),i]})}export{n as t};
+//# sourceMappingURL=EmptyState-DqeRpIkA.js.map

@@ -47,3 +47,15 @@ Research/Simulation-only. Keine Broker-API, keine Live-Execution, keine echten O
 Phase 13 ohne Freigabe. Strategy erzeugt nur `TradeSignal`; `RiskManager` ist Gatekeeper;
 Dashboard/Research ohne `TradingBot.Execution`-Referenz; kein Fake-Orderflow (`InsufficientData`).
 Details: `CLAUDE.md`, `docs/COLLABORATOR_ONBOARDING.md`. **Kein Commit ohne Freigabe.**
+
+## Dashboard Build Environment
+
+Das `dashboard/` Verzeichnis enthält eine separate Vite + React + TypeScript + Tailwind Anwendung
+(rebuild von qanat Referenz: dark theme, pipeline DAG, session chat rail). Wichtige Einschränkungen:
+
+- **npm-Cache ist schreibgeschützt** (`/home/william/.npm`). Nutze `npm_config_cache=/dev/shm/npm-cache` beim Installieren/Bauen.
+- **Dev-Server**: `npm run dev` im `dashboard/` → http://127.0.0.1:5899. Hintergrundprozesse werden zwischen Tool-Calls beendet — für Tests `vite build` verwenden.
+- **Build**: `cd dashboard && npm run build` (erzeugt `dist/`).
+- **TypeScript**: `cd dashboard && npx tsc -b` (prüft Typen).
+- **Haupt-Farben**: bg `#0a0a0a`, panel `#161513`, key `#a2e65d` (grün), gold `#e8c069`, red `#c1503f`, cyan `#7fc4b4`, purple `#c2b6d8`.
+- **Pfad-Alias**: `@/*` → `src/*` (in vite.config.ts und tsconfig.json konfiguriert).
