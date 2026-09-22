@@ -1,6 +1,7 @@
 import { Link, useLocation } from "react-router";
 import { cn } from "@/lib/utils";
 import { useTradingStore } from "@/stores/tradingStore";
+import { Settings } from "lucide-react";
 
 const NAV = [
   { to: "/", icon: "◉", label: "Live" },
@@ -42,7 +43,22 @@ export function Sidebar() {
         })}
       </nav>
 
-      <div className="px-3 py-2 border-t border-[var(--line)]">
+      <nav className="px-2 pb-3 space-y-0.5">
+        <Link
+          to="/settings"
+          className={cn(
+            "flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors",
+            location.pathname === "/settings"
+              ? "bg-[var(--panel)] text-[var(--key)] font-medium"
+              : "text-[var(--fg-dim)] hover:bg-[var(--panel)] hover:text-[var(--fg)]"
+          )}
+        >
+          <Settings className="h-3.5 w-3.5" />
+          Settings
+        </Link>
+      </nav>
+
+      <div className="px-3 py-2 border-t border-[var(--line)] mt-auto">
         <div className="flex items-center gap-2">
           <span
             className={cn(

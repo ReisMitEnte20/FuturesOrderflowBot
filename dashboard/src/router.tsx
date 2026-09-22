@@ -7,6 +7,7 @@ const Signals = lazy(() => import("@/pages/Signals").then((m) => ({ default: m.S
 const Backtest = lazy(() => import("@/pages/Backtest").then((m) => ({ default: m.Backtest })));
 const MarketData = lazy(() => import("@/pages/MarketData").then((m) => ({ default: m.MarketData })));
 const Pipeline = lazy(() => import("@/pages/Pipeline").then((m) => ({ default: m.Pipeline })));
+const Settings = lazy(() => import("@/pages/Settings").then((m) => ({ default: m.Settings })));
 
 function PageLoader() {
   return (
@@ -33,6 +34,7 @@ export const router = createBrowserRouter([
       { path: "/backtest", element: wrap(Backtest) },
       { path: "/market", element: wrap(MarketData) },
       { path: "/pipeline", element: wrap(Pipeline) },
+      { path: "/settings", element: wrap(Settings) },
     ],
   },
 ]);
