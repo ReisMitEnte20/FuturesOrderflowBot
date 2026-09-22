@@ -1,2 +1,0 @@
-import{t as e}from"./vendor-react-v_zadc44.js";import{n as t}from"./index-BGhHEoyW.js";var n=e();function r({children:e,className:r,hover:i}){return(0,n.jsx)(`div`,{className:t(`bg-[var(--panel)] border border-[var(--line)] rounded-lg`,i&&`hover:border-[var(--line-2)] transition-colors`,r),children:e})}export{r as t};
-//# sourceMappingURL=Card-u7z7jRWq.js.map

@@ -23,25 +23,26 @@ public static class RithmicConfigLoader
         return config;
     }
 
-    public static RithmicConfig FromEnvironment(string apiKeyEnv = "RITHMIC_API_KEY",
-        string apiSecretEnv = "RITHMIC_API_SECRET",
+    public static RithmicConfig FromEnvironment(
+        string usernameEnv = "RITHMIC_USERNAME",
+        string passwordEnv = "RITHMIC_PASSWORD",
         string baseUrlEnv = "RITHMIC_BASE_URL",
         ILogger? logger = null)
     {
-        var apiKey = Environment.GetEnvironmentVariable(apiKeyEnv);
-        var apiSecret = Environment.GetEnvironmentVariable(apiSecretEnv);
+        var username = Environment.GetEnvironmentVariable(usernameEnv);
+        var password = Environment.GetEnvironmentVariable(passwordEnv);
 
-        if (string.IsNullOrEmpty(apiKey) || string.IsNullOrEmpty(apiSecret))
+        if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
             throw new RithmicException(
-                $"Missing environment variables: {apiKeyEnv} and/or {apiSecretEnv}. "
+                $"Missing environment variables: {usernameEnv} and/or {passwordEnv}. "
                 + "Set them or use a config file via RithmicConfigLoader.FromFile().");
 
         var baseUrl = Environment.GetEnvironmentVariable(baseUrlEnv) ?? "https://api.rithmic.com";
 
         var config = new RithmicConfig
         {
-            ApiKey = apiKey,
-            ApiSecret = apiSecret,
+            Username = username,
+            Password = password,
             BaseUrl = baseUrl,
         };
 

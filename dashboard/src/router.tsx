@@ -7,7 +7,7 @@ const Signals = lazy(() => import("@/pages/Signals").then((m) => ({ default: m.S
 const Backtest = lazy(() => import("@/pages/Backtest").then((m) => ({ default: m.Backtest })));
 const MarketData = lazy(() => import("@/pages/MarketData").then((m) => ({ default: m.MarketData })));
 const Pipeline = lazy(() => import("@/pages/Pipeline").then((m) => ({ default: m.Pipeline })));
-const Settings = lazy(() => import("@/pages/Settings").then((m) => ({ default: m.Settings })));
+const Settings = lazy(() => import("@/pages/Settings").then((m) => ({ default: m.default })));
 
 function PageLoader() {
   return (
