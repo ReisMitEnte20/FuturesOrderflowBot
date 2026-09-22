@@ -1,0 +1,1 @@
+{"username": "YOUR_USERNAME", "password": "YOUR_PASSWORD", "baseUrl": "https://api.rithmic.com", "timeoutSeconds": 30, "maxRetries": 3, "defaultSymbol": "NQ", "defaultInterval": "1m", "lookbackCandles": 1000}
