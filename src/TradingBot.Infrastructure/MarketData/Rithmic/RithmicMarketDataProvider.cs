@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using TradingBot.Core.Interfaces;
 using TradingBot.Domain.Enums;
 using TradingBot.Domain.Models;
+using TradingBot.Infrastructure.MarketData.Rithmic;
 using TradingBot.Infrastructure.MarketData.Rithmic.Models;
 
 namespace TradingBot.Infrastructure.MarketData;
@@ -97,8 +98,8 @@ public sealed class RithmicMarketDataProvider : IMarketDataProvider
             Symbol = candle.Symbol,
             Timestamp = timestamp,
             Price = candle.Open,
-            Bid = null != candle.VWAP ? candle.VWAP : candle.Open,
-            Ask = null != candle.VWAP ? candle.VWAP : candle.Open,
+            Bid = candle.VWAP ?? candle.Open,
+            Ask = candle.VWAP ?? candle.Open,
             BidSize = midVolume,
             AskSize = midVolume,
             Volume = midVolume,

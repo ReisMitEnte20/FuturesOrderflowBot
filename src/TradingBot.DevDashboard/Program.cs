@@ -9,6 +9,7 @@ builder.Services.AddRazorComponents()
 
 // Read-only Dashboard-Services (keine Order-/Broker-/Execution-Referenz).
 var repoRoot = RepoLocator.FindRoot(builder.Environment.ContentRootPath);
+builder.Services.AddSingleton<RithmicDashboardService>();
 builder.Services.AddSingleton<ProjectStatusService>();
 builder.Services.AddSingleton(new GitInfoService(repoRoot));
 builder.Services.AddSingleton(new ConfigOverviewService(repoRoot));
@@ -34,5 +35,25 @@ app.UseAntiforgery();
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
+
+// Rithmic API endpoints
+var rithmic = app.MapGroup("/api/rithmic");
+
+rithmic.MapPost("/connect", async (RithmicConnectRequest request, RithmicDashboardService service) =>
+{
+    var result = await service.ConnectAsync(request);
+    return result.Success ? Results.Ok(result) : Results.BadRequest(result);
+});
+
+rithmic.MapPost("/disconnect", async (RithmicDashboardService service) =>
+{
+    var result = await service.DisconnectAsync();
+    return Results.Ok(result);
+});
+
+rithmic.MapGet("/status", (RithmicDashboardService service) =>
+{
+    return Results.Ok(service.GetStatus());
+});
 
 app.Run();
