@@ -359,4 +359,47 @@ public sealed class SierraBacktestReplayService
         }
         return 1.0;
     }
+
+    /// <summary>
+    /// Findet den Frame-Index (in Replay-Reihenfolge), an dem der SL/TP-Exit tatsächlich passiert:
+    /// der ERSTE Frame der Exit-Bar (ab <paramref name="entryFrameIndex"/>), dessen KURSEREIGNIS
+    /// (<see cref="SierraIntrabarFrame.CurrentPrice"/>) das Exit-Level erreicht. Bewusst wird der
+    /// Frame-Preis geprüft und NICHT das laufende (kumulierte) Kerzen-High/Low: ein Level, das bereits
+    /// VOR dem Einstieg berührt wurde, bleibt im kumulierten High/Low "hängen" (es fällt nie zurück)
+    /// und würde den Marker sonst schon am Einstiegs-Frame einblenden — obwohl der eigentliche Touch
+    /// erst später (oder erneut) passiert. Über den Frame-Preis zählt nur ein Touch AB dem Einstieg.
+    /// Rückgabe -1 bei Zeit-Exit (kein SL/TP) oder wenn nicht gefunden.
+    ///
+    /// Grenze (bewusst benannt): Die Demo-Regel (<see cref="RunDemoRule"/>) entscheidet den Exit auf
+    /// BAR-Ebene und zeichnet KEINEN Tick-/Event-Index des Exits auf; die Intrabar-Sichtbarkeit wird
+    /// daher aus den Frames rekonstruiert. Frames sind mit <c>frameEveryTicks</c> gesampelt — ein
+    /// Touch, der vollständig zwischen zwei Samples liegt, wird erst am nächsten Sample erkannt oder
+    /// (bei vollständigem Retrace innerhalb der Lücke) übersprungen; bei <c>frameEveryTicks == 1</c>
+    /// ist die Erkennung exakt (jeder Tick ist ein Frame). Keine Zukunftsdaten für die Entscheidung.
+    /// </summary>
+    public static int FindExitFrameIndex(
+        IReadOnlyList<SierraIntrabarFrame> frames, ReplayTradeMarker t, int entryFrameIndex = 0)
+    {
+        bool? touchHigh = t.ExitPrice == t.TakeProfit ? t.Side == PositionSide.Long
+            : t.ExitPrice == t.StopLoss ? t.Side != PositionSide.Long
+            : (bool?)null;                                  // weder SL noch TP -> Zeit-Exit
+        if (touchHigh is null) return -1;
+
+        for (int i = Math.Max(0, entryFrameIndex); i < frames.Count; i++)
+        {
+            var f = frames[i];
+            if (f.CompletedBars != t.ExitIndex) continue;   // nur Frames der Exit-Bar
+            // Maßgeblich ist das Kursereignis DIESES Frames (CurrentPrice), NICHT das kumulierte
+            // High/Low — sonst würde ein Touch VOR dem Einstieg im laufenden High/Low nachwirken.
+            if (touchHigh.Value ? f.CurrentPrice >= t.ExitPrice : f.CurrentPrice <= t.ExitPrice) return i;
+        }
+        return -1;
+    }
+
+    /// <summary>
+    /// Exit-Marker sichtbar, sobald der Replay den Touch-Frame erreicht hat (monoton, rewind-korrekt).
+    /// Für Zeit-Exits (<paramref name="exitFrameIndex"/> = -1) ist er über den Bar-Abschluss zu steuern.
+    /// </summary>
+    public static bool ExitVisibleAtFrame(int currentFrameIndex, int exitFrameIndex)
+        => exitFrameIndex >= 0 && currentFrameIndex >= exitFrameIndex;
 }

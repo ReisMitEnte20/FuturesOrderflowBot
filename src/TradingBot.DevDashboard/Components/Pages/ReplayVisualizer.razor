@@ -250,6 +250,7 @@
     private int _sierraBarMinutes = 5;
     private int _frameEvery = 25;
     private int _f;                                    // Frame-Index (Intrabar)
+    private Dictionary<int, int> _exitFrame = new();    // Trade.Id -> Touch-Frame-Index (Intrabar), -1 = Zeit-Exit
     private bool _rangeMode;                            // Sierra Range-Chart (Bar-Wechsel bei Preisbewegung)
     private SierraReplayResult? _rangeResult;
     private decimal _sierraRangePoints = 2m;
@@ -331,6 +332,9 @@
         _iab = Sierra.TryBuildIntrabar(_sierraBarMinutes, _frameEvery);  // read-only, lokal, gecacht
         if (_iab is null) { _sierraError = Sierra.LastError; _sierraMode = false; return; }
         _sierraError = null; _sierraMode = true; _rangeMode = false;
+        // Exit-Frame je Trade EINMAL vorberechnen (Demo-Regel: ExitIndex > EntryIndex -> entryFrameIndex 0 sicher).
+        _exitFrame = _iab.Trades.ToDictionary(
+            t => t.Id, t => SierraBacktestReplayService.FindExitFrameIndex(_iab.Frames, t));
         _f = 0; BuildChart();
     }
 
@@ -465,9 +469,18 @@
             // Bar-Ende der Entry-Bar (Progress 1.0), nicht mehr an der Spalten-Mitte.
             if (t.EntryIndex >= start && t.EntryIndex <= end && t.EntryIndex <= lastClosed)
                 _markers.Add(EntryMarker(XAt(t.EntryIndex, Intra ? 1.0 : 0.5), Y(t.EntryPrice), t.Side));
-            // Exit exakt intrabar: bei SL/TP-Treffer die Frame-Position innerhalb der Exit-Bar
-            // suchen, statt den Marker pauschal an die Bar-Finalisierung zu setzen.
-            if (t.ExitIndex >= start && t.ExitIndex <= end && t.IsClosedAt(lastClosed))
+            // Exit exakt intrabar über die REALE Replay-Reihenfolge: Marker ab dem Touch-Frame
+            // (monoton, rewind-korrekt); Zeit-Exit erst bei Bar-Abschluss. Demo-Modus: bei Bar-Close.
+            bool exitVisible;
+            if (Intra)
+            {
+                int exitF = _exitFrame.TryGetValue(t.Id, out var ef) ? ef : -1;
+                exitVisible = exitF >= 0
+                    ? SierraBacktestReplayService.ExitVisibleAtFrame(_f, exitF)   // SL/TP: ab Touch-Frame
+                    : Frame.CompletedBars > t.ExitIndex;                          // Zeit-Exit: nach Bar-Abschluss
+            }
+            else exitVisible = t.IsClosedAt(lastClosed);
+            if (t.ExitIndex >= start && t.ExitIndex <= end && exitVisible)
                 _markers.Add(ExitMarker(XAt(t.ExitIndex, ExitProgress(t)), Y(t.ExitPrice), t.Side));
         }
 

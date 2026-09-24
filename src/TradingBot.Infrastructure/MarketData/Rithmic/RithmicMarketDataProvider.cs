@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using TradingBot.Core.Interfaces;
 using TradingBot.Domain.Enums;
 using TradingBot.Domain.Models;
+using TradingBot.Infrastructure.MarketData.Rithmic;
 using TradingBot.Infrastructure.MarketData.Rithmic.Models;
 
 namespace TradingBot.Infrastructure.MarketData;
@@ -87,22 +88,26 @@ public sealed class RithmicMarketDataProvider : IMarketDataProvider
         _logger.Info($"Rithmic: streamed {count} ticks from {candles.Count} candles for {sym}.");
     }
 
+    /// <summary>
+    /// Wandelt eine Candle in Roh-Ticks (Open- und Close-Preis) um. WICHTIG: Candle-Daten enthalten
+    /// KEINE echten Bid/Ask-Quotes. Es werden daher bewusst KEINE synthetischen Quotes erzeugt —
+    /// die abgeleiteten Ticks sind OHLCV-only (<c>Bid/Ask/BidSize/AskSize = 0</c>,
+    /// <c>Aggressor = Unknown</c>), exakt wie unklassifizierte Ticks im Datenmodell. Damit entsteht
+    /// KEIN Fake-Orderflow (kein Delta/CVD aus Candles). Nur echte Aggressor-/Bid-Ask-Daten dürften
+    /// Orderflow erzeugen. Rithmic ist zudem deaktiviert (nirgends instanziiert).
+    /// </summary>
     private IEnumerable<MarketTick> ConvertCandleToTicks(RithmicCandle candle)
     {
         var timestamp = DateTimeOffset.FromUnixTimeMilliseconds(candle.Timestamp);
-        var midVolume = candle.Volume / 2m;
+        var midVolume = candle.Volume / 2m;   // Gesamtvolumen bleibt erhalten (auf 2 Ticks verteilt)
 
         yield return new MarketTick
         {
             Symbol = candle.Symbol,
             Timestamp = timestamp,
             Price = candle.Open,
-            Bid = null != candle.VWAP ? candle.VWAP : candle.Open,
-            Ask = null != candle.VWAP ? candle.VWAP : candle.Open,
-            BidSize = midVolume,
-            AskSize = midVolume,
             Volume = midVolume,
-            Aggressor = AggressorSide.Unknown,
+            Aggressor = AggressorSide.Unknown,   // keine echten Quotes -> OHLCV-only, kein Orderflow
         };
 
         yield return new MarketTick
@@ -110,10 +115,6 @@ public sealed class RithmicMarketDataProvider : IMarketDataProvider
             Symbol = candle.Symbol,
             Timestamp = timestamp,
             Price = candle.Close,
-            Bid = candle.Close,
-            Ask = candle.Close,
-            BidSize = midVolume,
-            AskSize = midVolume,
             Volume = midVolume,
             Aggressor = AggressorSide.Unknown,
         };

@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Text;
+using System.Text.Json;
 using TradingBot.Infrastructure.MarketData.Rithmic.Models;
 
 namespace TradingBot.Infrastructure.MarketData.Rithmic;
