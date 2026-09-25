@@ -5,6 +5,10 @@ import { Button } from "@/components/common/Button";
 
 const API_BASE = "/api/rithmic";
 
+// Im lokalen Backtesting-Modus ist Rithmic serverseitig deaktiviert. Die UI löst standardmäßig KEINE
+// automatischen Rithmic-Requests aus; Aktivierung nur explizit über VITE_RITHMIC_ENABLED=true.
+const RITHMIC_ENABLED = (import.meta as any).env?.VITE_RITHMIC_ENABLED === "true";
+
 export function Topbar() {
   const [loginOpen, setLoginOpen] = useState(false);
   const connectionStatus = useTradingStore((s) => s.connectionStatus);
@@ -13,7 +17,7 @@ export function Topbar() {
   const setCredentials = useTradingStore((s) => s.setRithmicCredentials);
 
   useEffect(() => {
-    loadStatus();
+    if (RITHMIC_ENABLED) loadStatus();
   }, []);
 
   const loadStatus = async () => {
