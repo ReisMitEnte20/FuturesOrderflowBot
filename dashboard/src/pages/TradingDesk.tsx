@@ -40,6 +40,23 @@ export function TradingDesk() {
         </Card>
       </div>
 
+      <div className="flex items-center gap-2">
+        <span className="text-sm text-muted-foreground">Symbol:</span>
+        {["NQ", "MNQ", "ES", "MES"].map((sym) => (
+          <button
+            key={sym}
+            onClick={() => useTradingStore.getState().setSelectedSymbol(sym)}
+            className={`px-3 py-1 rounded-md text-sm font-medium border transition-colors ${
+              false
+                ? "bg-primary text-primary-foreground border-primary"
+                : "bg-card text-foreground border-border hover:bg-muted"
+            }`}
+          >
+            {sym}
+          </button>
+        ))}
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <Card className="lg:col-span-2">
           <SectionHeader title="Positions" icon={<Activity className="h-4 w-4" />} />

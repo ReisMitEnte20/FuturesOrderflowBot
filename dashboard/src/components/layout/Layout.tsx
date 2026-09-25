@@ -4,15 +4,13 @@ import { Sidebar } from "./Sidebar";
 import { ChatRail } from "./ChatRail";
 
 export function Layout() {
-  const connectionStatus = "disconnected" as const;
-
   return (
     <div className="flex h-screen bg-[var(--bg)]">
       <Sidebar />
       <ChatRail />
 
       <div className="flex-1 flex flex-col min-w-0">
-        <Topbar activeView="live" connectionStatus={connectionStatus} />
+        <Topbar />
 
         <main className="flex-1 min-h-0 overflow-auto">
           <Outlet />

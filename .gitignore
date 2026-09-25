@@ -36,3 +36,6 @@ samples/sierra/raw/*.tct
 samples/atas/raw/*.txt
 samples/atas/raw/*.csv
 !samples/**/raw/.gitkeep
+
+# Versehentlich vom Kollegen committetes .NET SDK (nicht ins Repo)
+.dotnet/
