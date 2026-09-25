@@ -10,7 +10,11 @@ export interface InstrumentDef {
   symbol: string; tickSize: number; tickValue: number; pointValue: number;
   maxContracts: number; defaultStopLossTicks: number; defaultTakeProfitTicks: number;
 }
-export interface DataSourceDef { id: string; kind: string; label: string; available: boolean; note?: string | null; }
+/** Datenquelle; defaultFromUtc/defaultMaxRows = begrenzter Standard-Ausschnitt fürs erste Laden. */
+export interface DataSourceDef {
+  id: string; kind: string; label: string; available: boolean; note?: string | null;
+  defaultFromUtc?: string | null; defaultMaxRows?: number | null;
+}
 
 export interface RunRequest {
   dataSourceId: string;
@@ -18,6 +22,7 @@ export interface RunRequest {
   symbol: string;
   timeframeMinutes: number;
   fromUtc?: string | null;
+  toUtc?: string | null;
   maxRows: number;
   strategy: string;
   params: Record<string, string>;
@@ -47,10 +52,12 @@ export interface OhlcTrade {
   entryTime: string; exitTime: string; entryPrice: number; exitPrice: number;
   entryBarIndex: number; exitBarIndex: number;
   grossPnL: number; fees: number; netPnL: number;
-  exitReason: ExitReason; ambiguous: boolean; note?: string | null;
+  exitReason: ExitReason; stopLossPrice: number; takeProfitPrice: number;
+  ambiguous: boolean; note?: string | null;
 }
 
-export interface EquityPoint { barIndex: number; time: string; realizedNetPnL: number; equity: number; }
+/** Realisierte Equity je Bar; openPnL = Mark-to-Market der offenen Position (nur Anzeige, von der Engine). */
+export interface EquityPoint { barIndex: number; time: string; realizedNetPnL: number; equity: number; openPnL: number; }
 
 export interface DataInfo {
   source: string; symbol: string; timeframeMinutes: number; timezone: string;
@@ -88,9 +95,35 @@ export interface RunResponse {
   dataIssues: ImportIssue[];
 }
 
+/** Herkunft/Umfang geladener Kerzen (ohne Strategielauf). */
+export interface LoadedDataInfo {
+  source: string; symbol: string; timeframeMinutes: number; timezone: string;
+  from?: string | null; to?: string | null; barCount: number;
+  leadingPartial: boolean; trailingPartial: boolean;
+}
+
+export interface DataResponse {
+  ok: boolean; error?: string | null;
+  data?: LoadedDataInfo | null;
+  candles: Candle[];
+  dataIssues: ImportIssue[];
+  elapsedMs: number;
+}
+
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(`${BASE}${path}`, { headers: { Accept: "application/json" } });
   if (!r.ok) throw new Error(`GET ${path} -> ${r.status}`);
+  return (await r.json()) as T;
+}
+
+async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+  const r = await fetch(`${BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
+  // Backend liefert bei fachlichem Fehler 400 mit { ok:false, error }.
   return (await r.json()) as T;
 }
 
@@ -99,14 +132,7 @@ export const backtestApi = {
   strategies: () => get<StrategyDef[]>("/strategies"),
   instruments: () => get<InstrumentDef[]>("/instruments"),
   dataSources: () => get<DataSourceDef[]>("/data-sources"),
-  async run(req: RunRequest): Promise<RunResponse> {
-    const r = await fetch(`${BASE}/run`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify(req),
-    });
-    const body = (await r.json()) as RunResponse;
-    // Backend liefert bei fachlichem Fehler 400 mit { ok:false, error }.
-    return body;
-  },
+  /** Nur echte OHLC-Kerzen laden (kein Strategielauf). */
+  candles: (req: RunRequest, signal?: AbortSignal) => post<DataResponse>("/candles", req, signal),
+  run: (req: RunRequest, signal?: AbortSignal) => post<RunResponse>("/run", req, signal),
 };
