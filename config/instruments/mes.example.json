@@ -1,0 +1,18 @@
+{
+  "note": "Example values only. Verify contract specs with the exchange/broker. MES = Micro E-mini S&P 500.",
+  "symbol": "MES",
+  "brokerSymbol": "MES",
+  "exchange": "CME",
+  "currency": "USD",
+  "tickSize": 0.25,
+  "tickValue": 1.25,
+  "pointValue": 5.00,
+  "contractMultiplier": 5.00,
+  "tradingTimezone": "America/New_York",
+  "sessionStart": "09:30:00",
+  "sessionEnd": "16:00:00",
+  "maxContracts": 20,
+  "defaultStopLossTicks": 40,
+  "defaultTakeProfitTicks": 60,
+  "defaultTrailingStopTicks": 20
+}
