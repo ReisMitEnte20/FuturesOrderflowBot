@@ -192,9 +192,9 @@
                 <th class="text-end">Exit $</th><th class="text-end">SL</th><th class="text-end">TP</th>
                 <th class="text-end">NetPnL</th><th>Status</th></tr></thead>
             <tbody>
-                @foreach (var t in _session.Trades)
+                @foreach (var t in TradesSrc)
                 {
-                    <tr class="rp-trow @(t.IsOpenAt(_i) ? "rp-open" : "") @(t.EntryIndex == _i ? "rp-active" : "") @(t.EntryIndex <= _i ? "" : "rp-future")"
+                    <tr class="rp-trow @(t.IsOpenAt(StatusIdx) ? "rp-open" : "") @(t.EntryIndex == StatusIdx ? "rp-active" : "") @(t.EntryIndex <= StatusIdx ? "" : "rp-future")"
                         @onclick="() => JumpTo(t)">
                         <td>@t.Id</td>
                         <td><span class="rp-side @(t.Side == PositionSide.Long ? "rp-side-long" : "rp-side-short")">@SideText(t.Side)</span></td>
@@ -259,8 +259,10 @@
     // --- Modus-neutrale Zugriffe (Demo = finale Bars; Sierra = Intrabar mit forming candle) ---
     private bool Intra => _sierraMode && _iab is not null;
     private SierraIntrabarFrame Frame => _iab!.Frames[Math.Clamp(_f, 0, _iab.Frames.Count - 1)];
-    private int BarTotal => Intra ? Frame.CompletedBars + 1 : _session.Bars.Count;   // + forming
-    private int EndIdx => BarTotal - 1;
+    // Rechte Kante des sichtbaren Fensters = aktueller Replay-Stand, NIE die letzte Bar des Datensatzes.
+    // Intra: die sich bildende Kerze (CompletedBars). Sonst (Demo/Range): die aktuelle Replay-Bar _i.
+    // Verhindert, dass Demo-/Range-Replays die komplette (zukünftige) Serie zeigen. Keine Zukunftskerzen.
+    private int EndIdx => Intra ? Frame.CompletedBars : _i;
     private int StatusIdx => Intra ? Math.Max(0, Frame.CompletedBars - 1) : _i;
     private int ReplayLen => Intra ? _iab!.Frames.Count : _session.BarCount;
     private int ReplayPos => Intra ? _f : _i;
@@ -545,7 +547,7 @@
         => new($"{F(x)},{F(y - 8)} {F(x + 8)},{F(y)} {F(x)},{F(y + 8)} {F(x - 8)},{F(y)}", "rp-m-exit");
 
     private string TradeStatus(ReplayTradeMarker t)
-        => t.IsOpenAt(_i) ? "offen" : t.IsClosedAt(_i) ? "geschlossen" : "—";
+        => t.IsOpenAt(StatusIdx) ? "offen" : t.IsClosedAt(StatusIdx) ? "geschlossen" : "—";
 
     // SVG-<text> als MarkupString (umgeht Razors reserviertes <text>-Tag).
     private static MarkupString SvgText(double x, double y, string css, string label)
