@@ -59,6 +59,13 @@
                             @onclick="() => SetFrameEvery(n)">@(n == 1 ? "Tick" : "Every " + n)</button>
                 }
             </span>
+            <span class="rp-speeds">
+                <input class="form-control form-control-sm d-inline-block" style="width:12rem"
+                       placeholder="Von UTC z.B. 2026-06-12 14:19" @bind="_fromDateInput" />
+                <button class="btn btn-sm btn-outline-secondary" @onclick="LoadSierraFromDate">Zeitraum laden</button>
+                <button class="btn btn-sm @(_sierraFrom is null ? "btn-secondary" : "btn-outline-secondary")"
+                        @onclick="LoadSierraFromStart">Anfang</button>
+            </span>
         }
         @if (_rangeMode)
         {
@@ -79,9 +86,21 @@
             <strong>@_iab!.FrameEveryTicks Tick(s)</strong> · finale Bars: <strong>@_iab.CompletedBars.Count</strong> ·
             Frames: <strong>@_iab.FrameCount</strong> · Trades: <strong>@_iab.Trades.Count</strong>
             (W/L @_iab.Wins/@_iab.Losses) · NetPnL: <strong>@_iab.TotalNetPnL.ToString("F2") $</strong> ·
-            @(_iab.From?.ToString("yyyy-MM-dd HH:mm"))–@(_iab.To?.ToString("HH:mm")) ·
             Delta/CVD: @(_iab.DeltaCvdAvailable ? "ja" : "nein") · @_iab.ElapsedMs ms.
-            <em>Forming candle baut sich aus historischen Ticks auf — simple Demo-Regel, keine Edge-Bestätigung.</em>
+            <br />
+            <span>1. Tick: <strong>@(_iab.FirstTickTime?.ToString("yyyy-MM-dd HH:mm:ss.fff"))</strong> ·
+            letzter Tick: <strong>@(_iab.LastTickTime?.ToString("yyyy-MM-dd HH:mm:ss.fff"))</strong> UTC ·
+            Bar-Intervalle: @(_iab.From?.ToString("HH:mm:ss")) … @(_iab.To?.ToString("HH:mm:ss")) ·
+            gelesen: <strong>@_iab.BarsProcessed</strong> Zeilen, davon gültige Ticks (im Fenster): <strong>@_iab.ValidTicks</strong></span>
+            @if (_iab.LeadingPartial)
+            {
+                <span class="text-danger"> · ⚠ erste Kerze (@(_iab.From?.ToString("HH:mm"))) ist TEILBAR (erst ab @(_iab.FirstTickTime?.ToString("HH:mm:ss")) geladen) – nicht als vollständig werten.</span>
+            }
+            @if (_iab.TrailingPartial)
+            {
+                <span class="text-danger"> · ⚠ letzte Kerze durch maxRows abgeschnitten – TEILBAR.</span>
+            }
+            <br /><em>Forming candle baut sich aus historischen Ticks (Handelspreisen) auf — simple Demo-Regel, keine Edge-Bestätigung.</em>
         </div>
     }
     @if (_rangeMode && _rangeResult is not null)
@@ -331,13 +350,34 @@
     private void LoadSierra()
     {
         _playing = false;
-        _iab = Sierra.TryBuildIntrabar(_sierraBarMinutes, _frameEvery);  // read-only, lokal, gecacht
+        // Ohne _sierraFrom ab Dateianfang (maxRows), sonst gezielt ab Zeitpunkt (Byte-Offset-Suche).
+        _iab = Sierra.TryBuildIntrabar(_sierraBarMinutes, _frameEvery, fromUtc: _sierraFrom);  // read-only, lokal, gecacht
         if (_iab is null) { _sierraError = Sierra.LastError; _sierraMode = false; return; }
         _sierraError = null; _sierraMode = true; _rangeMode = false;
         // Exit-Frame je Trade EINMAL vorberechnen (Demo-Regel: ExitIndex > EntryIndex -> entryFrameIndex 0 sicher).
         _exitFrame = _iab.Trades.ToDictionary(
             t => t.Id, t => SierraBacktestReplayService.FindExitFrameIndex(_iab.Frames, t));
         _f = 0; BuildChart();
+    }
+
+    // Gezielte lokale Zeitraumwahl (nur Anzeige/Laden; verändert die Quelldatei NICHT).
+    private string _fromDateInput = "";
+    private DateTimeOffset? _sierraFrom;   // null = Dateianfang; sonst Startzeit des geladenen Fensters
+
+    private void LoadSierraFromStart() { _sierraFrom = null; _fromDateInput = ""; LoadSierra(); }
+
+    private void LoadSierraFromDate()
+    {
+        if (DateTimeOffset.TryParse(_fromDateInput, CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AllowWhiteSpaces, out var dt))
+        {
+            _sierraFrom = dt.ToUniversalTime();
+            LoadSierra();
+        }
+        else
+        {
+            _sierraError = $"Ungültiges Datum: '{_fromDateInput}' (erwartet z.B. 2026-06-12 14:19).";
+        }
     }
 
     private void SetSierraBarSize(int minutes)

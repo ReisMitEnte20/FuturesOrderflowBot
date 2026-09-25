@@ -133,20 +133,24 @@ public sealed class SierraBacktestReplayService
     /// <summary>Mögliche Replay-Granularitäten (jeder N-te Tick ein Frame).</summary>
     public static readonly int[] FrameEveryTicksOptions = { 1, 10, 25 };
 
-    private readonly Dictionary<(int Bars, int Frame), IntrabarReplaySession> _intrabarCache = new();
+    private readonly Dictionary<(int Bars, int Frame, DateTimeOffset? From), IntrabarReplaySession> _intrabarCache = new();
 
     /// <summary>
     /// Baut (gecacht) eine INTRABAR-Replay-Session: streamt die lokale Sierra-Datei, sammelt
     /// Intrabar-Frames (jeder <paramref name="frameEveryTicks"/>-te Tick) und die finalisierten Bars.
+    /// Ohne <paramref name="fromUtc"/> wird ab Dateianfang gelesen (maxRows begrenzt); mit
+    /// <paramref name="fromUtc"/> wird per Byte-Offset-Suche gezielt ein späterer Zeitraum geladen
+    /// (Quelldatei bleibt unverändert). Kerzen entstehen ausschließlich aus Handelspreisen (Last).
     /// </summary>
     public IntrabarReplaySession? TryBuildIntrabar(
-        int barMinutes = 5, int frameEveryTicks = 25, long maxRows = 100_000, string symbol = "MES")
+        int barMinutes = 5, int frameEveryTicks = 25, long maxRows = 100_000, string symbol = "MES",
+        DateTimeOffset? fromUtc = null)
     {
         if (barMinutes <= 0) barMinutes = 1;
         if (frameEveryTicks <= 0) frameEveryTicks = 1;
         lock (_sync)
         {
-            if (_intrabarCache.TryGetValue((barMinutes, frameEveryTicks), out var hit)) return hit;
+            if (_intrabarCache.TryGetValue((barMinutes, frameEveryTicks, fromUtc), out var hit)) return hit;
             LastError = null;
             try
             {
@@ -154,14 +158,17 @@ public sealed class SierraBacktestReplayService
                     throw new FileNotFoundException($"Lokale Sierra-Datei nicht gefunden: {LocalPath}");
 
                 var frames = new List<SierraIntrabarFrame>();
+                var builder = new SierraOrderFlowBarBuilder();
                 var sw = Stopwatch.StartNew();
-                var agg = new SierraOrderFlowBarBuilder().BuildFile(
-                    LocalPath, symbol, TimeSpan.FromMinutes(barMinutes), maxRows: maxRows,
-                    frameEveryTicks: frameEveryTicks, onFrame: frames.Add);
+                var agg = fromUtc is DateTimeOffset from
+                    ? builder.BuildFileFrom(LocalPath, symbol, TimeSpan.FromMinutes(barMinutes), from,
+                        toUtc: null, maxRows: maxRows, frameEveryTicks: frameEveryTicks, onFrame: frames.Add)
+                    : builder.BuildFile(LocalPath, symbol, TimeSpan.FromMinutes(barMinutes), maxRows: maxRows,
+                        frameEveryTicks: frameEveryTicks, onFrame: frames.Add);
                 sw.Stop();
 
                 var built = BuildIntrabarSession(agg, frames, symbol, barMinutes, frameEveryTicks, sw.ElapsedMilliseconds);
-                _intrabarCache[(barMinutes, frameEveryTicks)] = built;
+                _intrabarCache[(barMinutes, frameEveryTicks, fromUtc)] = built;
                 return built;
             }
             catch (Exception ex)
@@ -211,11 +218,15 @@ public sealed class SierraBacktestReplayService
             DollarPerPoint = DollarPerPoint,
             TotalNetPnL = trades.Sum(x => x.NetPnL),
             BarsProcessed = agg.RowsProcessed,
+            ValidTicks = agg.ValidTicks,
             ParseErrors = agg.ParseErrors,
             NetDelta = agg.NetDelta,
             FinalCumulativeDelta = agg.FinalCumulativeDelta,
             From = agg.FirstBarTime,
             To = agg.LastBarTime,
+            FirstTickTime = agg.FirstTickTime,
+            LastTickTime = agg.LastTickTime,
+            Truncated = agg.Truncated,
             DeltaCvdAvailable = agg.Capabilities.SupportsDeltaCvd,
             ElapsedMs = elapsedMs
         };
