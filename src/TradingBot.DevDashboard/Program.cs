@@ -91,6 +91,12 @@ var bt = app.MapGroup("/api/backtest").RequireCors(ReactCors);
 bt.MapGet("/strategies", (BacktestApiService s) => Results.Ok(s.GetStrategies()));
 bt.MapGet("/instruments", async (BacktestApiService s, CancellationToken ct) => Results.Ok(await s.GetInstrumentsAsync(ct)));
 bt.MapGet("/data-sources", (BacktestApiService s) => Results.Ok(s.GetDataSources()));
+// Nur echte OHLC-Kerzen laden (ohne Strategielauf) — für „Daten laden" und das Bar-Replay.
+bt.MapPost("/candles", async (BacktestRunRequest request, BacktestApiService s, CancellationToken ct) =>
+{
+    var result = await s.LoadDataAsync(request, ct);
+    return result.Ok ? Results.Ok(result) : Results.BadRequest(result);
+});
 bt.MapPost("/run", async (BacktestRunRequest request, BacktestApiService s, CancellationToken ct) =>
 {
     var result = await s.RunAsync(request, ct);

@@ -12,8 +12,27 @@ namespace TradingBot.DevDashboard.Services;
 public sealed record StrategyParamDef(string Key, string Label, string Type, string Default);
 public sealed record StrategyDef(string Id, string Name, string Description, bool IsReference, IReadOnlyList<StrategyParamDef> Params);
 public sealed record InstrumentDef(string Symbol, decimal TickSize, decimal TickValue, decimal PointValue, int MaxContracts, int DefaultStopLossTicks, int DefaultTakeProfitTicks);
-public sealed record DataSourceDef(string Id, string Kind, string Label, bool Available, string? Note);
+/// <summary>Datenquelle. <see cref="DefaultFromUtc"/>/<see cref="DefaultMaxRows"/> beschreiben einen begrenzten,
+/// geeigneten Standard-Ausschnitt für das erste Laden (null = ganze Quelle bzw. Standardgrenze).</summary>
+public sealed record DataSourceDef(string Id, string Kind, string Label, bool Available, string? Note,
+    string? DefaultFromUtc = null, long? DefaultMaxRows = null);
 public sealed record CandleDto(long T, decimal O, decimal H, decimal L, decimal C, decimal V);
+
+/// <summary>Herkunft/Umfang geladener OHLC-Bars (ohne Strategielauf).</summary>
+public sealed record LoadedDataInfo(
+    string Source, string Symbol, int TimeframeMinutes, string Timezone,
+    DateTimeOffset? From, DateTimeOffset? To, int BarCount, bool LeadingPartial, bool TrailingPartial);
+
+/// <summary>Antwort von <c>/api/backtest/candles</c>: nur echte OHLC-Kerzen, keine Trades/Kennzahlen.</summary>
+public sealed record BacktestDataResponse
+{
+    public bool Ok { get; init; }
+    public string? Error { get; init; }
+    public LoadedDataInfo? Data { get; init; }
+    public IReadOnlyList<CandleDto> Candles { get; init; } = Array.Empty<CandleDto>();
+    public IReadOnlyList<OhlcImportIssue> DataIssues { get; init; } = Array.Empty<OhlcImportIssue>();
+    public long ElapsedMs { get; init; }
+}
 
 /// <summary>
 /// Tatsächlich verwendete Instrument- und Kostenwerte eines Laufs (Anzeige im Dashboard, mit Einheiten).
@@ -33,6 +52,8 @@ public sealed record BacktestRunRequest
     public string Symbol { get; init; } = "MES";
     public int TimeframeMinutes { get; init; } = 5;
     public string? FromUtc { get; init; }
+    /// <summary>Optionales Ende des Zeitraums (UTC, exklusiv).</summary>
+    public string? ToUtc { get; init; }
     public long MaxRows { get; init; } = 100_000;
 
     public string Strategy { get; init; } = "movingaverage";
@@ -117,10 +138,14 @@ public sealed class BacktestApiService
     {
         var list = new List<DataSourceDef>();
         bool sierra = File.Exists(SierraLocalPath);
+        // Standard-Ausschnitt: zusammenhängender, dicht gehandelter Abschnitt dieser lokalen Datei
+        // (MESM26 vor Verfall; der Dateianfang ist ein dünn gehandelter Fern-Kontrakt).
         list.Add(new DataSourceDef("sierra-mesm26", "sierra-aggregated",
             "Sierra lokal (MESM26) → Zeitkerzen aus Last-Preisen", sierra,
             sierra ? "Aggregiert echte Handelskerzen (Last). Randkerzen werden ausgeschlossen."
-                   : "Lokale Sierra-Datei nicht gefunden."));
+                   : "Lokale Sierra-Datei nicht gefunden.",
+            DefaultFromUtc: sierra ? SierraDefaultFromUtc : null,
+            DefaultMaxRows: sierra ? SierraDefaultMaxRows : null));
 
         var ohlcDir = Path.Combine(_repoRoot, "samples", "ohlc");
         if (Directory.Exists(ohlcDir))
@@ -129,6 +154,52 @@ public sealed class BacktestApiService
                     "OHLC-CSV: " + Path.GetFileName(f), true, null));
         return list;
     }
+
+    /// <summary>Standard-Startzeitpunkt für das erste Laden der lokalen Sierra-Datei (UTC).</summary>
+    public const string SierraDefaultFromUtc = "2026-06-12T13:30:00Z";
+
+    /// <summary>Standard-Obergrenze an Sierra-Rohzeilen für das erste Laden (begrenzt Dauer/Umfang).</summary>
+    public const long SierraDefaultMaxRows = 1_500_000;
+
+    /// <summary>
+    /// Lädt nur die OHLC-Kerzen (ohne Strategielauf, ohne Trades/Kennzahlen) — für „Daten laden" und das
+    /// Bar-Replay. Gleiche Ladelogik wie der Backtest (<see cref="LoadCandles"/>), keine erfundenen Werte.
+    /// </summary>
+    public Task<BacktestDataResponse> LoadDataAsync(BacktestRunRequest req, CancellationToken ct = default)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            ct.ThrowIfCancellationRequested();
+            var (candles, lead, trail, issues, source, tf) = LoadCandles(req, req.Symbol);
+            if (candles.Count == 0)
+                return Task.FromResult(new BacktestDataResponse
+                {
+                    Ok = false, Error = "Keine gültigen OHLC-Bars im gewählten Zeitraum.", DataIssues = issues, ElapsedMs = sw.ElapsedMilliseconds
+                });
+
+            var info = new LoadedDataInfo(source, req.Symbol, tf, "UTC",
+                candles[0].OpenTime, candles[^1].CloseTime, candles.Count, lead, trail);
+            var dto = candles.Select(c => new CandleDto(
+                c.OpenTime.ToUnixTimeMilliseconds(), c.Open, c.High, c.Low, c.Close, c.Volume)).ToList();
+            return Task.FromResult(new BacktestDataResponse
+            {
+                Ok = true, Data = info, Candles = dto, DataIssues = issues, ElapsedMs = sw.ElapsedMilliseconds
+            });
+        }
+        catch (Exception ex)
+        {
+            return Task.FromResult(new BacktestDataResponse { Ok = false, Error = ex.Message, ElapsedMs = sw.ElapsedMilliseconds });
+        }
+    }
+
+    private static DateTimeOffset? ParseUtc(string? s) =>
+        !string.IsNullOrWhiteSpace(s) &&
+        DateTimeOffset.TryParse(s, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AllowWhiteSpaces,
+            out var v)
+            ? v.ToUniversalTime()
+            : null;
 
     public async Task<BacktestRunResponse> RunAsync(BacktestRunRequest req, CancellationToken ct = default)
     {
@@ -226,13 +297,20 @@ public sealed class BacktestApiService
         LoadCandles(BacktestRunRequest req, string symbol)
     {
         int tf = req.TimeframeMinutes <= 0 ? 5 : req.TimeframeMinutes;
+        DateTimeOffset? fromUtc = ParseUtc(req.FromUtc), toUtc = ParseUtc(req.ToUtc);
+        if (fromUtc is DateTimeOffset f0 && toUtc is DateTimeOffset t0 && t0 <= f0)
+            throw new ArgumentException("Zeitraum ungültig: 'Bis' muss nach 'Von' liegen.");
 
         if (req.DataSourceId.StartsWith("csv:", StringComparison.Ordinal) ||
             (req.DataSourceId == "csv" && !string.IsNullOrWhiteSpace(req.Path)))
         {
             string path = req.Path ?? Path.Combine(_repoRoot, "samples", "ohlc", req.DataSourceId.Substring(4));
             var imp = new OhlcCsvImporter().ImportFile(path, symbol, tf);
-            return (imp.Candles.ToList(), imp.LeadingPartial, imp.TrailingPartial, imp.Issues,
+            // Zeitraum-Filter auf vollständige CSV-Bars (keine Teilkerzen durch den Filter).
+            var csvBars = imp.Candles
+                .Where(c => (fromUtc is null || c.OpenTime >= fromUtc) && (toUtc is null || c.OpenTime < toUtc))
+                .ToList();
+            return (csvBars, imp.LeadingPartial, imp.TrailingPartial, imp.Issues,
                 "OHLC-CSV: " + Path.GetFileName(path), imp.TimeframeMinutes);
         }
 
@@ -241,19 +319,12 @@ public sealed class BacktestApiService
             throw new FileNotFoundException($"Lokale Sierra-Datei nicht gefunden: {SierraLocalPath}");
 
         var builder = new SierraOrderFlowBarBuilder();
-        SierraAggregationResult agg;
-        if (!string.IsNullOrWhiteSpace(req.FromUtc) &&
-            DateTimeOffset.TryParse(req.FromUtc, System.Globalization.CultureInfo.InvariantCulture,
-                System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AllowWhiteSpaces,
-                out var from))
-        {
-            agg = builder.BuildFileFrom(SierraLocalPath, symbol, TimeSpan.FromMinutes(tf), from.ToUniversalTime(),
-                toUtc: null, maxRows: req.MaxRows);
-        }
-        else
-        {
-            agg = builder.BuildFile(SierraLocalPath, symbol, TimeSpan.FromMinutes(tf), maxRows: req.MaxRows);
-        }
+        SierraAggregationResult agg = fromUtc is DateTimeOffset from
+            ? builder.BuildFileFrom(SierraLocalPath, symbol, TimeSpan.FromMinutes(tf), from,
+                toUtc: toUtc, maxRows: req.MaxRows)
+            // Footprint wird für reine OHLC-Kerzen nicht benötigt (nur schneller, OHLC unverändert).
+            : builder.BuildFile(SierraLocalPath, symbol, TimeSpan.FromMinutes(tf), maxRows: req.MaxRows,
+                toUtc: toUtc, buildFootprint: false);
 
         var candles = agg.Bars.Select(b => new Candle
         {
@@ -265,7 +336,8 @@ public sealed class BacktestApiService
         }).ToList();
 
         bool lead = agg.FirstTickTime is DateTimeOffset ft && agg.FirstBarTime is DateTimeOffset fb && ft > fb;
-        bool trail = agg.Truncated;
+        // Teilkerze am Ende: Zeilenlimit erreicht ODER 'Bis' schneidet mitten in eine Kerze.
+        bool trail = agg.Truncated || (toUtc is DateTimeOffset tEnd && candles.Count > 0 && candles[^1].CloseTime > tEnd);
         string source = $"Sierra lokal (Last-Aggregation, {tf}-Min)";
         return (candles, lead, trail, Array.Empty<OhlcImportIssue>(), source, tf);
     }
