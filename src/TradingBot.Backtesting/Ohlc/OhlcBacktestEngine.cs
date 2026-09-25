@@ -173,12 +173,18 @@ public sealed class OhlcBacktestEngine
                 pending = sig.Direction;
             }
 
+            // Mark-to-Market der zum Bar-Schluss offenen Position (nur Anzeige, nicht in Equity).
+            decimal openPnl = side == PositionSide.Flat
+                ? 0m
+                : (bar.Close - entryPrice) * (side == PositionSide.Long ? 1m : -1m) * pointValue * qty;
+
             equity.Add(new OhlcEquityPoint
             {
                 BarIndex = i,
                 Time = bar.CloseTime,
                 RealizedNetPnL = realized,
-                Equity = config.InitialBalance + realized
+                Equity = config.InitialBalance + realized,
+                OpenPnL = openPnl
             });
         }
 
@@ -189,7 +195,7 @@ public sealed class OhlcBacktestEngine
             decimal exitPx = side == PositionSide.Long ? last.Close - slip : last.Close + slip;
             CloseExit(exitPx, end, OhlcExitReason.EndOfData, last.CloseTime, ambiguous: false, market: true);
             if (equity.Count > 0)
-                equity[^1] = equity[^1] with { RealizedNetPnL = realized, Equity = config.InitialBalance + realized };
+                equity[^1] = equity[^1] with { RealizedNetPnL = realized, Equity = config.InitialBalance + realized, OpenPnL = 0m };
         }
 
         var stats = BacktestStatisticsCalculator.Compute(
@@ -257,6 +263,8 @@ public sealed class OhlcBacktestEngine
                 Fees = fees,
                 NetPnL = net,
                 ExitReason = reason,
+                StopLossPrice = sl,
+                TakeProfitPrice = tp,
                 Ambiguous = ambiguous
             });
             realized += net;

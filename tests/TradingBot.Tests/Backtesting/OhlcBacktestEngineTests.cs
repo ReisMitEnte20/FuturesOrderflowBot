@@ -169,6 +169,73 @@ public class OhlcBacktestEngineTests
     }
 
     [Fact]
+    public void Trade_records_resting_sl_tp_levels_and_bar_indices_for_chart()
+    {
+        // Long, Entry am OPEN von Bar 2 = 100 (kein Slippage), SL 5 Ticks -> 95, TP 8 Ticks -> 108.
+        // Kurs bleibt zwischen 99 und 101 -> kein SL/TP-Treffer, Exit am Ende (EndOfData).
+        var bars = new[]
+        {
+            C(0, 100, 101, 99, 100),
+            C(1, 100, 101, 99, 100),   // Long-Signal
+            C(2, 100, 101, 99, 100),   // Entry am OPEN
+            C(3, 100, 101, 99, 100),
+            C(4, 100, 101, 99, 100),   // Ende -> Exit am Close
+        };
+        var s = new ScriptedStrategy(new() { [1] = SignalDirection.Long });
+        var t = Run(bars, s, new OhlcBacktestConfig { Quantity = 1, StopLossTicks = 5, TakeProfitTicks = 8 }).Trades.Single();
+
+        t.EntryPrice.Should().Be(100m);
+        t.EntryBarIndex.Should().Be(2, "das Signal aus Bar 1 wird am OPEN von Bar 2 ausgeführt");
+        t.ExitBarIndex.Should().Be(4);
+        t.ExitReason.Should().Be(OhlcExitReason.EndOfData);
+        t.StopLossPrice.Should().Be(95m, "SL = Entry - 5 Ticks (Chart zeichnet dieses gespeicherte Level)");
+        t.TakeProfitPrice.Should().Be(108m, "TP = Entry + 8 Ticks");
+    }
+
+    [Fact]
+    public void Realized_equity_per_bar_contains_only_trades_closed_up_to_that_bar()
+    {
+        // Grundlage für das Bar-Replay ohne Zukunftsdaten: der realisierte NetPnL eines Equity-Punkts
+        // entspricht exakt der Summe der Trades mit ExitBarIndex <= BarIndex.
+        var bars = new[]
+        {
+            C(0, 100, 101, 99, 100), C(1, 100, 101, 99, 100),   // Long-Signal an Bar 1
+            C(2, 100, 104, 99, 103), C(3, 103, 110, 102, 108),  // TP 105 an Bar 3
+            C(4, 108, 109, 107, 108), C(5, 108, 109, 107, 108), // Short-Signal an Bar 5
+            C(6, 108, 109, 100, 101), C(7, 101, 102, 100, 101), // Short Entry 108, TP 103 an Bar 6
+        };
+        var s = new ScriptedStrategy(new() { [1] = SignalDirection.Long, [5] = SignalDirection.Short });
+        var r = Run(bars, s, new OhlcBacktestConfig { Quantity = 1, StopLossTicks = 20, TakeProfitTicks = 5 },
+            fee: Fee(commission: 0.5m, slipTicks: 0m));
+
+        r.Trades.Should().HaveCount(2);
+        foreach (var p in r.Equity)
+        {
+            decimal expected = r.Trades.Where(t => t.ExitBarIndex <= p.BarIndex).Sum(t => t.NetPnL);
+            p.RealizedNetPnL.Should().Be(expected, $"Bar {p.BarIndex}: nur bis dahin geschlossene Trades");
+        }
+    }
+
+    [Fact]
+    public void Equity_points_report_mark_to_market_of_open_position_without_changing_equity()
+    {
+        // Long Entry am OPEN von Bar 2 = 100; Close Bar 2 = 103 -> OpenPnL +3; Close Bar 3 = 98 -> -2.
+        var bars = new[]
+        {
+            C(0, 100, 101, 99, 100), C(1, 100, 101, 99, 100),
+            C(2, 100, 104, 99, 103), C(3, 103, 103, 97, 98), C(4, 98, 99, 97, 98),
+        };
+        var s = new ScriptedStrategy(new() { [1] = SignalDirection.Long });
+        var r = Run(bars, s, new OhlcBacktestConfig { Quantity = 1, StopLossTicks = 50, TakeProfitTicks = 50 });
+
+        r.Equity.Single(p => p.BarIndex == 1).OpenPnL.Should().Be(0m, "vor dem Entry flat");
+        r.Equity.Single(p => p.BarIndex == 2).OpenPnL.Should().Be(3m);
+        r.Equity.Single(p => p.BarIndex == 3).OpenPnL.Should().Be(-2m);
+        r.Equity.Single(p => p.BarIndex == 3).Equity.Should().Be(10_000m, "offene Verluste fließen nicht in die realisierte Equity");
+        r.Equity[^1].OpenPnL.Should().Be(0m, "am Datenende zwangsgeschlossen (EndOfData)");
+    }
+
+    [Fact]
     public void Opposite_signal_reverses_position_at_next_open_before_intrabar_stops()
     {
         // Long ab Bar2-Open. Bei Bar3-Schluss Gegensignal (Short) -> am Bar4-OPEN wird der Long geschlossen

@@ -37,6 +37,13 @@ public sealed record OhlcBacktestTrade
 
     public OhlcExitReason ExitReason { get; init; }
 
+    /// <summary>Ruhendes Stop-Loss-Level dieses Trades (aus dem Entry-Preis berechnet). Kein geratener
+    /// Wert — genau das Level, gegen das die Engine geprüft hat. Für die Chart-Anzeige.</summary>
+    public decimal StopLossPrice { get; init; }
+
+    /// <summary>Ruhendes Take-Profit-Level dieses Trades (aus dem Entry-Preis berechnet).</summary>
+    public decimal TakeProfitPrice { get; init; }
+
     /// <summary>SL und TP lagen in derselben Kerze und die Reihenfolge ist unbekannt -&gt; konservativ
     /// als Stop-Loss gewertet und hier markiert.</summary>
     public bool Ambiguous { get; init; }
@@ -91,6 +98,11 @@ public sealed record OhlcEquityPoint
     public DateTimeOffset Time { get; init; }
     public decimal RealizedNetPnL { get; init; }
     public decimal Equity { get; init; }   // InitialBalance + RealizedNetPnL
+
+    /// <summary>Unrealisierter Brutto-PnL einer zum Schluss dieses Bars noch offenen Position
+    /// (Mark-to-Market zum Close, ohne Exit-Gebühren/-Slippage). Rein informativ für das Bar-Replay;
+    /// fließt NICHT in Equity/Drawdown ein. 0, wenn flat.</summary>
+    public decimal OpenPnL { get; init; }
 }
 
 /// <summary>Herkunft und Eckdaten des verwendeten OHLC-Datensatzes (im Ergebnis festgehalten).</summary>
