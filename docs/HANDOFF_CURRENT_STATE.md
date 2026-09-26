@@ -13,10 +13,9 @@
   - `a8f053e2` feat(backtesting): SL/TP je Trade und Mark-to-Market je Bar
   - `a10581b5` docs(claude): Arbeitsablauf pro Prompt (Hindsight + CodeMunch)
   - `00a85e1d` / `de2d8fee` / `f938cc6c` OHLC-Engine, Backend-API, erste React-Backtest-Seite · `559f48cb` Merge `origin/dashboard` (Kollege)
-  - `54adb9e1` docs(handoff): diese Datei
-- **UNCOMMITTED (fachliche OHLC-Prüfung, 2026-09-26, kein Commit):** Gap-Stop-Slippage in `OhlcBacktestEngine.cs`
-  (Long-Exit = Open − Slippage, Short-Exit = Open + Slippage; TP-/Limit-Grenzen unverändert) + neue Datei
-  `tests/TradingBot.Tests/Backtesting/OhlcEngineReferenceCasesTests.cs` (unabhängige Referenzfälle).
+  - `54adb9e1` docs(handoff): Übergabe React-Dashboard
+  - `c32ab819` feat(backtesting): Gap-Stop-Slippage (Long Open−Slip, Short Open+Slip; TP/Limit unverändert) + unabhängige Referenztests `OhlcEngineReferenceCasesTests.cs`
+  - `32e56457` docs(handoff): diese Datei (fachliche OHLC-Prüfrunde)
 
 ## Aktuelle Nutzerentscheidung (Vorrang vor älteren Notizen)
 
