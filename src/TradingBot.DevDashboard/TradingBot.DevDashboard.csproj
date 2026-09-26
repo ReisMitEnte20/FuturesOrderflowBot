@@ -9,6 +9,9 @@
     <ProjectReference Include="..\TradingBot.Research\TradingBot.Research.csproj" />
     <!-- OHLC-Backtest-Engine (Simulation-only). Referenziert NICHT TradingBot.Execution. -->
     <ProjectReference Include="..\TradingBot.Backtesting\TradingBot.Backtesting.csproj" />
+    <!-- Quant-Research-Schicht (Kennzahlen, Validierung, Monte Carlo, Overfitting).
+         Reine Auswertung, referenziert NICHT TradingBot.Execution. -->
+    <ProjectReference Include="..\TradingBot.Quant\TradingBot.Quant.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

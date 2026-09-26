@@ -1,0 +1,982 @@
+using TradingBot.Backtesting.Ohlc;
+using TradingBot.Core.Interfaces;
+using TradingBot.Domain.Models;
+using TradingBot.Quant.Benchmark;
+using TradingBot.Quant.DataQuality;
+using TradingBot.Quant.Metrics;
+using TradingBot.Quant.MonteCarlo;
+using TradingBot.Quant.Overfitting;
+using TradingBot.Quant.Registry;
+using TradingBot.Quant.Research;
+using TradingBot.Quant.Robustness;
+using TradingBot.Quant.Series;
+using TradingBot.Quant.Statistics;
+using TradingBot.Quant.Validation;
+
+namespace TradingBot.DevDashboard.Services.Quant;
+
+/// <summary>
+/// Bindeglied zwischen der bestehenden OHLC-Backtest-Engine und der Quant-Auswertung.
+/// Alle Berechnungen laufen im Backend; das Dashboard stellt ausschließlich echte Ergebnisse dar.
+///
+/// Es werden keine Broker-Verbindungen aufgebaut und keine Orders erzeugt — die Engine bleibt
+/// reine Simulation.
+/// </summary>
+public sealed class QuantApiService
+{
+    private readonly BacktestApiService _backtest;
+    private readonly string _repoRoot;
+    private readonly IExperimentStore _store;
+    private readonly JsonPaperResearchStore _papers;
+    private readonly IBenchmarkDataSource _benchmarks;
+    private readonly string _benchmarkDir;
+    private readonly string _registryDir;
+
+    public QuantApiService(BacktestApiService backtest, string repoRoot)
+    {
+        _backtest = backtest ?? throw new ArgumentNullException(nameof(backtest));
+        _repoRoot = repoRoot;
+        _registryDir = Path.Combine(repoRoot, "artifacts", "quant", "registry");
+        _benchmarkDir = Path.Combine(repoRoot, "data", "benchmarks");
+        _store = new JsonExperimentStore(_registryDir);
+        _papers = new JsonPaperResearchStore(Path.Combine(repoRoot, "artifacts", "quant", "papers"));
+        // assumeTotalReturn bleibt false: ob eine Datei eine Total-Return-Reihe ist, muss der
+        // Nutzer belegen. Solange das nicht bestätigt ist, warnt der Vergleich ausdrücklich.
+        _benchmarks = new CsvBenchmarkDataSource(_benchmarkDir);
+    }
+
+    public IExperimentStore Store => _store;
+    public JsonPaperResearchStore Papers => _papers;
+
+    // =========================================================================================
+    // Status
+    // =========================================================================================
+
+    public async Task<QuantStatusDto> GetStatusAsync(bool rithmicEnabled, CancellationToken ct = default)
+    {
+        var campaigns = await _store.ListCampaignsAsync(ct);
+        var trials = await _store.ListTrialsAsync(null, ct);
+        var benchmarks = await _benchmarks.ListAsync(ct);
+        var papers = await _papers.ListAsync(ct);
+        return new QuantStatusDto(_registryDir, campaigns.Count, trials.Count,
+            benchmarks, _benchmarks.SourceName, _benchmarkDir, papers.Count, CodeVersion(), rithmicEnabled);
+    }
+
+    /// <summary>Aktueller Git-Commit als Codestand des Versuchs. "unknown", wenn nicht ermittelbar.</summary>
+    public string CodeVersion()
+    {
+        try
+        {
+            var head = Path.Combine(_repoRoot, ".git", "HEAD");
+            if (!File.Exists(head)) return "unknown";
+            var content = File.ReadAllText(head).Trim();
+            if (!content.StartsWith("ref:", StringComparison.Ordinal)) return content[..Math.Min(12, content.Length)];
+            var refPath = Path.Combine(_repoRoot, ".git", content[4..].Trim().Replace('/', Path.DirectorySeparatorChar));
+            if (File.Exists(refPath)) return File.ReadAllText(refPath).Trim()[..12];
+            var packed = Path.Combine(_repoRoot, ".git", "packed-refs");
+            if (!File.Exists(packed)) return "unknown";
+            var name = content[4..].Trim();
+            foreach (var line in File.ReadLines(packed))
+                if (line.EndsWith(" " + name, StringComparison.Ordinal)) return line[..12];
+            return "unknown";
+        }
+        catch (IOException) { return "unknown"; }
+        catch (UnauthorizedAccessException) { return "unknown"; }
+    }
+
+    // =========================================================================================
+    // A + B — Einzelauswertung mit Kennzahlen und Benchmark
+    // =========================================================================================
+
+    public async Task<QuantAnalyzeResponse> AnalyzeAsync(QuantAnalyzeRequest request,
+        IProgress<double>? progress = null, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        try
+        {
+            progress?.Report(0.05);
+            var ctx = await _backtest.LoadContextAsync(request.Run, ct);
+            if (ctx.Candles.Count == 0)
+                return new QuantAnalyzeResponse { Ok = false, Error = "Keine gültigen OHLC-Bars im gewählten Zeitraum." };
+
+            var quality = QuantDataQualityChecker.Check(ctx.Candles, ctx.Instrument.Symbol, ctx.TimeframeMinutes,
+                ctx.LeadingPartial, ctx.TrailingPartial);
+
+            progress?.Report(0.25);
+            var strategy = _backtest.CreateStrategy(request.Run, ctx.Instrument);
+            var result = _backtest.RunEngine(ctx, strategy, ConfigFrom(request.Run));
+
+            var spec = new QuantContractSpec(ctx.Instrument.TickSize, ctx.Instrument.PointValue, ctx.Instrument.Currency);
+            var frequency = ParseFrequency(request.Options.Frequency);
+            var curve = ReturnSeriesBuilder.BuildEquityCurve(result, spec, frequency);
+
+            progress?.Report(0.5);
+            var realizedBuild = ReturnSeriesBuilder.ToReturnSeries(curve, EquityBasis.Realized);
+            var totalBuild = ReturnSeriesBuilder.ToReturnSeries(curve, EquityBasis.Total);
+            var options = MetricOptions(request.Options);
+
+            var mRealized = PerformanceMetricsCalculator.Compute(realizedBuild.Series, options);
+            var mTotal = PerformanceMetricsCalculator.Compute(totalBuild.Series, options);
+            var activity = TradeActivityMetricsCalculator.Compute(result.Trades, curve, spec);
+
+            var notes = new List<string>();
+            notes.AddRange(realizedBuild.Notes);
+            notes.AddRange(totalBuild.Notes);
+            notes.AddRange(mTotal.Notes);
+            if (result.Status != Backtesting.BacktestRunStatus.Completed && result.Message is not null)
+                notes.Add(result.Message);
+
+            progress?.Report(0.7);
+            var rolling = totalBuild.Series.Count >= request.Options.RollingWindow
+                ? RollingMetrics.Compute(totalBuild.Series, Math.Max(2, request.Options.RollingWindow), mTotal.PeriodsPerYear)
+                : Array.Empty<RollingPoint>();
+            if (rolling.Count == 0)
+                notes.Add($"Rollierende Kennzahlen nicht berechenbar: weniger Perioden als das Fenster ({request.Options.RollingWindow}).");
+
+            var monthly = RollingMetrics.Monthly(totalBuild.Series);
+
+            // --- Benchmark (nur mit echten Daten) ---
+            QuantBenchmarkDto? benchmarkDto = null;
+            if (!string.IsNullOrWhiteSpace(request.BenchmarkId))
+            {
+                var bm = await _benchmarks.GetAsync(request.BenchmarkId!, curve.Start, curve.End, ct);
+                var cmp = BenchmarkComparer.Compare(totalBuild.Series, bm, new BenchmarkComparisonOptions
+                {
+                    AnnualizationBasis = options.AnnualizationBasis,
+                    FixedPeriodsPerYear = options.FixedPeriodsPerYear,
+                    RiskFreeAnnualRate = options.RiskFreeAnnualRate,
+                    StrategyIsFullyFunded = request.StrategyIsFullyFunded
+                });
+                benchmarkDto = ToDto(cmp);
+            }
+
+            progress?.Report(0.9);
+            var uwRealized = RollingMetrics.Underwater(curve.Points.Select(p => (double)p.RealizedEquity).ToList());
+            var uwTotal = RollingMetrics.Underwater(curve.Points.Select(p => (double)p.TotalEquity).ToList());
+            var curveDto = curve.Points.Select((p, i) => new QuantCurvePointDto(
+                p.Time.ToUnixTimeMilliseconds(), (double)p.RealizedEquity, (double)p.TotalEquity,
+                uwRealized[i], uwTotal[i], p.OpenQuantity)).ToList();
+
+            progress?.Report(1.0);
+            return new QuantAnalyzeResponse
+            {
+                Ok = true,
+                Symbol = ctx.Instrument.Symbol,
+                Source = ctx.Source,
+                TimeframeMinutes = ctx.TimeframeMinutes,
+                Currency = ctx.Instrument.Currency,
+                Frequency = frequency.ToString(),
+                PeriodsPerYear = mTotal.PeriodsPerYear,
+                AnnualizationNote = mTotal.AnnualizationNote,
+                RiskFreeNote = mTotal.RiskFreeNote,
+                MarkToMarketNote = curve.MarkToMarketNote,
+                Trades = result.Trades.Count,
+                InitialBalance = result.InitialBalance,
+                FinalEquityRealized = result.FinalEquity,
+                FinalEquityTotal = curve.Points.Count > 0 ? (double)curve.Points[^1].TotalEquity : (double)result.InitialBalance,
+                Curve = curveDto,
+                MetricsRealized = mRealized.Metrics.Select(QuantMetricDto.From).ToList(),
+                MetricsTotal = mTotal.Metrics.Select(QuantMetricDto.From).ToList(),
+                Activity = activity.Select(QuantMetricDto.From).ToList(),
+                DrawdownRealized = ToDto(mRealized.Drawdown),
+                DrawdownTotal = ToDto(mTotal.Drawdown),
+                Monthly = monthly.Select(m => new QuantPeriodReturnDto(m.Period, m.Start.ToUnixTimeMilliseconds(), m.Return, m.Observations)).ToList(),
+                Rolling = rolling.Select(r => new QuantRollingPointDto(r.Time.ToUnixTimeMilliseconds(), r.Sharpe, r.Volatility, r.Return)).ToList(),
+                RollingWindow = request.Options.RollingWindow,
+                DataQuality = QuantDataQualityDto.From(quality),
+                Benchmark = benchmarkDto,
+                Costs = CostDto(ctx, result),
+                Notes = notes
+            };
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            return new QuantAnalyzeResponse { Ok = false, Error = ex.Message };
+        }
+    }
+
+    // =========================================================================================
+    // C — Walk-forward
+    // =========================================================================================
+
+    public async Task<QuantWalkForwardResponse> WalkForwardAsync(QuantWalkForwardRequest request,
+        IProgress<double>? progress = null, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        try
+        {
+            if (request.Candidates.Count == 0)
+                return new QuantWalkForwardResponse { Ok = false, Error = "Keine Kandidaten angegeben." };
+            if (request.Campaign is null)
+                return new QuantWalkForwardResponse
+                {
+                    Ok = false,
+                    Error = "Ohne Kampagne keine Suche: Versuchsbudget, Suchraum und Auswahlkriterium müssen VOR der Kampagne gespeichert werden."
+                };
+
+            var ctx = await _backtest.LoadContextAsync(request.Run, ct);
+            if (ctx.Candles.Count == 0)
+                return new QuantWalkForwardResponse { Ok = false, Error = "Keine gültigen OHLC-Bars im gewählten Zeitraum." };
+
+            var barTimes = ctx.Candles.Select(c => c.CloseTime).ToList();
+            var plan = WalkForwardPlanner.Plan(barTimes, new WalkForwardOptions
+            {
+                Mode = string.Equals(request.Mode, "Anchored", StringComparison.OrdinalIgnoreCase)
+                    ? TradingBot.Quant.Validation.WalkForwardMode.Anchored
+                    : TradingBot.Quant.Validation.WalkForwardMode.Rolling,
+                TrainBars = request.TrainBars,
+                TestBars = request.TestBars,
+                StepBars = request.StepBars,
+                LabelSpanBars = request.LabelSpanBars,
+                EmbargoBars = request.EmbargoBars,
+                WarmupBars = request.WarmupBars,
+                HoldoutFraction = request.HoldoutFraction
+            });
+
+            if (plan.IsEmpty)
+                return new QuantWalkForwardResponse
+                {
+                    Ok = false,
+                    Error = "Kein vollständiges Walk-forward-Fenster möglich.",
+                    Notes = plan.Notes,
+                    TotalBars = plan.TotalBars
+                };
+
+            // Die Kampagne wird erst NACH der Aufteilung angelegt, damit der reservierte Holdout-Zeitraum
+            // im Register steht und dort tatsächlich geschützt werden kann.
+            var campaign = await EnsureCampaignAsync(request.Campaign, request.Candidates.Count,
+                plan.Holdout?.FromTime, plan.Holdout?.ToTime, ct);
+
+            var spec = new QuantContractSpec(ctx.Instrument.TickSize, ctx.Instrument.PointValue, ctx.Instrument.Currency);
+            var candidates = request.Candidates
+                .Select((p, i) => new ParameterCandidate(CandidateId(p, i), p))
+                .ToList();
+
+            var evalOptions = MetricOptions(request.Options);
+            var frequency = ParseFrequency(request.Options.Frequency);
+
+            Task<SegmentOutcome> Evaluate(IReadOnlyDictionary<string, string> parameters,
+                IReadOnlyList<DataSplit> segments, SplitRole role, CancellationToken token)
+            {
+                try
+                {
+                    var series = new List<ReturnSeries>();
+                    int trades = 0;
+                    decimal net = 0;
+                    foreach (var seg in segments)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        if (seg.Count < 2) continue;
+                        var slice = ctx.Candles.Skip(seg.Start).Take(seg.Count).ToList();
+                        var strat = _backtest.CreateStrategy(request.Run with { Params = new Dictionary<string, string>(parameters) }, ctx.Instrument);
+                        var res = _backtest.RunEngine(ctx, strat, ConfigFrom(request.Run), candlesOverride: slice);
+                        trades += res.Trades.Count;
+                        net += res.Statistics.NetProfit;
+                        var curve = ReturnSeriesBuilder.BuildEquityCurve(res, spec, frequency);
+                        var built = ReturnSeriesBuilder.ToReturnSeries(curve, EquityBasis.Total);
+                        if (built.Series.Count > 0) series.Add(built.Series);
+                    }
+
+                    if (series.Count == 0)
+                        return Task.FromResult(SegmentOutcome.Failed("Keine auswertbaren Perioden im Abschnitt."));
+
+                    var combined = Concat(series);
+                    var metrics = PerformanceMetricsCalculator.Compute(combined, evalOptions);
+                    double? selection = SelectionValue(request.SelectionMetric, metrics, net);
+
+                    return Task.FromResult(new SegmentOutcome
+                    {
+                        SelectionValue = selection,
+                        TradeCount = trades,
+                        Returns = combined,
+                        Metrics = metrics.Metrics.ToDictionary(m => m.Key, m => m.IsAvailable ? m.Value : null)
+                    });
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) { return Task.FromResult(SegmentOutcome.Failed(ex.Message)); }
+            }
+
+            var run = await WalkForwardRunner.RunAsync(plan, candidates, Evaluate, request.SelectionMetric,
+                SelectionDirection.HigherIsBetter, progress, ct);
+
+            // --- Versuche im Register erfassen (auch die schlechten) ---
+            int recorded = await RecordTrialsAsync(campaign, request, ctx, candidates, run, ct);
+
+            var oosMetrics = PerformanceMetricsCalculator.Compute(run.OutOfSampleReturns, evalOptions);
+
+            var candidateSharpes = new Dictionary<string, double?>();
+            foreach (var c in candidates)
+            {
+                var series = run.CandidateTestReturns.TryGetValue(c.Id, out var r) ? r : Array.Empty<double>();
+                candidateSharpes[c.Id] = CscvPbo.SharpePerPeriod(series);
+            }
+
+            return new QuantWalkForwardResponse
+            {
+                Ok = true,
+                SelectionMetric = request.SelectionMetric,
+                Mode = plan.Options.Mode.ToString(),
+                TotalBars = plan.TotalBars,
+                Folds = run.Folds.Select(f => new QuantFoldDto(
+                    f.Fold.Index,
+                    f.Fold.Train.Count > 0 ? f.Fold.Train[0].FromTime.ToUnixTimeMilliseconds() : 0,
+                    f.Fold.Train.Count > 0 ? f.Fold.Train[^1].ToTime.ToUnixTimeMilliseconds() : 0,
+                    f.Fold.TrainBars,
+                    f.Fold.Test.FromTime.ToUnixTimeMilliseconds(),
+                    f.Fold.Test.ToTime.ToUnixTimeMilliseconds(),
+                    f.Fold.Test.Count,
+                    f.Fold.PurgedBars, f.Fold.EmbargoBars,
+                    f.Selected?.Id, f.TrainSelectionValue, f.Test?.SelectionValue, f.Test?.TradeCount ?? 0, f.Note)).ToList(),
+                HoldoutFromT = plan.Holdout?.FromTime.ToUnixTimeMilliseconds(),
+                HoldoutToT = plan.Holdout?.ToTime.ToUnixTimeMilliseconds(),
+                HoldoutEvaluated = false,
+                OosT = run.OutOfSampleReturns.Timestamps.Select(t => t.ToUnixTimeMilliseconds()).ToList(),
+                OosEquity = run.OutOfSampleReturns.EquityLevels,
+                OosMetrics = oosMetrics.Metrics.Select(QuantMetricDto.From).ToList(),
+                CandidateSharpes = candidateSharpes,
+                CampaignId = campaign.Id,
+                TrialsRecorded = recorded,
+                Notes = run.Notes
+            };
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            return new QuantWalkForwardResponse { Ok = false, Error = ex.Message };
+        }
+    }
+
+    // =========================================================================================
+    // D — Monte Carlo
+    // =========================================================================================
+
+    public async Task<QuantMonteCarloResponse> MonteCarloAsync(QuantMonteCarloRequest request,
+        IProgress<double>? progress = null, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        try
+        {
+            var ctx = await _backtest.LoadContextAsync(request.Run, ct);
+            if (ctx.Candles.Count == 0)
+                return new QuantMonteCarloResponse { Ok = false, Error = "Keine gültigen OHLC-Bars im gewählten Zeitraum." };
+
+            var strategy = _backtest.CreateStrategy(request.Run, ctx.Instrument);
+            var result = _backtest.RunEngine(ctx, strategy, ConfigFrom(request.Run));
+            var spec = new QuantContractSpec(ctx.Instrument.TickSize, ctx.Instrument.PointValue, ctx.Instrument.Currency);
+            var frequency = ParseFrequency(request.Options.Frequency);
+            var curve = ReturnSeriesBuilder.BuildEquityCurve(result, spec, frequency);
+            var totalSeries = ReturnSeriesBuilder.ToReturnSeries(curve, EquityBasis.Total).Series;
+
+            bool useTrades = string.Equals(request.Source, "trades", StringComparison.OrdinalIgnoreCase);
+            var observations = useTrades
+                ? result.Trades.Select(t => (double)t.NetPnL).ToList()
+                : totalSeries.Returns.ToList();
+
+            var options = new MonteCarloOptions
+            {
+                Method = ParseMethod(request.Method),
+                Accumulation = useTrades ? AccumulationMode.Additive : AccumulationMode.Multiplicative,
+                Iterations = Math.Clamp(request.Iterations, 1, 100_000),
+                Seed = request.Seed,
+                BlockLength = request.BlockLength,
+                Horizon = request.Horizon,
+                InitialCapital = (double)result.InitialBalance,
+                CapitalBarrier = request.CapitalBarrier,
+                TimeLimit = TimeSpan.FromMinutes(5)
+            };
+
+            var notes = new List<string>();
+            MonteCarloResult mc;
+
+            if (!string.IsNullOrWhiteSpace(request.JointBenchmarkId) && !useTrades)
+            {
+                var bm = await _benchmarks.GetAsync(request.JointBenchmarkId!, curve.Start, curve.End, ct);
+                if (bm is null)
+                {
+                    notes.Add($"Benchmark '{request.JointBenchmarkId}' nicht gefunden — gemeinsames Resampling entfällt, " +
+                              "es wird ausschließlich die Strategiereihe simuliert.");
+                    mc = MonteCarloEngine.Run(observations, options, progress, ct);
+                }
+                else
+                {
+                    var bmSeries = BenchmarkComparer.ToReturnSeries(bm, frequency);
+                    var aligned = ReturnSeriesBuilder.AlignOnCommonTimestamps(new[] { totalSeries, bmSeries });
+                    if (aligned[0].Count < 2)
+                    {
+                        notes.Add("Zu wenige gemeinsame Perioden mit der Benchmark — gemeinsames Resampling entfällt.");
+                        mc = MonteCarloEngine.Run(observations, options, progress, ct);
+                    }
+                    else
+                    {
+                        var results = MonteCarloEngine.RunJointly(
+                            new IReadOnlyList<double>[] { aligned[0].Returns, aligned[1].Returns },
+                            new[] { "Strategie", bm.Name }, options, progress, ct);
+                        mc = results[0];
+                        notes.Add($"Gemeinsames Resampling mit '{bm.Name}' über {aligned[0].Count} gemeinsame Perioden — " +
+                                  "die Abhängigkeit zwischen Strategie und Benchmark bleibt dabei erhalten.");
+                    }
+                }
+            }
+            else
+            {
+                if (!string.IsNullOrWhiteSpace(request.JointBenchmarkId) && useTrades)
+                    notes.Add("Gemeinsames Resampling mit einer Benchmark ist nur auf zeitlich ausgerichteten " +
+                              "Renditereihen sinnvoll, nicht auf Trade-Beträgen — es wurde nicht durchgeführt.");
+                mc = MonteCarloEngine.Run(observations, options, progress, ct);
+            }
+
+            notes.AddRange(mc.Notes);
+
+            return new QuantMonteCarloResponse
+            {
+                Ok = true,
+                Method = MonteCarloEngine.MethodLabel(options.Method),
+                SourceLabel = useTrades
+                    ? $"NetPnL von {observations.Count} abgeschlossenen Trades (additiv)"
+                    : $"{observations.Count} {PerformanceMetricsCalculator.FrequencyLabel(frequency)}-Renditen (multiplikativ)",
+                Iterations = mc.CompletedIterations,
+                Seed = options.Seed,
+                BlockLength = mc.EffectiveBlockLength,
+                Horizon = mc.EffectiveHorizon,
+                Observations = mc.ObservationCount,
+                FinalCapital = ToDto(mc.FinalCapital),
+                MaxDrawdown = ToDto(mc.MaxDrawdown),
+                LosingStreak = ToDto(mc.LongestLosingStreak),
+                ShareOfRunsBelowStart = mc.ShareOfRunsBelowStart,
+                ShareOfRunsBreachingBarrier = mc.ShareOfRunsBreachingBarrier,
+                CapitalBarrier = request.CapitalBarrier,
+                Assumptions = mc.Assumptions,
+                Notes = notes
+            };
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            return new QuantMonteCarloResponse { Ok = false, Error = ex.Message };
+        }
+    }
+
+    // =========================================================================================
+    // D — Robustheit / Stress
+    // =========================================================================================
+
+    public async Task<QuantRobustnessResponse> RobustnessAsync(QuantRobustnessRequest request,
+        IProgress<double>? progress = null, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        try
+        {
+            var ctx = await _backtest.LoadContextAsync(request.Run, ct);
+            if (ctx.Candles.Count == 0)
+                return new QuantRobustnessResponse { Ok = false, Error = "Keine gültigen OHLC-Bars im gewählten Zeitraum." };
+
+            var spec = new QuantContractSpec(ctx.Instrument.TickSize, ctx.Instrument.PointValue, ctx.Instrument.Currency);
+            var frequency = ParseFrequency(request.Options.Frequency);
+            var evalOptions = MetricOptions(request.Options);
+
+            (double? value, int trades, string? error) Evaluate(StressScenario s)
+            {
+                try
+                {
+                    var fee = ctx.Fee with
+                    {
+                        CommissionPerSide = ctx.Fee.CommissionPerSide * (decimal)s.FeeMultiplier,
+                        ExchangeFeePerSide = ctx.Fee.ExchangeFeePerSide * (decimal)s.FeeMultiplier,
+                        ClearingFeePerSide = ctx.Fee.ClearingFeePerSide * (decimal)s.FeeMultiplier,
+                        RoutingFeePerSide = ctx.Fee.RoutingFeePerSide * (decimal)s.FeeMultiplier,
+                        NfaFeePerSide = ctx.Fee.NfaFeePerSide * (decimal)s.FeeMultiplier,
+                        OtherFeePerSide = ctx.Fee.OtherFeePerSide * (decimal)s.FeeMultiplier,
+                        EstimatedSlippageTicks = ctx.Fee.EstimatedSlippageTicks * (decimal)s.SlippageMultiplier
+                    };
+
+                    var runReq = s.Parameters.Count > 0
+                        ? request.Run with { Params = new Dictionary<string, string>(s.Parameters) }
+                        : request.Run;
+
+                    IStrategy strat = _backtest.CreateStrategy(runReq, ctx.Instrument);
+                    if (s.ExecutionDelayBars > 0) strat = new DelayedSignalStrategy(strat, s.ExecutionDelayBars);
+
+                    var res = _backtest.RunEngine(ctx, strat, ConfigFrom(runReq) with { SlippageTicksOverride = null }, feeOverride: fee);
+                    var curve = ReturnSeriesBuilder.BuildEquityCurve(res, spec, frequency);
+                    var series = ReturnSeriesBuilder.ToReturnSeries(curve, EquityBasis.Total).Series;
+                    if (series.Count < 2) return (null, res.Trades.Count, "Zu wenige Perioden für eine Kennzahl.");
+                    var metrics = PerformanceMetricsCalculator.Compute(series, evalOptions);
+                    return (SelectionValue(request.Metric, metrics, res.Statistics.NetProfit), res.Trades.Count, null);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) { return (null, 0, ex.Message); }
+            }
+
+            var baselineScenario = new StressScenario { Id = "baseline", Label = "Ausgangsfall", Dimension = StressDimension.Costs };
+            var (baseline, baseTrades, baseError) = Evaluate(baselineScenario);
+
+            var blocks = new List<QuantStressBlockDto>();
+            var notes = new List<string>();
+            if (baseError is not null) notes.Add($"Ausgangsfall nicht auswertbar: {baseError}");
+
+            var costScenarios = StressAnalysis.CostGrid(request.FeeMultipliers, request.SlippageMultipliers);
+            var delayScenarios = StressAnalysis.ExecutionDelays(request.ExecutionDelays);
+            var paramScenarios = StressAnalysis.ParameterNeighborhood(request.Run.Params ?? new Dictionary<string, string>(), request.ParameterOffsets);
+            int total = costScenarios.Count + delayScenarios.Count + paramScenarios.Count;
+            int done = 0;
+
+            foreach (var (dimension, scenarios) in new (StressDimension, IReadOnlyList<StressScenario>)[]
+                     {
+                         (StressDimension.Costs, costScenarios),
+                         (StressDimension.ExecutionDelay, delayScenarios),
+                         (StressDimension.ParameterNeighborhood, paramScenarios)
+                     })
+            {
+                var outcomes = new List<StressOutcome>();
+                foreach (var s in scenarios)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var (v, t, e) = Evaluate(s);
+                    outcomes.Add(new StressOutcome { Scenario = s, Value = v, TradeCount = t, Error = e });
+                    progress?.Report(++done / (double)total);
+                }
+                var summary = StressAnalysis.Summarize(request.Metric, dimension, outcomes, baseline);
+                blocks.Add(new QuantStressBlockDto(dimension.ToString(), request.Metric, baseline,
+                    summary.Worst, summary.ShareBelowBaseline, summary.RelativeDegradation,
+                    outcomes.Select(o => new QuantStressCellDto(o.Scenario.Id, o.Scenario.Label,
+                        o.Scenario.FeeMultiplier, o.Scenario.SlippageMultiplier, o.Scenario.ExecutionDelayBars,
+                        o.Value, o.TradeCount, o.Error)).ToList(),
+                    summary.Notes));
+            }
+
+            _ = baseTrades;
+            return new QuantRobustnessResponse
+            {
+                Ok = true, Metric = request.Metric, Baseline = baseline, Blocks = blocks, Notes = notes
+            };
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            return new QuantRobustnessResponse { Ok = false, Error = ex.Message };
+        }
+    }
+
+    // =========================================================================================
+    // E — PBO / PSR / DSR
+    // =========================================================================================
+
+    public async Task<QuantOverfittingResponse> OverfittingAsync(QuantOverfittingRequest request,
+        IProgress<double>? progress = null, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        try
+        {
+            var wf = await WalkForwardAsync(request.WalkForward, progress, ct);
+            if (!wf.Ok)
+                return new QuantOverfittingResponse { Ok = false, Error = wf.Error, WalkForward = wf };
+
+            // Renditematrix aus den Out-of-Sample-Reihen ALLER Kandidaten.
+            var ctx = await _backtest.LoadContextAsync(request.WalkForward.Run, ct);
+            var candidateIds = wf.CandidateSharpes.Keys.ToList();
+
+            var wfRun = await RebuildCandidateMatrixAsync(request.WalkForward, ctx, ct);
+            var notes = new List<string>(wf.Notes);
+
+            QuantOverfittingResponse WithoutPbo(string reason) => new()
+            {
+                Ok = true, WalkForward = wf, PboUnavailableReason = reason, Notes = notes,
+                Candidates = candidateIds.Count
+            };
+
+            if (wfRun.Count == 0) return WithoutPbo("Keine Kandidaten-Renditereihen verfügbar.");
+
+            int rows = wfRun.Min(c => c.Value.Count);
+            if (rows < 4) return WithoutPbo($"Nur {rows} gemeinsame Out-of-Sample-Perioden je Kandidat — zu wenig für CSCV.");
+
+            var ordered = wfRun.OrderBy(k => k.Key, StringComparer.Ordinal).ToList();
+            var matrix = new List<IReadOnlyList<double>>(rows);
+            for (int i = 0; i < rows; i++)
+                matrix.Add(ordered.Select(c => c.Value[i]).ToArray());
+
+            var pbo = CscvPbo.Compute(matrix, request.Blocks, ct: ct);
+
+            // --- PSR / DSR auf der ausgewählten Out-of-Sample-Reihe ---
+            var selectedReturns = new List<double>();
+            for (int i = 1; i < wf.OosEquity.Count; i++)
+                if (wf.OosEquity[i - 1] > 0) selectedReturns.Add(wf.OosEquity[i] / wf.OosEquity[i - 1] - 1.0);
+            if (wf.OosEquity.Count > 0) selectedReturns.Insert(0, wf.OosEquity[0] - 1.0);
+
+            var psr = ProbabilisticSharpe.Compute(selectedReturns);
+
+            var trialSharpes = wf.CandidateSharpes.Values.Where(v => v.HasValue).Select(v => v!.Value).ToList();
+            double? effective = null;
+            string? rationale = null;
+            if (request.EstimateEffectiveTrials)
+            {
+                var (eff, why) = ProbabilisticSharpe.EstimateEffectiveTrials(ordered.Select(o => (IReadOnlyList<double>)o.Value).ToList());
+                effective = eff;
+                rationale = why;
+            }
+            var dsr = ProbabilisticSharpe.ComputeDeflated(selectedReturns, trialSharpes, effective, rationale);
+
+            if (trialSharpes.Count < wf.CandidateSharpes.Count)
+                notes.Add($"{wf.CandidateSharpes.Count - trialSharpes.Count} Kandidat(en) ohne gültigen Sharpe gehen nicht in DSR ein.");
+
+            return new QuantOverfittingResponse
+            {
+                Ok = true,
+                Pbo = pbo.Pbo,
+                PboUnavailableReason = pbo.UnavailableReason,
+                Candidates = pbo.Candidates,
+                Blocks = pbo.Blocks,
+                Combinations = pbo.Combinations,
+                Observations = pbo.Observations,
+                ShareNegativeOutOfSample = pbo.ShareNegativeOutOfSample,
+                Pairs = pbo.Pairs.Select(p => new QuantPboPairDto(p.InSample, p.OutOfSample)).ToList(),
+                Logits = pbo.Trials.Select(t => t.Logit).ToList(),
+                PboDefinitions = pbo.Definitions,
+                PboNotes = pbo.Notes,
+                Psr = psr.Psr,
+                ObservedSharpePerPeriod = psr.ObservedSharpePerPeriod,
+                Skewness = psr.Skewness,
+                Kurtosis = psr.Kurtosis,
+                MinimumTrackRecordLength = psr.MinimumTrackRecordLength,
+                PsrUnavailableReason = psr.UnavailableReason,
+                PsrDefinitions = psr.Definitions,
+                Dsr = dsr.Dsr,
+                ExpectedMaxSharpeUnderNull = dsr.ExpectedMaxSharpeUnderNull,
+                ActualTrials = dsr.ActualTrials,
+                EffectiveTrials = dsr.EffectiveTrials,
+                EffectiveTrialsRationale = dsr.EffectiveTrialsRationale,
+                DsrUnavailableReason = dsr.UnavailableReason,
+                DsrDefinitions = dsr.Definitions,
+                DsrWarnings = dsr.Warnings,
+                WalkForward = wf,
+                Notes = notes
+            };
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            return new QuantOverfittingResponse { Ok = false, Error = ex.Message };
+        }
+    }
+
+    /// <summary>
+    /// Baut die Kandidaten-Renditematrix erneut auf — dieselbe Aufteilung, dieselben Kandidaten.
+    /// Deterministisch, deshalb identisch zum Walk-forward-Lauf.
+    /// </summary>
+    private async Task<Dictionary<string, IReadOnlyList<double>>> RebuildCandidateMatrixAsync(
+        QuantWalkForwardRequest request, BacktestApiService.RunContext ctx, CancellationToken ct)
+    {
+        var spec = new QuantContractSpec(ctx.Instrument.TickSize, ctx.Instrument.PointValue, ctx.Instrument.Currency);
+        var frequency = ParseFrequency(request.Options.Frequency);
+        var barTimes = ctx.Candles.Select(c => c.CloseTime).ToList();
+        var plan = WalkForwardPlanner.Plan(barTimes, new WalkForwardOptions
+        {
+            Mode = string.Equals(request.Mode, "Anchored", StringComparison.OrdinalIgnoreCase)
+                ? TradingBot.Quant.Validation.WalkForwardMode.Anchored
+                : TradingBot.Quant.Validation.WalkForwardMode.Rolling,
+            TrainBars = request.TrainBars,
+            TestBars = request.TestBars,
+            StepBars = request.StepBars,
+            LabelSpanBars = request.LabelSpanBars,
+            EmbargoBars = request.EmbargoBars,
+            WarmupBars = request.WarmupBars,
+            HoldoutFraction = request.HoldoutFraction
+        });
+
+        var map = new Dictionary<string, List<double>>();
+        for (int i = 0; i < request.Candidates.Count; i++)
+            map[CandidateId(request.Candidates[i], i)] = new List<double>();
+
+        foreach (var fold in plan.Folds)
+        {
+            ct.ThrowIfCancellationRequested();
+            var slice = ctx.Candles.Skip(fold.Test.Start).Take(fold.Test.Count).ToList();
+            for (int i = 0; i < request.Candidates.Count; i++)
+            {
+                var id = CandidateId(request.Candidates[i], i);
+                var strat = _backtest.CreateStrategy(request.Run with { Params = new Dictionary<string, string>(request.Candidates[i]) }, ctx.Instrument);
+                var res = _backtest.RunEngine(ctx, strat, ConfigFrom(request.Run), candlesOverride: slice);
+                var curve = ReturnSeriesBuilder.BuildEquityCurve(res, spec, frequency);
+                map[id].AddRange(ReturnSeriesBuilder.ToReturnSeries(curve, EquityBasis.Total).Series.Returns);
+            }
+        }
+
+        // Auf gleiche Länge kürzen (nur vollständig vergleichbare Perioden gehen in CSCV ein).
+        int min = map.Count == 0 ? 0 : map.Min(kv => kv.Value.Count);
+        return map.ToDictionary(kv => kv.Key, kv => (IReadOnlyList<double>)kv.Value.Take(min).ToList());
+    }
+
+    // =========================================================================================
+    // Register / Kampagnen
+    // =========================================================================================
+
+    private async Task<CampaignRecord> EnsureCampaignAsync(CampaignInput input, int candidateCount,
+        DateTimeOffset? holdoutFrom, DateTimeOffset? holdoutTo, CancellationToken ct)
+    {
+        var existing = await _store.GetCampaignAsync(input.Id, ct);
+        if (existing is not null) return existing;
+
+        return await _store.CreateCampaignAsync(new CampaignRecord
+        {
+            Id = input.Id,
+            Name = string.IsNullOrWhiteSpace(input.Name) ? input.Id : input.Name,
+            Hypothesis = string.IsNullOrWhiteSpace(input.Hypothesis)
+                ? "Nicht angegeben — bitte vor der nächsten Kampagne nachtragen."
+                : input.Hypothesis,
+            SearchSpace = string.IsNullOrWhiteSpace(input.SearchSpace)
+                ? $"{candidateCount} explizit übergebene Parametersätze"
+                : input.SearchSpace,
+            SelectionMetric = input.SelectionMetric,
+            TrialBudget = input.TrialBudget > 0 ? input.TrialBudget : candidateCount,
+            HoldoutFrom = holdoutFrom,
+            HoldoutTo = holdoutTo
+        }, ct);
+    }
+
+    private async Task<int> RecordTrialsAsync(CampaignRecord campaign, QuantWalkForwardRequest request,
+        BacktestApiService.RunContext ctx, IReadOnlyList<ParameterCandidate> candidates,
+        WalkForwardRunResult run, CancellationToken ct)
+    {
+        var fingerprint = DataFingerprint.Compute(ctx.Candles, ctx.Instrument.Symbol, ctx.TimeframeMinutes, ctx.Source);
+        var costs = new CostProfileSnapshot
+        {
+            FeePerSide = ctx.Fee.CommissionPerSide + ctx.Fee.ExchangeFeePerSide + ctx.Fee.ClearingFeePerSide
+                         + ctx.Fee.RoutingFeePerSide + ctx.Fee.NfaFeePerSide + ctx.Fee.OtherFeePerSide,
+            SlippageTicks = ctx.Fee.EstimatedSlippageTicks,
+            TickSize = ctx.Instrument.TickSize,
+            PointValue = ctx.Instrument.PointValue,
+            ApplyFees = request.Run.ApplyFees,
+            Currency = ctx.Instrument.Currency,
+            IsExampleProfile = ctx.FeeIsExample || ctx.InstrumentIsExample
+        };
+
+        string code = CodeVersion();
+        int recorded = 0;
+
+        foreach (var c in candidates)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var trainValues = run.Folds.Select(f => f.TrainValues.TryGetValue(c.Id, out var v) ? v : null)
+                .Where(v => v.HasValue).Select(v => v!.Value).ToList();
+            var testValues = run.Folds.Select(f => f.TestValues.TryGetValue(c.Id, out var v) ? v : null)
+                .Where(v => v.HasValue).Select(v => v!.Value).ToList();
+            int selectedIn = run.Folds.Count(f => f.Selected?.Id == c.Id);
+
+            var metrics = new Dictionary<string, double?>
+            {
+                [$"train.{request.SelectionMetric}.mean"] = trainValues.Count > 0 ? Stats.Mean(trainValues) : null,
+                [$"test.{request.SelectionMetric}.mean"] = testValues.Count > 0 ? Stats.Mean(testValues) : null,
+                ["test.sharpe_per_period"] = run.CandidateTestReturns.TryGetValue(c.Id, out var series)
+                    ? CscvPbo.SharpePerPeriod(series)
+                    : null,
+                ["folds.selected"] = selectedIn,
+                ["folds.total"] = run.Folds.Count
+            };
+
+            bool usable = trainValues.Count > 0 || testValues.Count > 0;
+            var trial = new TrialRecord
+            {
+                Id = $"{campaign.Id}-{c.Id}",
+                CampaignId = campaign.Id,
+                StrategyId = request.Run.Strategy,
+                StrategyVersion = code,
+                Origin = StrategyOrigin.Manual,
+                OriginReference = "Walk-forward-Kampagne im Dashboard",
+                Parameters = c.Parameters,
+                Data = fingerprint,
+                Costs = costs,
+                CodeVersion = code,
+                Seed = 0,
+                PeriodFrom = ctx.Candles[0].OpenTime,
+                PeriodTo = run.Plan.Holdout?.FromTime ?? ctx.Candles[^1].CloseTime,
+                PeriodRole = "walkforward",
+                Status = usable ? TrialStatus.Completed : TrialStatus.Failed,
+                StatusReason = usable ? null : "Kein Fenster lieferte eine auswertbare Kennzahl.",
+                CompletedUtc = DateTimeOffset.UtcNow,
+                Metrics = metrics,
+                Tags = new[] { "walkforward", request.SelectionMetric }
+            };
+
+            try
+            {
+                var existing = await _store.GetTrialAsync(trial.Id, ct);
+                if (existing is null) await _store.AddTrialAsync(trial, ct);
+                else await _store.UpdateTrialAsync(trial, ct);
+                recorded++;
+            }
+            catch (ExperimentRegistryException)
+            {
+                // Budgetgrenze o. Ä. — der Lauf bleibt gültig, das Register bleibt unverfälscht.
+            }
+        }
+        return recorded;
+    }
+
+    public async Task<IReadOnlyList<QuantCampaignDto>> ListCampaignsAsync(CancellationToken ct = default)
+    {
+        var campaigns = await _store.ListCampaignsAsync(ct);
+        var result = new List<QuantCampaignDto>();
+        foreach (var c in campaigns)
+        {
+            var trials = await _store.ListTrialsAsync(c.Id, ct);
+            result.Add(new QuantCampaignDto(c.Id, c.Name, c.CreatedUtc, c.Hypothesis, c.SearchSpace,
+                c.SelectionMetric, c.SelectionDirection.ToString(), c.TrialBudget, trials.Count,
+                c.HoldoutFrom, c.HoldoutTo, c.HoldoutConsumed, c.Locked));
+        }
+        return result;
+    }
+
+    public async Task<IReadOnlyList<QuantTrialDto>> ListTrialsAsync(string? campaignId, CancellationToken ct = default)
+        => (await _store.ListTrialsAsync(campaignId, ct)).Select(QuantTrialDto.From).ToList();
+
+    public async Task<QuantTrialDto?> GetTrialAsync(string id, CancellationToken ct = default)
+    {
+        var t = await _store.GetTrialAsync(id, ct);
+        return t is null ? null : QuantTrialDto.From(t);
+    }
+
+    public Task<IReadOnlyList<PaperResearchEntry>> ListPapersAsync(CancellationToken ct = default) => _papers.ListAsync(ct);
+
+    public Task<PaperResearchEntry> SavePaperAsync(PaperResearchEntry entry, CancellationToken ct = default)
+        => _papers.SaveAsync(entry, ct);
+
+    public Task<IReadOnlyList<string>> ListBenchmarksAsync(CancellationToken ct = default) => _benchmarks.ListAsync(ct);
+
+    // =========================================================================================
+    // Hilfsfunktionen
+    // =========================================================================================
+
+    private static OhlcBacktestConfig ConfigFrom(BacktestRunRequest req) => new()
+    {
+        Quantity = req.Quantity,
+        InitialBalance = req.InitialBalance,
+        StopLossTicks = req.StopLossTicks,
+        TakeProfitTicks = req.TakeProfitTicks,
+        SlippageTicksOverride = req.SlippageTicks,
+        ApplyFees = req.ApplyFees,
+        ExcludePartialEdges = req.ExcludePartialEdges
+    };
+
+    private static PerformanceMetricsOptions MetricOptions(QuantEvaluationOptions o) => new()
+    {
+        AnnualizationBasis = string.Equals(o.AnnualizationBasis, "Fixed", StringComparison.OrdinalIgnoreCase)
+            ? AnnualizationBasis.Fixed
+            : AnnualizationBasis.Observed,
+        FixedPeriodsPerYear = o.FixedPeriodsPerYear,
+        RiskFreeAnnualRate = o.RiskFreeAnnualRate,
+        ExpectedShortfallAlpha = o.ExpectedShortfallAlpha,
+        MinimumPeriods = o.MinimumPeriods
+    };
+
+    private static ReturnFrequency ParseFrequency(string? s) => s?.ToLowerInvariant() switch
+    {
+        "bar" => ReturnFrequency.Bar,
+        "weekly" => ReturnFrequency.Weekly,
+        "monthly" => ReturnFrequency.Monthly,
+        _ => ReturnFrequency.Daily
+    };
+
+    private static ResamplingMethod ParseMethod(string? s) => s?.ToLowerInvariant() switch
+    {
+        "movingblock" => ResamplingMethod.MovingBlock,
+        "stationary" => ResamplingMethod.Stationary,
+        _ => ResamplingMethod.Permutation
+    };
+
+    private static string CandidateId(IReadOnlyDictionary<string, string> p, int index)
+    {
+        if (p.Count == 0) return $"c{index}";
+        return string.Join("_", p.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => $"{kv.Key}{kv.Value}"));
+    }
+
+    private static double? SelectionValue(string metric, PerformanceMetricsResult metrics, decimal netProfit) =>
+        metric.ToLowerInvariant() switch
+        {
+            "netprofit" => (double)netProfit,
+            "cagr" => metrics.Value("cagr"),
+            "calmar" => metrics.Value("calmar"),
+            "sortino" => metrics.Value("sortino"),
+            _ => metrics.Value("sharpe")
+        };
+
+    /// <summary>Verkettet mehrere Renditereihen chronologisch zu einer Reihe (für mehrteilige Trainingsabschnitte).</summary>
+    private static ReturnSeries Concat(IReadOnlyList<ReturnSeries> parts)
+    {
+        if (parts.Count == 1) return parts[0];
+        var times = new List<DateTimeOffset>();
+        var rets = new List<double>();
+        var levels = new List<double>();
+        double equity = 1.0;
+        foreach (var p in parts.OrderBy(p => p.Timestamps.Count > 0 ? p.Timestamps[0] : DateTimeOffset.MaxValue))
+            for (int i = 0; i < p.Count; i++)
+            {
+                times.Add(p.Timestamps[i]);
+                rets.Add(p.Returns[i]);
+                equity *= 1.0 + p.Returns[i];
+                levels.Add(equity);
+            }
+        return new ReturnSeries
+        {
+            Name = "verkettet", Timestamps = times, Returns = rets, EquityLevels = levels,
+            InitialCapital = 1.0, Basis = EquityBasis.Total, Frequency = parts[0].Frequency
+        };
+    }
+
+    private static QuantDrawdownDto ToDto(DrawdownInfo d) => new(
+        d.MaxDrawdownFraction, d.MaxDrawdownAbsolute,
+        d.PeakTime?.ToUnixTimeMilliseconds(), d.TroughTime?.ToUnixTimeMilliseconds(), d.RecoveryTime?.ToUnixTimeMilliseconds(),
+        d.LongestUnderwaterPeriods, d.LongestUnderwaterDays, d.UnderwaterAtEnd);
+
+    private static QuantDistributionDto ToDto(MonteCarloDistribution d, int bins = 40)
+    {
+        var values = d.Values;
+        var hist = new double[bins];
+        double min = values.Count == 0 ? 0 : values.Min();
+        double max = values.Count == 0 ? 0 : values.Max();
+        if (values.Count > 0 && max > min)
+            foreach (var v in values)
+            {
+                int b = (int)((v - min) / (max - min) * (bins - 1));
+                hist[Math.Clamp(b, 0, bins - 1)]++;
+            }
+        else if (values.Count > 0) hist[0] = values.Count;
+
+        return new QuantDistributionDto(d.Key, d.Label, d.Unit, d.Min, d.P5, d.P25, d.Median, d.P75, d.P95, d.Max, d.Mean,
+            hist, min, max);
+    }
+
+    private static QuantBenchmarkDto ToDto(BenchmarkComparisonResult r)
+    {
+        var t = new List<long>();
+        var s = new List<double>();
+        var b = new List<double>();
+        if (r.Available)
+        {
+            double se = 1.0, be = 1.0;
+            for (int i = 0; i < r.AlignedStrategy.Count; i++)
+            {
+                se *= 1.0 + r.AlignedStrategy.Returns[i];
+                be *= 1.0 + r.AlignedBenchmark.Returns[i];
+                t.Add(r.AlignedStrategy.Timestamps[i].ToUnixTimeMilliseconds());
+                s.Add(se);
+                b.Add(be);
+            }
+        }
+        return new QuantBenchmarkDto(r.Available, r.UnavailableReason, r.BenchmarkName, r.BenchmarkProvenance,
+            r.CommonPeriods, r.Metrics.Select(QuantMetricDto.From).ToList(), t, s, b, r.Assumptions, r.Warnings);
+    }
+
+    private static CostProfileDto CostDto(BacktestApiService.RunContext ctx, OhlcBacktestResult result) => new(
+        TickSize: ctx.Instrument.TickSize,
+        TickValue: ctx.Instrument.TickValue,
+        PointValue: ctx.Instrument.PointValue,
+        Currency: ctx.Instrument.Currency,
+        FeePerSide: result.FeePerSide,
+        FeeRoundTrip: result.FeePerSide * 2m,
+        SlippageTicks: result.EffectiveSlippageTicks,
+        SlippagePerSideDollars: result.EffectiveSlippageTicks * ctx.Instrument.TickValue,
+        ApplyFees: result.Config.ApplyFees,
+        InstrumentIsExample: ctx.InstrumentIsExample,
+        FeeIsExample: ctx.FeeIsExample);
+}
