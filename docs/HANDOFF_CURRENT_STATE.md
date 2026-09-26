@@ -67,7 +67,8 @@ Committeter UI-/Backend-Stand `4f3c059f`: **.NET 467/467**, React-Build + `npm t
 
 ## Hindsight / CodeMunch
 
-- **Hindsight synchronisiert (2026-09-26):** Die Prüfrunden-Übergabe wurde in der Bank `FuturesOrderflowBot` gespeichert (context `project-handoff-current`). Die vorherigen 429-Kontingentfehler waren vorübergehend; diese Datei bleibt die maßgebliche, ausführliche Übergabe. Frühere Übergabe: 2026-09-25 (`fe88dde9…`).
+- **Hindsight (2026-09-26):** Die Prüfrunden-Übergabe ist in der Bank `FuturesOrderflowBot` gespeichert — Dokument **`4b94247d-ccf5-4163-bac0-849a4ba6b22a`** (context `project-handoff-current`, `state: valid`). Dieses Dokument entstand VOR den Commits und nennt daher noch „uncommitted / HEAD 54adb9e1".
+- **AUSSTEHENDE Hindsight-Synchronisierung:** Das Nachtragen der Commit-Hashes (c32ab819, 32e56457, 4c928eb2; HEAD 4c928eb2) in Hindsight scheiterte am 2026-09-26 an einem Kontingentfehler (HTTP 429, Tageslimit). Keine Retry-Schleife. Maßgeblich sind bis dahin diese Datei und die Git-Historie; die Hashes bei nächster Gelegenheit in Hindsight nachtragen. Frühere Übergaben: 2026-09-26 02:00 (`4b94247d…`), 2026-09-25 (`fe88dde9…`).
 - **CodeMunch-Index** am 2026-09-26 per `index_folder` neu aufgebaut (363 Dateien, 4964 Symbole, inkl. TypeScript/TSX).
 
 ## Betrieb (lokal, Simulation-only)
