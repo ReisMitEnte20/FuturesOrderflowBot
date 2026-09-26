@@ -17,11 +17,19 @@ namespace TradingBot.Backtesting.Ohlc;
 ///   und zum (bereits ungünstigeren) OPEN gefüllt; ein Take-Profit ist eine Limit-Order und wird bei einer
 ///   günstigen Lücke zum OPEN als Preisverbesserung gefüllt (nie schlechter als die Limit-Grenze), sonst exakt
 ///   an der Limit-Grenze. Kein unrealistischer Fill zum alten Level.
-/// - Reihenfolge am nächsten OPEN: Eine am Vorabend (Bar-Schluss) erzeugte Gegensignal-/Exit-Anweisung wird
-///   ZUERST am OPEN ausgeführt (Schritt A); erst danach werden die Schutzorders (SL/TP) der dann offenen
-///   Position gegen die Bar-Range geprüft (Schritt B). Ein Gegensignal schließt also am OPEN und dreht die
-///   Position; ein an derselben Lücke greifender Stop hätte dieselbe Position ebenfalls zum OPEN geschlossen –
-///   das Ergebnis ist deterministisch und preislich identisch (OPEN ± Slippage).
+/// - SIMULATIONSANNAHME „OppositeSignal vor Schutzorder am OPEN" (gesetzte, deterministische Modellannahme):
+///   Eine am Vorabend (Bar-Schluss) erzeugte Gegensignal-/Exit-Anweisung wird ZUERST am OPEN ausgeführt
+///   (Schritt A); erst danach werden die Schutzorders (SL/TP) der dann offenen Position gegen die Bar-Range
+///   geprüft (Schritt B). Die Priorisierung ist eine Konvention, kein hergeleitetes Marktverhalten. Sie ist
+///   für die konkret geprüften Fälle preisneutral — namentlich, wenn ein Gegensignal und ein an DEMSELBEN
+///   OPEN greifender Gap-Stop dieselbe Position schließen: beide füllen am OPEN ± Slippage, die Reihenfolge
+///   ändert dort weder Preis noch Kosten. Diese Gleichwertigkeit gilt AUSDRÜCKLICH NICHT pauschal für jede
+///   Schutzorder-/Gap-Konstellation (z. B. wenn der Stop erst intrabar statt am OPEN griffe); dann ist die
+///   Priorisierung eine bewusste Modellwahl mit möglichem Ergebnisunterschied. Folgen der Annahme:
+///   (1) JEDE Position wird GENAU EINMAL geschlossen — schließt das Gegensignal in Schritt A, ist die alte
+///   Position flat, bevor Schritt B läuft, sodass kein zweiter Exit möglich ist. (2) Beim Drehen werden in
+///   <c>OpenPosition</c> Entry, <c>sl</c> und <c>tp</c> NEU aus dem Reversal-Entry gesetzt; die Schutzorders
+///   der alten Position gelten NICHT für die neue Position (keine Alt-Order-Leiche).
 /// - Werden SL und TP in derselben Kerze berührt und die Reihenfolge ist unbekannt, wird konservativ
 ///   der Stop-Loss angenommen und der Trade als mehrdeutig markiert.
 /// - Auch bei Entry und Exit in derselben Kerze wird keine unbekannte Kursreihenfolge als Tatsache
@@ -283,8 +291,10 @@ public sealed class OhlcBacktestEngine
     /// nach Ordertyp differenziert:
     /// <list type="bullet">
     /// <item><b>Stop-Loss (Stop-Order → wird bei Auslösung zur Market-Order):</b> Öffnet der Bar bereits
-    /// jenseits des Stops (Gap), wird zum OPEN gefüllt – das ist der bereits ungünstigere Marktpreis, kein
-    /// Fill zum alten Level. Ohne Gap wird an <c>sl</c> mit adverser Slippage gefüllt (Market-Fill).</item>
+    /// jenseits des Stops (Gap), wird als Market-Order zum OPEN abzüglich (Long) bzw. zuzüglich (Short) der
+    /// konfigurierten nachteiligen Slippage gefüllt – der bereits ungünstigere Marktpreis, kein Fill zum
+    /// alten Level. Ohne Gap wird an <c>sl</c> mit adverser Slippage gefüllt. In beiden Fällen steckt die
+    /// Slippage nur im Fill-Preis und wird nicht zusätzlich abgezogen.</item>
     /// <item><b>Take-Profit (Limit-Order):</b> Ein Limit wird nie schlechter als seine Grenze gefüllt.
     /// Öffnet der Bar günstiger als die TP-Grenze (Gap über TP long / unter TP short), erfolgt eine
     /// PREISVERBESSERUNG zum OPEN. Wird die Grenze intrabar erreicht (ohne Gap), wird exakt an <c>tp</c>
@@ -299,9 +309,10 @@ public sealed class OhlcBacktestEngine
     {
         if (side == PositionSide.Long)
         {
-            // Stop-Gap unter SL: Stop wird zur Market-Order, Fill zum (bereits schlechteren) OPEN.
-            if (bar.Open <= sl) return ExitCheck.At(bar.Open, OhlcExitReason.StopLoss, market: false, atOpen: true);
-            // Limit-Gap über TP: Preisverbesserung zum OPEN (>= Limit tp).
+            // Stop-Gap unter SL: Stop wird zur Market-Order, Fill zum (bereits schlechteren) OPEN
+            // abzüglich der konfigurierten nachteiligen Slippage.
+            if (bar.Open <= sl) return ExitCheck.At(bar.Open - slip, OhlcExitReason.StopLoss, market: true, atOpen: true);
+            // Limit-Gap über TP: Preisverbesserung zum OPEN (>= Limit tp), KEINE adverse Slippage (Limit).
             if (bar.Open >= tp) return ExitCheck.At(bar.Open, OhlcExitReason.TakeProfit, market: false, atOpen: true);
             bool slHit = bar.Low <= sl, tpHit = bar.High >= tp;
             if (slHit && tpHit) return ExitCheck.At(sl - slip, OhlcExitReason.StopLoss, market: true, ambiguous: true);
@@ -311,9 +322,9 @@ public sealed class OhlcBacktestEngine
         }
         else
         {
-            // Stop-Gap über SL (Short): Fill zum OPEN.
-            if (bar.Open >= sl) return ExitCheck.At(bar.Open, OhlcExitReason.StopLoss, market: false, atOpen: true);
-            // Limit-Gap unter TP (Short): Preisverbesserung zum OPEN (<= Limit tp).
+            // Stop-Gap über SL (Short): Fill zum OPEN zuzüglich der konfigurierten nachteiligen Slippage.
+            if (bar.Open >= sl) return ExitCheck.At(bar.Open + slip, OhlcExitReason.StopLoss, market: true, atOpen: true);
+            // Limit-Gap unter TP (Short): Preisverbesserung zum OPEN (<= Limit tp), KEINE adverse Slippage (Limit).
             if (bar.Open <= tp) return ExitCheck.At(bar.Open, OhlcExitReason.TakeProfit, market: false, atOpen: true);
             bool slHit = bar.High >= sl, tpHit = bar.Low <= tp;
             if (slHit && tpHit) return ExitCheck.At(sl + slip, OhlcExitReason.StopLoss, market: true, ambiguous: true);
