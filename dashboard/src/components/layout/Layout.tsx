@@ -6,11 +6,16 @@ import { ChatRail } from "./ChatRail";
 
 export function Layout() {
   const { pathname } = useLocation();
-  // Auf der Backtest-Seite braucht der Chart die Breite: Session-Spalte dort standardmäßig eingeklappt.
-  // Andere Seiten bleiben wie bisher (ausgeklappt). Manuelles Umschalten gilt je Bereich für die Sitzung.
-  const area = pathname.startsWith("/backtest") ? "backtest" : "default";
+  // Auf den chartlastigen Seiten (Backtest, Research) braucht die Auswertung die Breite:
+  // Session-Spalte dort standardmäßig eingeklappt. Andere Seiten bleiben wie bisher (ausgeklappt).
+  // Manuelles Umschalten gilt je Bereich für die Sitzung.
+  const area = pathname.startsWith("/backtest")
+    ? "backtest"
+    : pathname.startsWith("/research")
+    ? "research"
+    : "default";
   const [chatPref, setChatPref] = useState<Record<string, boolean>>({});
-  const chatOpen = chatPref[area] ?? area !== "backtest";
+  const chatOpen = chatPref[area] ?? area === "default";
 
   return (
     <div className="flex h-screen bg-[var(--bg)]">
