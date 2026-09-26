@@ -13,7 +13,10 @@
   - `a8f053e2` feat(backtesting): SL/TP je Trade und Mark-to-Market je Bar
   - `a10581b5` docs(claude): Arbeitsablauf pro Prompt (Hindsight + CodeMunch)
   - `00a85e1d` / `de2d8fee` / `f938cc6c` OHLC-Engine, Backend-API, erste React-Backtest-Seite · `559f48cb` Merge `origin/dashboard` (Kollege)
-- Diese Handoff-Datei folgt als eigener Doku-Commit auf `4f3c059f`.
+  - `54adb9e1` docs(handoff): diese Datei
+- **UNCOMMITTED (fachliche OHLC-Prüfung, 2026-09-26, kein Commit):** Gap-Stop-Slippage in `OhlcBacktestEngine.cs`
+  (Long-Exit = Open − Slippage, Short-Exit = Open + Slippage; TP-/Limit-Grenzen unverändert) + neue Datei
+  `tests/TradingBot.Tests/Backtesting/OhlcEngineReferenceCasesTests.cs` (unabhängige Referenzfälle).
 
 ## Aktuelle Nutzerentscheidung (Vorrang vor älteren Notizen)
 
@@ -32,30 +35,40 @@
 ## Ausführungsannahmen (OHLC-Engine)
 
 - Kein Look-ahead: Signal am Bar-Schluss → Ausführung am OPEN des Folge-Bars.
-- Gap-Fills nach Ordertyp: Stop → Market zum (schlechteren) OPEN; Take-Profit = Limit, Preisverbesserung zum OPEN, nie schlechter als die Grenze.
-- SL und TP in derselben Kerze → konservativ Stop-Loss, als mehrdeutig markiert. Gegensignal am nächsten OPEN vor intrabar-Schutzorders.
+- Gap-Fills nach Ordertyp: Stop → Market zum OPEN mit nachteiliger Slippage (Long Open − Slip, Short Open + Slip); Take-Profit = Limit, Preisverbesserung zum OPEN, nie schlechter als die Grenze (keine adverse Slippage auf Limit).
+- SL und TP in derselben Kerze → konservativ Stop-Loss, als mehrdeutig markiert.
+- **Simulationsannahme „OppositeSignal vor Schutzorder am OPEN":** ein am Vorabend erzeugtes Gegensignal wird am nächsten OPEN vor den intrabar-Schutzorders ausgeführt. Das ist eine gesetzte, deterministische Modellkonvention. Sie ist für die geprüften Fälle preisneutral — namentlich, wenn Gegensignal und ein am selben OPEN greifender Gap-Stop dieselbe Position schließen (beide füllen am OPEN ± Slippage). Das gilt **nicht pauschal** für jede Schutzorder-/Gap-Konstellation (z. B. Stop, der erst intrabar griffe) — dort ist die Priorisierung eine bewusste Modellwahl mit möglichem Ergebnisunterschied. Folge in beiden Fällen: jede Position wird genau EINMAL geschlossen; beim Drehen werden Entry/SL/TP der neuen Position neu gesetzt (keine Alt-Order-Leiche).
 - Slippage nur im Fill-Preis von Market-Orders (kein Doppelabzug); Gebühren aus Profilen.
 - Offene Position am Datenende → Zwangsschluss `EndOfData`. Unvollständige Randkerzen standardmäßig ausgeschlossen.
 
 ## Teststand (dem geprüften Stand zugeordnet)
 
-Ausgeführt am 2026-09-25/26 auf genau dem Code von `4f3c059f` (Artefakt-Zeitstempel nach der letzten Quelländerung, danach keine Codeänderung):
+Committeter UI-/Backend-Stand `4f3c059f`: **.NET 467/467**, React-Build + `npm test` 6/6, Browser-Abnahme (siehe unten). Nach der fachlichen OHLC-Prüfung (uncommitteter Gap-Stop-Fix + Referenzfälle): **.NET 477/477 grün**.
 
-- **.NET:** 467/467 grün (`dotnet test tests/TradingBot.Tests/TradingBot.Tests.csproj`)
+- **.NET:** 477/477 grün (`dotnet test tests/TradingBot.Tests/TradingBot.Tests.csproj`), Stand 2026-09-26 inkl. Gap-Stop-Slippage + Referenzfälle
 - **React:** Build `tsc -b && vite build` erfolgreich; `npm test` (node --test) 6/6 grün
 - **Browser-Abnahme** nach vollem Reload bei 1366×768 und 1920×1080: alle Schritte bestanden, 0 Konsolenfehler (Chart sofort sichtbar, echte Kerzen ohne Strategielauf, Replay vor/zurück/Play/Reset/Regler, Backtest 51 Trades = API, Trade-Auswahl Entry/Exit/SL/TP = API, Replay-Kennzahlen = Engine)
+
+### Fachliche OHLC-Prüfung (2026-09-26)
+
+- **Unabhängige Referenzfälle** (MES-artige Werte, Sollwerte HAND berechnet) in `OhlcEngineReferenceCasesTests.cs`: Long/Short inkl. PointValue×Menge/Gebühren/Slippage, Stop-Gap (beide Richtungen, jetzt mit Slippage), TP-Limit-Gap, SL&TP in einer Kerze, Entry+Exit in einer Kerze, OppositeSignal-Vorrang + Einmal-Schließung, Aggregat-Abstimmung mit separater Nachrechnung.
+- **Referenzlauf MES 2026-06-12→06-17** (884 Bars, 51 Trades) unabhängig gegengerechnet: 0 Abweichungen je Trade (Entry/SL/TP/Exit/Gross/Fees/Net); Σ Net = NetProfit = **−524,78**; Initial+Net = FinalEquity **9475,22**; Gebühren 39,78 = 51×0,78; Slippage nicht doppelt; **Max-Drawdown 536,22**; PF 0,5659; realisiert vs. offen (MtM) sauber getrennt. API = Journal = CSV.
+- **Gap-Stop-Slippage-Fix** ändert diesen Lauf NICHT (0 Gap-Stops im Fenster) — NetPnL/Drawdown unverändert; Wirkung durch RC4/RC4S getestet.
+- **Trade #6 ExitBar = 90** (nicht 98): EntryBar 83 = Fr 2026-06-12 20:25, dann 6 Freitags-Bars (84–89 bis 20:55), Wochenend-Lücke (keine leeren Bars), ExitBar 90 = So 2026-06-14 22:00 (Globex-Reopen, TP-Gap). Der Sierra-Ladepfad ist für eine Anfrage ohne „Bis" seit `00a85e1d` unverändert (`BuildFileFrom(..., toUtc: null)`), die Bar-Indizes also identisch; das frühere „Bar 98" war ein Formulierungsfehler im Prosatext (die Daten/Automatikprüfung zeigten durchgehend 90).
+- **.NET: 477/477 grün** (inkl. der neuen Referenzfälle). Kein Fehler nachgewiesen außer der bewusst umgesetzten Gap-Stop-Slippage-Erweiterung.
 
 ## Grenzen / offene Punkte
 
 - Nur SMA-Crossover als Referenz-/Teststrategie (keine Edge); Kostenprofile nur `*.example.json`.
 - Replay-Wert „Offen (MtM)“ ist brutto ohne Exit-Kosten; Wochenend-Lücken werden auf der Kategorie-Zeitachse gestaucht.
+- Gap-Stop nimmt über den Open hinaus genau 1 konfigurierte Slippage-Distanz an (keine tiefenabhängige Modellierung).
 - Orderflow-Features (Footprint, Delta, Imbalance) mit reinem OHLC bewusst nicht verfügbar.
 - Push/Merge nach `main` offen (Freigabe nötig).
 - Vite-Dev-Server kann unter Windows Dateiänderungen verpassen → bei Zweifel neu starten.
 
 ## Hindsight / CodeMunch
 
-- **Hindsight-Synchronisierung AUSSTEHEND:** Das Speichern dieser Übergabe in der Bank `FuturesOrderflowBot` ist am 2026-09-26 zweimal an einem Kontingentfehler des Hindsight-Servers gescheitert (HTTP 429, Tageslimit des verwendeten Sprachmodells). Diese Datei ist die maßgebliche Übergabe; sobald das Kontingent wieder verfügbar ist, ihren Inhalt als Übergabe in Hindsight speichern. Letzte erfolgreich gespeicherte Hindsight-Übergabe: 2026-09-25 (Dokument `fe88dde9…`).
+- **Hindsight synchronisiert (2026-09-26):** Die Prüfrunden-Übergabe wurde in der Bank `FuturesOrderflowBot` gespeichert (context `project-handoff-current`). Die vorherigen 429-Kontingentfehler waren vorübergehend; diese Datei bleibt die maßgebliche, ausführliche Übergabe. Frühere Übergabe: 2026-09-25 (`fe88dde9…`).
 - **CodeMunch-Index** am 2026-09-26 per `index_folder` neu aufgebaut (363 Dateien, 4964 Symbole, inkl. TypeScript/TSX).
 
 ## Betrieb (lokal, Simulation-only)
