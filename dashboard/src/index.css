@@ -39,6 +39,12 @@ b { font-weight: 500 }
 ::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 3px }
 ::-webkit-scrollbar-thumb:hover { background: var(--fg-faint) }
 
+/* Unbestimmter Ladebalken (Backtest-Chart: „Daten laden" / „Backtest läuft"). */
+@keyframes bt-indet {
+  0% { transform: translateX(-100%) }
+  100% { transform: translateX(300%) }
+}
+
 :focus-visible {
   outline: 2px solid var(--key);
   outline-offset: 2px;

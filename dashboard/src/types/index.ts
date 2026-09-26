@@ -184,3 +184,10 @@ export interface ToolLine {
 }
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
+
+export interface RithmicCredentials {
+  userId: string;
+  password: string;
+  system: string;
+  gateway: string;
+}

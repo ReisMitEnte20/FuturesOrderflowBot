@@ -27,3 +27,7 @@ export function CardHeader({ children, className }: { children: React.ReactNode;
 export function CardBody({ children, className }: { children: React.ReactNode; className?: string }) {
   return <div className={cn("px-4 pb-3", className)}>{children}</div>;
 }
+
+export function CardContent({ children, className }: { children: React.ReactNode; className?: string }) {
+  return <div className={cn("px-4 pb-4", className)}>{children}</div>;
+}

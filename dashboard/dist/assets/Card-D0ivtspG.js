@@ -1,2 +1,0 @@
-import{t as e}from"./vendor-react-v_zadc44.js";import{a as t}from"./index-ByEm7ZLh.js";var n=e();function r({children:e,className:r,hover:i}){return(0,n.jsx)(`div`,{className:t(`bg-[var(--panel)] border border-[var(--line)] rounded-lg`,i&&`hover:border-[var(--line-2)] transition-colors`,r),children:e})}function i({children:e,className:r}){return(0,n.jsx)(`div`,{className:t(`px-4 pt-3`,r),children:e})}function a({children:e,className:r}){return(0,n.jsx)(`div`,{className:t(`px-4 pb-3`,r),children:e})}export{a as n,i as r,r as t};
-//# sourceMappingURL=Card-D0ivtspG.js.map

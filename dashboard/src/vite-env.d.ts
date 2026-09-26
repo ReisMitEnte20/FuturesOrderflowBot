@@ -7,6 +7,8 @@ declare module "*.scss" {
 
 interface ImportMetaEnv {
   readonly VITE_API_URL: string;
+  readonly VITE_BACKTEST_API?: string;
+  readonly VITE_RITHMIC_ENABLED?: string;
 }
 
 interface ImportMeta {

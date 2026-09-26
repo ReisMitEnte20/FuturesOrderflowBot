@@ -115,6 +115,104 @@ public sealed class SierraOrderFlowBarBuilder
             with { FileSizeBytes = size };
     }
 
+    /// <summary>
+    /// Wie <see cref="BuildFile"/>, beginnt aber am Byte-Offset des ersten Records mit Zeitstempel
+    /// &gt;= <paramref name="fromUtc"/> (per Binärsuche über die zeitlich sortierte Sierra-Datei) und
+    /// streamt von dort maximal <paramref name="maxRows"/> Zeilen. So lässt sich ein SPÄTER Abschnitt
+    /// einer sehr großen Datei laden, ohne die Millionen dünnen Anfangszeilen zu lesen. Die Quelldatei
+    /// wird NICHT verändert. <paramref name="toUtc"/> begrenzt optional das Ende.
+    /// </summary>
+    public SierraAggregationResult BuildFileFrom(
+        string path, string symbol, TimeSpan barInterval, DateTimeOffset fromUtc,
+        DateTimeOffset? toUtc = null, long? maxRows = null,
+        int frameEveryTicks = 0, Action<SierraIntrabarFrame>? onFrame = null)
+    {
+        if (!File.Exists(path)) throw new FileNotFoundException($"Datei nicht gefunden: '{path}'.", path);
+        long size = new FileInfo(path).Length;
+        long startOffset = FindByteOffsetForDate(path, fromUtc);
+
+        // Ziel liegt am/vor dem Dateianfang -> normal ab Header lesen (kein Seek, kein doppelter Header).
+        if (startOffset == 0)
+        {
+            using var plain = new StreamReader(path);
+            return Build(plain, symbol, barInterval, maxRows, fromUtc, toUtc, buildFootprint: true,
+                    onProgress: null, frameEveryTicks: frameEveryTicks, onFrame: onFrame)
+                with { FileSizeBytes = size };
+        }
+
+        string header = ReadHeaderLine(path);
+        var fs = File.OpenRead(path);
+        fs.Seek(startOffset, SeekOrigin.Begin);
+        var inner = new StreamReader(fs);
+        inner.ReadLine();   // die am Offset angeschnittene erste Zeile verwerfen (ihr ts liegt < fromUtc)
+        using var reader = new HeaderFirstReader(header, inner);
+        // fromUtc filtert etwaige wenige Zeilen vor dem Ziel (Binärsuche trifft nur auf ~KB genau);
+        // die Grenzzeile (erster Record mit ts >= fromUtc) geht dabei NICHT verloren (siehe Regressionstests).
+        return Build(reader, symbol, barInterval, maxRows, fromUtc, toUtc, buildFootprint: true,
+                onProgress: null, frameEveryTicks: frameEveryTicks, onFrame: onFrame)
+            with { FileSizeBytes = size };
+    }
+
+    /// <summary>Erste (Header-)Zeile der Datei lesen, ohne die ganze Datei zu laden.</summary>
+    private static string ReadHeaderLine(string path)
+    {
+        using var sr = new StreamReader(path);
+        return ReadNonEmptyLine(sr) ?? throw new CsvMarketDataException("Leere Datei oder fehlende Kopfzeile.");
+    }
+
+    /// <summary>
+    /// Binärsuche über die Byte-Länge der zeitlich sortierten Datei: liefert einen Offset, ab dem der
+    /// erste vollständige Record einen Zeitstempel &gt;= <paramref name="fromUtc"/> hat (auf ~KB genau,
+    /// die Feinfilterung übernimmt Build via fromUtc). Nur lesend, Datei bleibt unverändert.
+    /// </summary>
+    public static long FindByteOffsetForDate(string path, DateTimeOffset fromUtc)
+    {
+        using var fs = File.OpenRead(path);
+        long lo = 0, hi = fs.Length;
+        while (hi - lo > 8192)
+        {
+            long mid = lo + (hi - lo) / 2;
+            DateTimeOffset? ts = FirstTimestampAtOrAfter(fs, mid);
+            if (ts is null || ts.Value >= fromUtc) hi = mid; else lo = mid;
+        }
+        return lo;
+    }
+
+    /// <summary>Zeitstempel des ersten VOLLSTÄNDIGEN Records ab <paramref name="offset"/> (oder null bei EOF).</summary>
+    private static DateTimeOffset? FirstTimestampAtOrAfter(FileStream fs, long offset)
+    {
+        fs.Seek(offset, SeekOrigin.Begin);
+        var buf = new byte[32768];
+        int n = fs.Read(buf, 0, buf.Length);
+        if (n <= 0) return null;
+        string chunk = System.Text.Encoding.ASCII.GetString(buf, 0, n);
+        int nl = offset == 0 ? -1 : chunk.IndexOf('\n');   // am Dateianfang keine angeschnittene Zeile
+        int start = nl + 1;
+        int end = chunk.IndexOf('\n', start);
+        if (end < 0) return null;
+        string line = chunk.Substring(start, end - start);
+        var parts = line.Split(',');
+        if (parts.Length < 2) return null;
+        string date = parts[0].Trim(), time = parts[1].Trim();
+        return DateTimeOffset.TryParse($"{date} {time}", CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal | DateTimeStyles.AllowWhiteSpaces, out var ts)
+            ? ts.ToUniversalTime() : (DateTimeOffset?)null;
+    }
+
+    /// <summary>TextReader, der zuerst die (separat gelesene) Header-Zeile liefert, dann den inneren Stream.</summary>
+    private sealed class HeaderFirstReader : TextReader
+    {
+        private string? _header;
+        private readonly TextReader _inner;
+        public HeaderFirstReader(string header, TextReader inner) { _header = header; _inner = inner; }
+        public override string? ReadLine()
+        {
+            if (_header is not null) { var h = _header; _header = null; return h; }
+            return _inner.ReadLine();
+        }
+        protected override void Dispose(bool disposing) { if (disposing) _inner.Dispose(); base.Dispose(disposing); }
+    }
+
     public SierraAggregationResult Build(
         TextReader reader, string symbol, TimeSpan barInterval, long? maxRows = null,
         DateTimeOffset? fromUtc = null, DateTimeOffset? toUtc = null,

@@ -159,4 +159,108 @@ public class SierraBacktestReplayServiceTests
             .Select(a => a.Name!).ToList();
         referenced.Should().NotContain(n => n.Contains("TradingBot.Execution"));
     }
+
+    // --- Intrabar-Exit-Marker: Sichtbarkeit über die REALE Replay-Reihenfolge (Touch-Frame) ---
+    private static ReplayTradeMarker ExitTrade(int exitIndex, decimal exitPrice, decimal sl, decimal tp,
+        PositionSide side = PositionSide.Long, int entryIndex = 0) => new()
+        {
+            Id = 1, Side = side, EntryIndex = entryIndex, ExitIndex = exitIndex,
+            EntryPrice = 100m, ExitPrice = exitPrice, StopLoss = sl, TakeProfit = tp, NetPnL = 0m
+        };
+
+    // Synthetisches Frame: <paramref name="price"/> ist das Kursereignis DIESES Frames (CurrentPrice,
+    // maßgeblich für die Touch-Erkennung); high/low sind das laufende (kumulierte) Kerzen-Extrem und
+    // entsprechen ohne Angabe dem Preis. So lässt sich der Fall "alter Touch bleibt im High hängen"
+    // (High >= Level, aber CurrentPrice darunter) explizit nachbilden.
+    private static SierraIntrabarFrame FR(int completedBars, decimal price, decimal? high = null, decimal? low = null) => new()
+    {
+        CompletedBars = completedBars, CurrentPrice = price,
+        High = high ?? price, Low = low ?? price, Open = low ?? price, Close = price,
+        Volume = 0m, BidVolume = 0m, AskVolume = 0m, CumulativeDelta = 0m, BarProgressPercent = 0
+    };
+
+    [Fact]
+    public void FindExitFrame_ignores_level_touched_before_exit_bar()
+    {
+        // Long TP @105. In Bar 0 wird 105 schon berührt -> darf NICHT zählen; Exit-Bar = 2.
+        var t = ExitTrade(exitIndex: 2, exitPrice: 105m, sl: 97m, tp: 105m);
+        var frames = new List<SierraIntrabarFrame>
+        {
+            FR(0, price: 106m),   // 0: Level früh berührt, aber vor Exit-Bar -> ignorieren
+            FR(1, price: 103m),   // 1
+            FR(2, price: 104m),   // 2: Exit-Bar, noch kein Touch
+            FR(2, price: 105m),   // 3: Exit-Bar, Touch (Preis>=105)
+        };
+        SierraBacktestReplayService.FindExitFrameIndex(frames, t).Should().Be(3);
+    }
+
+    [Fact]
+    public void FindExitFrame_same_candle_respects_entry_frame()
+    {
+        // Entry & Exit in derselben Kerze (Bar 0). 105 wird VOR dem Einstieg (Frame 0) berührt;
+        // das laufende High bleibt danach kumuliert bei 105.
+        var t = ExitTrade(exitIndex: 0, exitPrice: 105m, sl: 97m, tp: 105m, entryIndex: 0);
+        var frames = new List<SierraIntrabarFrame>
+        {
+            FR(0, price: 105m, high: 105m, low: 100m),   // 0: Touch VOR Einstieg
+            FR(0, price: 101m, high: 105m, low: 100m),   // 1: (Einstieg hier bestätigt), High bleibt 105
+            FR(0, price: 105m, high: 105m, low: 100m),   // 2: Kurs-Touch NACH Einstieg
+        };
+        // ohne Entry-Grenze zählt der (frühe) Kurs-Touch bei Frame 0:
+        SierraBacktestReplayService.FindExitFrameIndex(frames, t, entryFrameIndex: 0).Should().Be(0);
+        // mit Entry-Grenze (ab Frame 2) zählt nur der Kurs-Touch nach Einstieg:
+        SierraBacktestReplayService.FindExitFrameIndex(frames, t, entryFrameIndex: 2).Should().Be(2);
+    }
+
+    [Fact]
+    public void FindExitFrame_retouch_after_entry_ignores_pre_entry_touch_in_running_high()
+    {
+        // Regression: Innerhalb DERSELBEN Kerze (Exit-Bar 0) wird zuerst das TP-Level (105) berührt,
+        // danach erfolgt der Einstieg (Frame 1). Nach dem Einstieg fällt der Kurs (kein Re-Touch),
+        // erst Frame 3 erreicht 105 erneut. Der Marker darf erst ab Frame 3 sichtbar werden.
+        // Das laufende (kumulierte) High enthält den ALTEN Touch weiterhin (bleibt 105) -> die Suche
+        // erst ab entryFrameIndex zu starten reicht allein NICHT; maßgeblich ist der Frame-Kurs.
+        var t = ExitTrade(exitIndex: 0, exitPrice: 105m, sl: 97m, tp: 105m, entryIndex: 0);
+        var frames = new List<SierraIntrabarFrame>
+        {
+            FR(0, price: 105m, high: 105m, low: 100m),   // 0: TP-Touch VOR Einstieg
+            FR(0, price: 101m, high: 105m, low: 100m),   // 1: Einstieg; High bleibt kumuliert 105
+            FR(0, price: 102m, high: 105m, low: 100m),   // 2: kein Re-Touch (Kurs < 105)
+            FR(0, price: 105m, high: 105m, low: 100m),   // 3: Re-Touch NACH Einstieg
+        };
+        // Frame-Kurs-basiert: 105 erst wieder bei Frame 3 (nicht schon am Einstiegs-Frame 1).
+        SierraBacktestReplayService.FindExitFrameIndex(frames, t, entryFrameIndex: 1).Should().Be(3);
+    }
+
+    [Fact]
+    public void FindExitFrame_uses_recorded_level_when_sl_and_tp_in_same_candle()
+    {
+        // Long, recorded Exit = SL @97 (obwohl TP 110 in derselben Kerze theoretisch möglich wäre).
+        var t = ExitTrade(exitIndex: 1, exitPrice: 97m, sl: 97m, tp: 110m);
+        var frames = new List<SierraIntrabarFrame>
+        {
+            FR(1, price: 99m, high: 105m, low: 99m),   // 0: kein SL-Touch (Kurs 99 > 97)
+            FR(1, price: 96m, high: 108m, low: 96m),   // 1: SL-Touch (Kurs<=97); TP 110 NICHT erreicht
+        };
+        SierraBacktestReplayService.FindExitFrameIndex(frames, t).Should().Be(1);   // SL-Level maßgeblich
+    }
+
+    [Fact]
+    public void FindExitFrame_returns_minus_one_for_time_exit()
+    {
+        var t = ExitTrade(exitIndex: 1, exitPrice: 102m, sl: 97m, tp: 110m);  // weder SL noch TP
+        var frames = new List<SierraIntrabarFrame> { FR(1, price: 102m, high: 105m, low: 100m) };
+        SierraBacktestReplayService.FindExitFrameIndex(frames, t).Should().Be(-1);
+    }
+
+    [Fact]
+    public void ExitVisible_is_monotonic_and_rewind_correct()
+    {
+        // vor dem Touch-Frame unsichtbar, ab dem Touch-Frame sichtbar, Rewind -> wieder unsichtbar.
+        SierraBacktestReplayService.ExitVisibleAtFrame(currentFrameIndex: 4, exitFrameIndex: 5).Should().BeFalse();
+        SierraBacktestReplayService.ExitVisibleAtFrame(5, 5).Should().BeTrue();
+        SierraBacktestReplayService.ExitVisibleAtFrame(9, 5).Should().BeTrue();
+        SierraBacktestReplayService.ExitVisibleAtFrame(3, 5).Should().BeFalse();   // zurückgespult
+        SierraBacktestReplayService.ExitVisibleAtFrame(9, -1).Should().BeFalse();  // Zeit-Exit -> nie über Frame
+    }
 }

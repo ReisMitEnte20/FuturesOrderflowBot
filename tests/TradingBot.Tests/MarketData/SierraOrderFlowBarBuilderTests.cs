@@ -45,6 +45,29 @@ public class SierraOrderFlowBarBuilderTests
     }
 
     [Fact]
+    public void Quote_columns_high_ask_low_bid_do_not_become_trade_wicks()
+    {
+        // Sierra-Einzeltick-Format (NumberOfTrades==1): Open==Last==Handelspreis, High=Ask, Low=Bid.
+        // Die Kerze muss AUSSCHLIESSLICH aus gehandelten Last-Preisen entstehen. Ein Ask oberhalb
+        // aller Trades (bzw. ein Bid darunter) ist ein Quote OHNE Handel und darf KEINEN Docht
+        // erzeugen — sonst würden Quote-Extrema als gehandelte Hochs/Tiefs erfunden.
+        var csv = Header + "\n" +
+            // Verkauf am Bid: Trade @100.00 (=Last=Low=Bid), Ask(High)=105.00 -> kein Handel bei 105
+            "2025/12/28, 23:00:05, 100.00, 105.00, 100.00, 100.00, 2, 1, 2, 0\n" +
+            // Kauf am Ask: Trade @100.50 (=Last=High=Ask), Bid(Low)=95.00 -> kein Handel bei 95
+            "2025/12/28, 23:00:30, 100.50, 100.50, 95.00, 100.50, 3, 1, 0, 3\n";
+        var bar = Build(csv).Bars[0];
+        var b = bar.Bar;
+
+        b.Open.Should().Be(100.00m);
+        b.High.Should().Be(100.50m);   // höchster HANDELSPREIS (Last), NICHT der Ask 105.00
+        b.Low.Should().Be(100.00m);    // tiefster HANDELSPREIS (Last), NICHT der Bid 95.00
+        b.Close.Should().Be(100.50m);
+        // Footprint/Volumen liegen nur an den tatsächlich gehandelten Preisen (nicht an Quotes).
+        bar.PriceLevels.Select(l => l.Price).Should().BeEquivalentTo(new[] { 100.00m, 100.50m });
+    }
+
+    [Fact]
     public void Bid_ask_volume_and_delta_are_aggregated_per_bar()
     {
         var r = Build(TwoMinutes);

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useTradingStore } from "@/stores/tradingStore";
 import type { SessionMessage } from "@/types";
 
-export function ChatRail() {
+export function ChatRail({ collapsed = false, onToggle }: { collapsed?: boolean; onToggle?: () => void }) {
   const sessionMessages = useTradingStore((s) => s.sessionMessages);
   const addSessionMessage = useTradingStore((s) => s.addSessionMessage);
 
@@ -13,12 +13,41 @@ export function ChatRail() {
     });
   }, []);
 
+  // Eingeklappt: schmale Leiste mit Button zum Einblenden (Komponente bleibt gemountet → kein Nachrichtenverlust).
+  if (collapsed) {
+    return (
+      <aside className="w-8 flex-shrink-0 border-r border-[var(--line)] bg-[var(--panel)] flex flex-col items-center">
+        <button
+          onClick={onToggle}
+          title="Session-Spalte einblenden"
+          aria-label="Session-Spalte einblenden"
+          className="mt-2 w-6 h-6 rounded text-[var(--fg-faint)] hover:text-[var(--key)] hover:bg-[var(--bg-2)] font-mono text-xs"
+        >
+          »
+        </button>
+        <span className="mt-3 font-mono text-[9px] text-[var(--fg-faint)] uppercase tracking-widest [writing-mode:vertical-rl] rotate-180 select-none">
+          Session
+        </span>
+      </aside>
+    );
+  }
+
   return (
     <aside className="w-80 flex-shrink-0 border-r border-[var(--line)] bg-[var(--panel)] flex flex-col min-h-0">
       <div className="flex items-center justify-between px-4 h-10 border-b border-[var(--line)]">
         <span className="font-mono text-[10px] text-[var(--fg-faint)] uppercase tracking-widest">
           Session
         </span>
+        {onToggle && (
+          <button
+            onClick={onToggle}
+            title="Session-Spalte einklappen"
+            aria-label="Session-Spalte einklappen"
+            className="w-6 h-6 rounded text-[var(--fg-faint)] hover:text-[var(--key)] hover:bg-[var(--bg-2)] font-mono text-xs"
+          >
+            «
+          </button>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3">

@@ -8,6 +8,15 @@ obj/
 .idea/
 .vscode/
 
+## Node / Frontend (dashboard/) — Dependencies + Build-Artefakte NICHT committen (Lockfile bleibt)
+node_modules/
+dashboard/dist/
+dashboard/*.tsbuildinfo
+dashboard/tsconfig.tsbuildinfo
+# tsc-Emit aus dashboard/vite.config.ts (Quelle bleibt getrackt) — reines Build-Artefakt:
+dashboard/vite.config.js
+dashboard/vite.config.d.ts
+
 ## OS
 Thumbs.db
 .DS_Store
@@ -27,3 +36,6 @@ samples/sierra/raw/*.tct
 samples/atas/raw/*.txt
 samples/atas/raw/*.csv
 !samples/**/raw/.gitkeep
+
+# Versehentlich vom Kollegen committetes .NET SDK (nicht ins Repo)
+.dotnet/

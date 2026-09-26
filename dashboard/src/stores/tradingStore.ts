@@ -13,6 +13,7 @@ import type {
   PipelineGraph,
   ConnectionStatus,
   SessionMessage,
+  RithmicCredentials,
 } from "@/types";
 
 interface TradingState {
@@ -28,11 +29,15 @@ interface TradingState {
   orderFlow: OrderFlowData[];
   sessionMessages: SessionMessage[];
   selectedSymbol: string;
+  rithmicCredentials: RithmicCredentials | null;
   activeView: "live" | "signals" | "backtest" | "market" | "pipeline";
   connectionStatus: ConnectionStatus;
   isLoading: boolean;
   error: string | null;
   lastSignalAt: string | null;
+
+  setRithmicCredentials: (creds: RithmicCredentials | null) => void;
+  clearRithmicCredentials: () => void;
 
   setMetrics: (metrics: DashboardMetrics) => void;
   setPositions: (positions: Position[]) => void;
@@ -84,6 +89,7 @@ export const useTradingStore = create<TradingState>()(
       orderFlow: [],
       sessionMessages: [],
       selectedSymbol: "NQ",
+      rithmicCredentials: null,
       activeView: "live",
       connectionStatus: "disconnected",
       isLoading: false,
@@ -149,6 +155,8 @@ export const useTradingStore = create<TradingState>()(
           ].slice(0, 200),
         })),
       setSessionMessages: (msgs) => set({ sessionMessages: msgs }),
+      setRithmicCredentials: (creds) => set({ rithmicCredentials: creds }),
+      clearRithmicCredentials: () => set({ rithmicCredentials: null }),
     }),
     {
       name: "trading-storage",
@@ -156,6 +164,7 @@ export const useTradingStore = create<TradingState>()(
         selectedSymbol: state.selectedSymbol,
         activeView: state.activeView,
         strategies: state.strategies,
+        rithmicCredentials: state.rithmicCredentials,
       }),
     }
   )

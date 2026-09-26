@@ -133,20 +133,24 @@ public sealed class SierraBacktestReplayService
     /// <summary>Mögliche Replay-Granularitäten (jeder N-te Tick ein Frame).</summary>
     public static readonly int[] FrameEveryTicksOptions = { 1, 10, 25 };
 
-    private readonly Dictionary<(int Bars, int Frame), IntrabarReplaySession> _intrabarCache = new();
+    private readonly Dictionary<(int Bars, int Frame, DateTimeOffset? From), IntrabarReplaySession> _intrabarCache = new();
 
     /// <summary>
     /// Baut (gecacht) eine INTRABAR-Replay-Session: streamt die lokale Sierra-Datei, sammelt
     /// Intrabar-Frames (jeder <paramref name="frameEveryTicks"/>-te Tick) und die finalisierten Bars.
+    /// Ohne <paramref name="fromUtc"/> wird ab Dateianfang gelesen (maxRows begrenzt); mit
+    /// <paramref name="fromUtc"/> wird per Byte-Offset-Suche gezielt ein späterer Zeitraum geladen
+    /// (Quelldatei bleibt unverändert). Kerzen entstehen ausschließlich aus Handelspreisen (Last).
     /// </summary>
     public IntrabarReplaySession? TryBuildIntrabar(
-        int barMinutes = 5, int frameEveryTicks = 25, long maxRows = 100_000, string symbol = "MES")
+        int barMinutes = 5, int frameEveryTicks = 25, long maxRows = 100_000, string symbol = "MES",
+        DateTimeOffset? fromUtc = null)
     {
         if (barMinutes <= 0) barMinutes = 1;
         if (frameEveryTicks <= 0) frameEveryTicks = 1;
         lock (_sync)
         {
-            if (_intrabarCache.TryGetValue((barMinutes, frameEveryTicks), out var hit)) return hit;
+            if (_intrabarCache.TryGetValue((barMinutes, frameEveryTicks, fromUtc), out var hit)) return hit;
             LastError = null;
             try
             {
@@ -154,14 +158,17 @@ public sealed class SierraBacktestReplayService
                     throw new FileNotFoundException($"Lokale Sierra-Datei nicht gefunden: {LocalPath}");
 
                 var frames = new List<SierraIntrabarFrame>();
+                var builder = new SierraOrderFlowBarBuilder();
                 var sw = Stopwatch.StartNew();
-                var agg = new SierraOrderFlowBarBuilder().BuildFile(
-                    LocalPath, symbol, TimeSpan.FromMinutes(barMinutes), maxRows: maxRows,
-                    frameEveryTicks: frameEveryTicks, onFrame: frames.Add);
+                var agg = fromUtc is DateTimeOffset from
+                    ? builder.BuildFileFrom(LocalPath, symbol, TimeSpan.FromMinutes(barMinutes), from,
+                        toUtc: null, maxRows: maxRows, frameEveryTicks: frameEveryTicks, onFrame: frames.Add)
+                    : builder.BuildFile(LocalPath, symbol, TimeSpan.FromMinutes(barMinutes), maxRows: maxRows,
+                        frameEveryTicks: frameEveryTicks, onFrame: frames.Add);
                 sw.Stop();
 
                 var built = BuildIntrabarSession(agg, frames, symbol, barMinutes, frameEveryTicks, sw.ElapsedMilliseconds);
-                _intrabarCache[(barMinutes, frameEveryTicks)] = built;
+                _intrabarCache[(barMinutes, frameEveryTicks, fromUtc)] = built;
                 return built;
             }
             catch (Exception ex)
@@ -211,11 +218,15 @@ public sealed class SierraBacktestReplayService
             DollarPerPoint = DollarPerPoint,
             TotalNetPnL = trades.Sum(x => x.NetPnL),
             BarsProcessed = agg.RowsProcessed,
+            ValidTicks = agg.ValidTicks,
             ParseErrors = agg.ParseErrors,
             NetDelta = agg.NetDelta,
             FinalCumulativeDelta = agg.FinalCumulativeDelta,
             From = agg.FirstBarTime,
             To = agg.LastBarTime,
+            FirstTickTime = agg.FirstTickTime,
+            LastTickTime = agg.LastTickTime,
+            Truncated = agg.Truncated,
             DeltaCvdAvailable = agg.Capabilities.SupportsDeltaCvd,
             ElapsedMs = elapsedMs
         };
@@ -359,4 +370,47 @@ public sealed class SierraBacktestReplayService
         }
         return 1.0;
     }
+
+    /// <summary>
+    /// Findet den Frame-Index (in Replay-Reihenfolge), an dem der SL/TP-Exit tatsächlich passiert:
+    /// der ERSTE Frame der Exit-Bar (ab <paramref name="entryFrameIndex"/>), dessen KURSEREIGNIS
+    /// (<see cref="SierraIntrabarFrame.CurrentPrice"/>) das Exit-Level erreicht. Bewusst wird der
+    /// Frame-Preis geprüft und NICHT das laufende (kumulierte) Kerzen-High/Low: ein Level, das bereits
+    /// VOR dem Einstieg berührt wurde, bleibt im kumulierten High/Low "hängen" (es fällt nie zurück)
+    /// und würde den Marker sonst schon am Einstiegs-Frame einblenden — obwohl der eigentliche Touch
+    /// erst später (oder erneut) passiert. Über den Frame-Preis zählt nur ein Touch AB dem Einstieg.
+    /// Rückgabe -1 bei Zeit-Exit (kein SL/TP) oder wenn nicht gefunden.
+    ///
+    /// Grenze (bewusst benannt): Die Demo-Regel (<see cref="RunDemoRule"/>) entscheidet den Exit auf
+    /// BAR-Ebene und zeichnet KEINEN Tick-/Event-Index des Exits auf; die Intrabar-Sichtbarkeit wird
+    /// daher aus den Frames rekonstruiert. Frames sind mit <c>frameEveryTicks</c> gesampelt — ein
+    /// Touch, der vollständig zwischen zwei Samples liegt, wird erst am nächsten Sample erkannt oder
+    /// (bei vollständigem Retrace innerhalb der Lücke) übersprungen; bei <c>frameEveryTicks == 1</c>
+    /// ist die Erkennung exakt (jeder Tick ist ein Frame). Keine Zukunftsdaten für die Entscheidung.
+    /// </summary>
+    public static int FindExitFrameIndex(
+        IReadOnlyList<SierraIntrabarFrame> frames, ReplayTradeMarker t, int entryFrameIndex = 0)
+    {
+        bool? touchHigh = t.ExitPrice == t.TakeProfit ? t.Side == PositionSide.Long
+            : t.ExitPrice == t.StopLoss ? t.Side != PositionSide.Long
+            : (bool?)null;                                  // weder SL noch TP -> Zeit-Exit
+        if (touchHigh is null) return -1;
+
+        for (int i = Math.Max(0, entryFrameIndex); i < frames.Count; i++)
+        {
+            var f = frames[i];
+            if (f.CompletedBars != t.ExitIndex) continue;   // nur Frames der Exit-Bar
+            // Maßgeblich ist das Kursereignis DIESES Frames (CurrentPrice), NICHT das kumulierte
+            // High/Low — sonst würde ein Touch VOR dem Einstieg im laufenden High/Low nachwirken.
+            if (touchHigh.Value ? f.CurrentPrice >= t.ExitPrice : f.CurrentPrice <= t.ExitPrice) return i;
+        }
+        return -1;
+    }
+
+    /// <summary>
+    /// Exit-Marker sichtbar, sobald der Replay den Touch-Frame erreicht hat (monoton, rewind-korrekt).
+    /// Für Zeit-Exits (<paramref name="exitFrameIndex"/> = -1) ist er über den Bar-Abschluss zu steuern.
+    /// </summary>
+    public static bool ExitVisibleAtFrame(int currentFrameIndex, int exitFrameIndex)
+        => exitFrameIndex >= 0 && currentFrameIndex >= exitFrameIndex;
 }
