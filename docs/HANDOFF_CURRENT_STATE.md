@@ -5,11 +5,16 @@
 ## Projektstand
 
 - **Repository:** https://github.com/ReisMitEnte20/FuturesOrderflowBot.git · lokal `A:\Projects\FuturesOrderflowBot`
-- **Branch:** `integrate/dashboard-backtest` (lokal; **kein Push**, **kein Merge nach `main`** — nur mit Nutzerfreigabe)
-- **`main`:** lokal `a18599f7`, remote `20171440` (unverändert, nicht gemergt)
-- **Gepusht:** `integrate/dashboard-backtest` → `origin` (HEAD `5a36d952`), Draft-PR **#6** gegen `main`
-- **Uncommittet (Quant-Ausbau, 2026-09-27):** neues Projekt `TradingBot.Quant`, Quant-API im DevDashboard, Research-Seite im React-Dashboard, Tests, `docs/QUANT_RESEARCH.md` — **Freigabe für Commit steht aus**
-- **Letzte Commits auf dem Branch:**
+- **Branch:** `integrate/dashboard-backtest`, HEAD `c026d0aa`, gepusht (**kein Merge nach `main`** ohne Nutzerfreigabe)
+- **`main`:** remote **`6c9cc5f1`** — **PR #6 wurde gemergt**, die OHLC-Engine und das chartzentrierte React-Dashboard sind damit in `main`. Lokales `main` (`a18599f7`) ist **veraltet** und sollte vor weiterer Arbeit aktualisiert werden.
+- **Offener PR:** **#7** https://github.com/ReisMitEnte20/FuturesOrderflowBot/pull/7 (Quant-Research-Plattform, kein Draft, base `main`, MERGEABLE/CLEAN, keine CI-Checks — das Repo hat keine `.github/workflows`)
+- **Commits des Quant-Ausbaus (2026-09-27, gepusht):**
+  - `606bc938` feat(quant): Quant-Research-Bibliothek (neues Projekt `TradingBot.Quant`)
+  - `9558adc5` test(quant): unabhängige Referenzwerte, Nullfälle und Randfälle
+  - `ad70f39d` feat(devdashboard): Quant-API mit Fortschritt, Abbruch, Laufzeitgrenze
+  - `e7035e97` feat(dashboard): Research-Bereich `/research`
+  - `c026d0aa` docs(quant): Methoden, Konventionen, Grenzen und Handoff
+- **Frühere Commits auf dem Branch (inzwischen über PR #6 in `main`):**
   - `4f3c059f` feat(dashboard): chartzentrierte Backtest-Seite mit Bar-Replay und Trade-Navigation
   - `03ac0461` feat(devdashboard): OHLC-Kerzen ohne Strategielauf laden (`/api/backtest/candles`)
   - `a8f053e2` feat(backtesting): SL/TP je Trade und Mark-to-Market je Bar
@@ -108,8 +113,9 @@ Details und Methodenfestlegungen: **`docs/QUANT_RESEARCH.md`**.
 - **Hindsight (2026-09-26):** Die Prüfrunden-Übergabe ist in der Bank `FuturesOrderflowBot` gespeichert — Dokument **`4b94247d-ccf5-4163-bac0-849a4ba6b22a`** (context `project-handoff-current`, `state: valid`). Dieses Dokument entstand VOR den Commits und nennt daher noch „uncommitted / HEAD 54adb9e1".
 - **AUSSTEHENDE Hindsight-Synchronisierung:** Das Nachtragen der Commit-Hashes (c32ab819, 32e56457, 4c928eb2; HEAD 4c928eb2) in Hindsight scheiterte am 2026-09-26 an einem Kontingentfehler (HTTP 429, Tageslimit). Keine Retry-Schleife. Maßgeblich sind bis dahin diese Datei und die Git-Historie; die Hashes bei nächster Gelegenheit in Hindsight nachtragen. Frühere Übergaben: 2026-09-26 02:00 (`4b94247d…`), 2026-09-25 (`fe88dde9…`).
 - **Hindsight (2026-09-26, später am Tag):** Übergabe nach dem Push gespeichert — Dokument **`1aba4910-6788-40f9-b396-7c466a086cc5`** (Branch gepusht, Draft-PR #6, Teststand 477).
-- **AUSSTEHENDE Hindsight-Synchronisierung (2026-09-27):** Die Übergabe zum **Quant-Ausbau** konnte nicht gespeichert werden — erneut Kontingentfehler (HTTP 429, Tageslimit der Gemini-Free-Tier-Extraktion). **Keine Retry-Schleife.** Maßgeblich sind bis dahin diese Datei und `docs/QUANT_RESEARCH.md`; die Quant-Übergabe bei nächster Gelegenheit in Hindsight nachtragen.
-- **CodeMunch-Index** am 2026-09-26 per `index_folder` neu aufgebaut (363 Dateien, 4964 Symbole, inkl. TypeScript/TSX). Das neue Projekt `TradingBot.Quant` und die Research-Seite sind darin noch **nicht** enthalten — Index vor der nächsten Codeanalyse aktualisieren.
+- **Hindsight (2026-09-27, erster Versuch):** Das Speichern meldete HTTP 429, hat aber **teilweise** funktioniert — Dokument **`f63ee306-db35-48a3-8cbc-5b58e236ae62`** existiert und beschreibt den Quant-Ausbau als *uncommittet*. Diese Angabe ist seit den Commits **überholt**.
+- **AUSSTEHENDE Hindsight-Synchronisierung (2026-09-27):** Das Nachtragen von **Commit-Hashes, PR #7 und dem gemergten PR #6 / neuen `origin/main`** scheiterte erneut an HTTP 429 (Tageslimit der Gemini-Free-Tier-Extraktion). **Keine Retry-Schleife.** Maßgeblich sind bis dahin diese Datei, `docs/QUANT_RESEARCH.md` und die Git-Historie; bei nächster Gelegenheit in Hindsight nachtragen.
+- **CodeMunch-Index** am 2026-09-27 per `index_folder` neu aufgebaut: **405 Dateien, 6037 Symbole** (vorher 363/4964) — `TradingBot.Quant` und die Research-Seite sind jetzt enthalten.
 
 ## Betrieb (lokal, Simulation-only)
 
