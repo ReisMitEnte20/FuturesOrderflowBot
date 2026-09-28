@@ -215,6 +215,28 @@ public sealed class QuantApiService
                     Error = "Ohne Kampagne keine Suche: Versuchsbudget, Suchraum und Auswahlkriterium müssen VOR der Kampagne gespeichert werden."
                 };
 
+            // Das TATSÄCHLICH verwendete Auswahlkriterium (request.SelectionMetric — es steuert Reservierung,
+            // Ausführung und Selektion) muss mit dem gesperrten Kampagnenkriterium (request.Campaign.SelectionMetric)
+            // übereinstimmen. Widersprüchliche Angaben werden VOR Reservierung UND Strategieausführung abgelehnt —
+            // sonst würde unter einem gesperrten Kriterium faktisch nach einem anderen optimiert.
+            var requestedMetric = (request.SelectionMetric ?? string.Empty).Trim();
+            var campaignMetric = (request.Campaign.SelectionMetric ?? string.Empty).Trim();
+            if (requestedMetric.Length > 0 && campaignMetric.Length > 0
+                && !string.Equals(requestedMetric, campaignMetric, StringComparison.OrdinalIgnoreCase))
+                return new QuantWalkForwardResponse
+                {
+                    Ok = false,
+                    Error = $"Register [SELECTION_METRIC_MISMATCH]: Das tatsächlich angeforderte Auswahlkriterium " +
+                            $"'{requestedMetric}' widerspricht dem gesperrten Kampagnenkriterium '{campaignMetric}'. " +
+                            "Die Suche wird nicht gestartet (keine Versuche reserviert, keine Auswertung) — das Kriterium " +
+                            "wird vor der Kampagne festgelegt und nicht stillschweigend geändert."
+                };
+
+            // Ab hier ausschließlich das NORMALISIERTE (getrimmte) Kriterium verwenden, damit die tatsächlich
+            // ausgeführte Auswahl exakt dem verglichenen Wert entspricht. Sonst würde z. B. „ netprofit " den
+            // Vergleich bestehen, in SelectionValue aber nicht matchen und still auf Sharpe zurückfallen.
+            request = request with { SelectionMetric = requestedMetric.Length > 0 ? requestedMetric : "sharpe" };
+
             var ctx = await _backtest.LoadContextAsync(request.Run, ct);
             if (ctx.Candles.Count == 0)
                 return new QuantWalkForwardResponse { Ok = false, Error = "Keine gültigen OHLC-Bars im gewählten Zeitraum." };
@@ -654,7 +676,7 @@ public sealed class QuantApiService
             // wird PBO NACHVOLLZIEHBAR als nicht berechenbar gemeldet — nicht auf einer stillschweigend
             // verkürzten Basis gerechnet. PSR/DSR bleiben davon unberührt (getrennte Reihe), werden hier aber
             // — wie bei den übrigen „zu wenig Basis"-Fällen — bewusst nicht ausgewiesen.
-            var pboBlocked = CandidateMatrixAligner.PboBlockedReason(rebuilt.DroppedPeriods, rebuilt.Errors);
+            var pboBlocked = CandidateMatrixAligner.PboBlockedReason(rebuilt.DroppedPeriods, rebuilt.Errors, rebuilt.Truncations);
             if (pboBlocked is not null) return WithoutPbo(pboBlocked);
 
             if (wfRun.Count == 0) return WithoutPbo("Keine Kandidaten-Renditereihen verfügbar.");
@@ -769,7 +791,7 @@ public sealed class QuantApiService
     /// ausfielen. Beide entscheiden, ob PBO überhaupt berechenbar ist (Befund-6-Nachprüfung).
     /// </summary>
     private sealed record CandidateMatrix(Dictionary<string, IReadOnlyList<double>> Series,
-        IReadOnlyList<string> Notes, int DroppedPeriods, IReadOnlyList<string> Errors);
+        IReadOnlyList<string> Notes, int DroppedPeriods, IReadOnlyList<string> Errors, IReadOnlyList<string> Truncations);
 
     /// <summary>
     /// Baut die Kandidaten-Renditematrix erneut auf — dieselbe Aufteilung, dieselben Kandidaten.
@@ -810,7 +832,7 @@ public sealed class QuantApiService
         // Ausrichtung übernimmt der CandidateMatrixAligner (getrennt getestet). Ein Kandidat, der in einem
         // Fold mit einem Fehler ausfällt, wird als leere Reihe geführt UND als Fehler vermerkt — beides
         // führt dazu, dass PBO als nicht berechenbar gemeldet wird, statt auf verkürzter Basis zu rechnen.
-        var folds = new List<IReadOnlyList<CandidateFoldReturns>>();
+        var folds = new List<IReadOnlyList<CandidateFoldSeries>>();
         var errors = new List<string>();
         int foldIndex = 0;
         foreach (var fold in plan.Folds)
@@ -818,7 +840,7 @@ public sealed class QuantApiService
             ct.ThrowIfCancellationRequested();
             var slice = ctx.Candles.Skip(fold.Test.Start).Take(fold.Test.Count).ToList();
 
-            var perCandidate = new List<CandidateFoldReturns>(ids.Count);
+            var perCandidate = new List<CandidateFoldSeries>(ids.Count);
             for (int i = 0; i < request.Candidates.Count; i++)
             {
                 try
@@ -827,24 +849,27 @@ public sealed class QuantApiService
                     if (request.WarmupBars > 0) strat = new WarmupGuardStrategy(strat, request.WarmupBars);
                     var res = _backtest.RunEngine(ctx, strat, ConfigFrom(request.Run), candlesOverride: slice);
                     var curve = ReturnSeriesBuilder.BuildEquityCurve(res, spec, frequency);
-                    var series = ReturnSeriesBuilder.ToReturnSeries(curve, EquityBasis.Total).Series;
-                    perCandidate.Add(new CandidateFoldReturns(ids[i], series.Timestamps, series.Returns));
+                    // Das Truncated-Flag aus ToReturnSeries wird ERHALTEN und ausgewertet: es ist der einzige
+                    // Abbruch-Nachweis, wenn alle Kandidaten eines Folds zum gleichen Zeitpunkt abbrechen.
+                    var built = ReturnSeriesBuilder.ToReturnSeries(curve, EquityBasis.Total);
+                    perCandidate.Add(new CandidateFoldSeries(ids[i], built.Series.Timestamps, built.Series.Returns, built.Truncated));
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
                 {
                     errors.Add($"Kandidat '{ids[i]}' in Fold {foldIndex}: Auswertungsfehler ({ex.Message}).");
-                    perCandidate.Add(new CandidateFoldReturns(ids[i], Array.Empty<DateTimeOffset>(), Array.Empty<double>()));
+                    perCandidate.Add(new CandidateFoldSeries(ids[i], Array.Empty<DateTimeOffset>(), Array.Empty<double>(), Truncated: false));
                 }
             }
             folds.Add(perCandidate);
             foldIndex++;
         }
 
-        var (aligned, notes, droppedPeriods) = CandidateMatrixAligner.AlignByCommonTimestamps(ids, folds);
+        var (aligned, notes, droppedPeriods, truncations) = CandidateMatrixAligner.AlignAndDetectAborts(ids, folds);
         var allNotes = notes.ToList();
         allNotes.AddRange(errors);
-        return new CandidateMatrix(new Dictionary<string, IReadOnlyList<double>>(aligned), allNotes, droppedPeriods, errors);
+        allNotes.AddRange(truncations);
+        return new CandidateMatrix(new Dictionary<string, IReadOnlyList<double>>(aligned), allNotes, droppedPeriods, errors, truncations);
     }
 
     // =========================================================================================

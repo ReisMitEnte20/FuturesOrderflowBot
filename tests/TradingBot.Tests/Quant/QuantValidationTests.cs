@@ -331,13 +331,13 @@ public class QuantValidationTests
     [Fact]
     public void Pbo_is_computable_when_no_period_was_dropped_and_no_candidate_failed()
     {
-        CandidateMatrixAligner.PboBlockedReason(0, Array.Empty<string>()).Should().BeNull();
+        CandidateMatrixAligner.PboBlockedReason(0, Array.Empty<string>(), Array.Empty<string>()).Should().BeNull();
     }
 
     [Fact]
     public void Pbo_is_blocked_when_the_alignment_had_to_shorten_the_basis()
     {
-        var reason = CandidateMatrixAligner.PboBlockedReason(2, Array.Empty<string>());
+        var reason = CandidateMatrixAligner.PboBlockedReason(2, Array.Empty<string>(), Array.Empty<string>());
 
         reason.Should().NotBeNull();
         reason.Should().Contain("nicht berechenbar");
@@ -347,10 +347,69 @@ public class QuantValidationTests
     [Fact]
     public void Pbo_is_blocked_when_a_candidate_failed_with_an_error()
     {
-        var reason = CandidateMatrixAligner.PboBlockedReason(0, new[] { "Kandidat 'c1' in Fold 0: Auswertungsfehler (x)." });
+        var reason = CandidateMatrixAligner.PboBlockedReason(0,
+            new[] { "Kandidat 'c1' in Fold 0: Auswertungsfehler (x)." }, Array.Empty<string>());
 
         reason.Should().NotBeNull();
         reason.Should().Contain("nicht berechenbar");
         reason.Should().Contain("Fehler");
+    }
+
+    // -------------------------------------------------------------------------------------------
+    // Befund 1 (Nachprüfung): Das Truncated-Flag aus ToReturnSeries wird ausgewertet. Brechen ALLE
+    // Kandidaten im SELBEN Fold zum GLEICHEN Zeitpunkt ab (Kapital ≤ 0), sind die Reihen gleich lang,
+    // die Zeitstempel-Schnittmenge verwirft nichts (DroppedPeriods == 0) — nur das Truncated-Flag deckt
+    // den Abbruch auf. PBO MUSS dann als nicht berechenbar erscheinen.
+    // -------------------------------------------------------------------------------------------
+
+    /// <summary>Kapitalkurve, deren Gesamtkapital nach der ersten Periode auf ≤ 0 fällt (echter Abbruchfall).</summary>
+    private static QuantEquityCurve CurveThatHitsZero()
+    {
+        QuantEquityPoint P(int min, decimal total) => new()
+        {
+            Time = T0.AddMinutes(min), BarIndex = min / 5, RealizedEquity = total, TotalEquity = total, OpenQuantity = 0
+        };
+        // 100 -> -10 (Kapital ≤ 0) -> 50: ToReturnSeries misst die erste Rendite und bricht bei der NÄCHSTEN
+        // Periode ab, weil das Vorperiodenkapital ≤ 0 ist (Truncated == true).
+        return new QuantEquityCurve
+        {
+            Name = "abbruch", InitialCapital = 100m, Frequency = ReturnFrequency.Bar,
+            Points = new[] { P(0, 100m), P(5, -10m), P(10, 50m) }
+        };
+    }
+
+    [Fact]
+    public void ToReturnSeries_flags_truncation_when_capital_hits_zero()
+    {
+        var built = ReturnSeriesBuilder.ToReturnSeries(CurveThatHitsZero(), EquityBasis.Total);
+        built.Truncated.Should().BeTrue();     // das Flag, das der PBO-Servicepfad erhalten muss
+    }
+
+    [Fact]
+    public void Pbo_is_not_computable_when_all_candidates_truncate_at_the_same_time_in_the_same_fold()
+    {
+        // Echtes ToReturnSeries-Ergebnis (kein vorgegebener Zahlenwert): Kurve fällt auf Kapital ≤ 0.
+        var built = ReturnSeriesBuilder.ToReturnSeries(CurveThatHitsZero(), EquityBasis.Total);
+        built.Truncated.Should().BeTrue();
+
+        // Symmetrisch: BEIDE Kandidaten liefern dieselbe (abgebrochene) Reihe im selben Fold.
+        var fold = new List<CandidateFoldSeries>
+        {
+            new("A", built.Series.Timestamps, built.Series.Returns, built.Truncated),
+            new("B", built.Series.Timestamps, built.Series.Returns, built.Truncated)
+        };
+        var res = CandidateMatrixAligner.AlignAndDetectAborts(
+            new[] { "A", "B" }, new[] { (IReadOnlyList<CandidateFoldSeries>)fold });
+
+        // Gleiche Reihenlänge ⇒ die Schnittmenge verwirft NICHTS: die Drop-Zahl allein würde den Abbruch
+        // nicht bemerken. Erst das Truncated-Flag deckt ihn auf.
+        res.DroppedPeriods.Should().Be(0);
+        res.Truncations.Should().NotBeEmpty();
+
+        // Genau dieser Fall muss PBO als nicht berechenbar melden — trotz DroppedPeriods == 0 und ohne Fehler.
+        var reason = CandidateMatrixAligner.PboBlockedReason(res.DroppedPeriods, Array.Empty<string>(), res.Truncations);
+        reason.Should().NotBeNull();
+        reason.Should().Contain("nicht berechenbar");
+        reason.Should().Contain("Kapital ≤ 0");
     }
 }
