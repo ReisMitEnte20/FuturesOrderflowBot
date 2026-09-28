@@ -1,6 +1,7 @@
 using FluentAssertions;
 using TradingBot.DevDashboard.Services;
 using TradingBot.DevDashboard.Services.Quant;
+using TradingBot.Quant.Registry;
 using Xunit;
 
 namespace TradingBot.Tests.DevDashboard;
@@ -77,5 +78,87 @@ public class QuantSelectionMetricLockTests : IDisposable
         var resp = await svc.WalkForwardAsync(request);
 
         (resp.Error ?? string.Empty).Should().NotContain("SELECTION_METRIC_MISMATCH");
+    }
+
+    private async Task<QuantApiService> ServiceWithLockedCampaign(string id, string metric)
+    {
+        var svc = Service();
+        await svc.Store.CreateCampaignAsync(new CampaignRecord
+        {
+            Id = id, Name = "Testkampagne", Hypothesis = "Test ohne Edge-Behauptung.",
+            SearchSpace = "FastPeriod, SlowPeriod", SelectionMetric = metric, TrialBudget = 4
+        });
+        return svc;
+    }
+
+    [Fact]
+    public async Task Existing_sharpe_campaign_rejects_a_netprofit_request_even_with_empty_campaign_criterion()
+    {
+        // Die Lücke: leeres request.Campaign.SelectionMetric übersprang bislang beide Prüfungen. Jetzt wird
+        // das tatsächlich verwendete Kriterium DIREKT mit dem GESPEICHERTEN, gesperrten Wert verglichen.
+        var svc = await ServiceWithLockedCampaign("locked-sharpe", "sharpe");
+
+        var request = new QuantWalkForwardRequest
+        {
+            Run = new BacktestRunRequest(),
+            SelectionMetric = "netprofit",
+            Candidates = OneCandidate(),
+            Campaign = new CampaignInput
+            {
+                Id = "locked-sharpe", SearchSpace = "FastPeriod, SlowPeriod", SelectionMetric = "", TrialBudget = 4
+            }
+        };
+
+        var resp = await svc.WalkForwardAsync(request);
+
+        resp.Ok.Should().BeFalse();
+        resp.Error.Should().Contain("SELECTION_METRIC_MISMATCH");
+        resp.Error.Should().Contain("sharpe");        // der gespeicherte, gesperrte Wert
+        resp.Error.Should().Contain("netprofit");
+
+        // Keine zusätzlichen Versuche unter der gesperrten Kampagne.
+        (await svc.Store.ListTrialsAsync("locked-sharpe")).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Existing_sharpe_campaign_rejects_an_empty_request_criterion()
+    {
+        var svc = await ServiceWithLockedCampaign("locked-sharpe2", "sharpe");
+
+        var request = new QuantWalkForwardRequest
+        {
+            Run = new BacktestRunRequest(),
+            SelectionMetric = "   ",                    // leer/Whitespace
+            Candidates = OneCandidate(),
+            Campaign = new CampaignInput
+            {
+                Id = "locked-sharpe2", SearchSpace = "FastPeriod, SlowPeriod", SelectionMetric = "sharpe", TrialBudget = 4
+            }
+        };
+
+        var resp = await svc.WalkForwardAsync(request);
+
+        resp.Ok.Should().BeFalse();
+        resp.Error.Should().Contain("SELECTION_METRIC_MISSING");
+        (await svc.Store.ListTrialsAsync("locked-sharpe2")).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task An_unknown_selection_metric_is_rejected_instead_of_falling_back_to_sharpe()
+    {
+        var svc = Service();
+        var request = new QuantWalkForwardRequest
+        {
+            Run = new BacktestRunRequest(),
+            SelectionMetric = "profitfactor",           // nicht unterstützt
+            Candidates = OneCandidate(),
+            Campaign = new CampaignInput { Id = "c-unknown", SearchSpace = "s", SelectionMetric = "profitfactor", TrialBudget = 2 }
+        };
+
+        var resp = await svc.WalkForwardAsync(request);
+
+        resp.Ok.Should().BeFalse();
+        resp.Error.Should().Contain("SELECTION_METRIC_UNKNOWN");
+        (await svc.Store.ListCampaignsAsync()).Should().BeEmpty();   // keine Kampagne angelegt
     }
 }

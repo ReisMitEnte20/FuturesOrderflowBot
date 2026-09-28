@@ -215,27 +215,58 @@ public sealed class QuantApiService
                     Error = "Ohne Kampagne keine Suche: Versuchsbudget, Suchraum und Auswahlkriterium müssen VOR der Kampagne gespeichert werden."
                 };
 
-            // Das TATSÄCHLICH verwendete Auswahlkriterium (request.SelectionMetric — es steuert Reservierung,
-            // Ausführung und Selektion) muss mit dem gesperrten Kampagnenkriterium (request.Campaign.SelectionMetric)
-            // übereinstimmen. Widersprüchliche Angaben werden VOR Reservierung UND Strategieausführung abgelehnt —
-            // sonst würde unter einem gesperrten Kriterium faktisch nach einem anderen optimiert.
-            var requestedMetric = (request.SelectionMetric ?? string.Empty).Trim();
-            var campaignMetric = (request.Campaign.SelectionMetric ?? string.Empty).Trim();
-            if (requestedMetric.Length > 0 && campaignMetric.Length > 0
-                && !string.Equals(requestedMetric, campaignMetric, StringComparison.OrdinalIgnoreCase))
-                return new QuantWalkForwardResponse
-                {
-                    Ok = false,
-                    Error = $"Register [SELECTION_METRIC_MISMATCH]: Das tatsächlich angeforderte Auswahlkriterium " +
-                            $"'{requestedMetric}' widerspricht dem gesperrten Kampagnenkriterium '{campaignMetric}'. " +
-                            "Die Suche wird nicht gestartet (keine Versuche reserviert, keine Auswertung) — das Kriterium " +
-                            "wird vor der Kampagne festgelegt und nicht stillschweigend geändert."
-                };
+            // Auswahlkriterium verbindlich an das gesperrte Kampagnenkriterium koppeln — VOR Datenladen,
+            // Reservierung und Auswertung. Beide Kriterien werden einheitlich normalisiert (getrimmt,
+            // Kleinbuchstaben). Null/leer/Whitespace UND unbekannte Kriterien werden ausdrücklich abgelehnt
+            // (kein stiller Rückfall auf Sharpe). Bei einer BEREITS gespeicherten Kampagne wird das tatsächlich
+            // verwendete Kriterium DIREKT mit dem gespeicherten, gesperrten Wert verglichen — ein leeres oder
+            // abweichendes request.Campaign.SelectionMetric kann den Schutz dann nicht mehr umgehen.
+            QuantWalkForwardResponse Reject(string code, string message) =>
+                new() { Ok = false, Error = $"Register [{code}]: {message}" };
 
-            // Ab hier ausschließlich das NORMALISIERTE (getrimmte) Kriterium verwenden, damit die tatsächlich
-            // ausgeführte Auswahl exakt dem verglichenen Wert entspricht. Sonst würde z. B. „ netprofit " den
-            // Vergleich bestehen, in SelectionValue aber nicht matchen und still auf Sharpe zurückfallen.
-            request = request with { SelectionMetric = requestedMetric.Length > 0 ? requestedMetric : "sharpe" };
+            var allowed = string.Join(", ", KnownSelectionMetrics.OrderBy(m => m, StringComparer.Ordinal));
+
+            var requestedMetric = NormalizeMetric(request.SelectionMetric);
+            if (requestedMetric is null)
+                return Reject("SELECTION_METRIC_MISSING", "Kein Auswahlkriterium im Request angegeben (leer/Whitespace).");
+            if (!KnownSelectionMetrics.Contains(requestedMetric))
+                return Reject("SELECTION_METRIC_UNKNOWN", $"Unbekanntes Auswahlkriterium '{requestedMetric}'. Erlaubt: {allowed}.");
+
+            var existingCampaign = await _store.GetCampaignAsync(request.Campaign.Id, ct);
+            string lockedMetric;
+            if (existingCampaign is not null)
+            {
+                var stored = NormalizeMetric(existingCampaign.SelectionMetric);
+                if (stored is null || !KnownSelectionMetrics.Contains(stored))
+                    return Reject("SELECTION_METRIC_INVALID",
+                        $"Die gespeicherte Kampagne '{existingCampaign.Id}' hat kein gültiges gesperrtes Auswahlkriterium " +
+                        $"('{existingCampaign.SelectionMetric}').");
+                lockedMetric = stored;
+            }
+            else
+            {
+                var campaignMetric = NormalizeMetric(request.Campaign.SelectionMetric);
+                if (campaignMetric is null)
+                    return Reject("SELECTION_METRIC_MISSING", "Kein Kampagnen-Auswahlkriterium angegeben (leer/Whitespace).");
+                if (!KnownSelectionMetrics.Contains(campaignMetric))
+                    return Reject("SELECTION_METRIC_UNKNOWN", $"Unbekanntes Kampagnen-Auswahlkriterium '{campaignMetric}'. Erlaubt: {allowed}.");
+                lockedMetric = campaignMetric;
+            }
+
+            if (!string.Equals(requestedMetric, lockedMetric, StringComparison.Ordinal))
+                return Reject("SELECTION_METRIC_MISMATCH",
+                    $"Das tatsächlich angeforderte Auswahlkriterium '{requestedMetric}' widerspricht dem " +
+                    $"{(existingCampaign is not null ? "gespeicherten, gesperrten" : "angegebenen")} Kampagnenkriterium '{lockedMetric}'. " +
+                    "Die Suche wird nicht gestartet (keine Versuche reserviert, keine Auswertung) — das Kriterium wird vor der " +
+                    "Kampagne festgelegt und nicht stillschweigend geändert.");
+
+            // Ab hier ausschließlich die normalisierten Werte verwenden — die tatsächlich ausgeführte Auswahl
+            // entspricht exakt dem verglichenen/gesperrten Kriterium (kein stiller Rückfall auf Sharpe).
+            request = request with
+            {
+                SelectionMetric = requestedMetric,
+                Campaign = request.Campaign with { SelectionMetric = lockedMetric }
+            };
 
             var ctx = await _backtest.LoadContextAsync(request.Run, ct);
             if (ctx.Candles.Count == 0)
@@ -1126,6 +1157,17 @@ public sealed class QuantApiService
     {
         if (p.Count == 0) return $"c{index}";
         return string.Join("_", p.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => $"{kv.Key}{kv.Value}"));
+    }
+
+    /// <summary>Die einzigen unterstützten Auswahlkriterien. Alles andere wird abgelehnt, nicht still ersetzt.</summary>
+    private static readonly HashSet<string> KnownSelectionMetrics =
+        new(StringComparer.Ordinal) { "sharpe", "sortino", "cagr", "calmar", "netprofit" };
+
+    /// <summary>Vereinheitlicht ein Auswahlkriterium (trim + Kleinbuchstaben); <c>null</c> bei leer/Whitespace.</summary>
+    private static string? NormalizeMetric(string? metric)
+    {
+        var trimmed = (metric ?? string.Empty).Trim();
+        return trimmed.Length == 0 ? null : trimmed.ToLowerInvariant();
     }
 
     private static double? SelectionValue(string metric, PerformanceMetricsResult metrics, decimal netProfit) =>
