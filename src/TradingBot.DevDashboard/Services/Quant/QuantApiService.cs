@@ -243,11 +243,6 @@ public sealed class QuantApiService
                     TotalBars = plan.TotalBars
                 };
 
-            // Die Kampagne wird erst NACH der Aufteilung angelegt, damit der reservierte Holdout-Zeitraum
-            // im Register steht und dort tatsächlich geschützt werden kann.
-            var campaign = await EnsureCampaignAsync(request.Campaign, request.Candidates.Count,
-                plan.Holdout?.FromTime, plan.Holdout?.ToTime, ct);
-
             var spec = new QuantContractSpec(ctx.Instrument.TickSize, ctx.Instrument.PointValue, ctx.Instrument.Currency);
             var candidates = request.Candidates
                 .Select((p, i) => new ParameterCandidate(CandidateId(p, i), p))
@@ -255,6 +250,60 @@ public sealed class QuantApiService
 
             var evalOptions = MetricOptions(request.Options);
             var frequency = ParseFrequency(request.Options.Frequency);
+
+            // Datenbezug und Kostenprofil VOR der Ausführung bestimmen — sie sperren die Kampagne und
+            // beschreiben jeden Versuch reproduzierbar.
+            var fingerprint = DataFingerprint.Compute(ctx.Candles, ctx.Instrument.Symbol, ctx.TimeframeMinutes, ctx.Source);
+            var costs = CostSnapshot(ctx, request);
+            string code = CodeVersion();
+
+            // Die Kampagne wird erst NACH der Aufteilung angelegt, damit der reservierte Holdout-Zeitraum
+            // im Register steht. Existiert sie bereits, werden gesperrte Angaben (Suchraum, Auswahlkriterium,
+            // Datenbezug, Holdout, Budget) geprüft und Abweichungen NICHT stillschweigend übernommen.
+            CampaignRecord campaign;
+            try
+            {
+                campaign = await EnsureCampaignAsync(request.Campaign, request.Candidates.Count,
+                    plan.Holdout?.FromTime, plan.Holdout?.ToTime, fingerprint.Sha256, ct);
+            }
+            catch (ExperimentRegistryException ex)
+            {
+                return new QuantWalkForwardResponse { Ok = false, Error = $"Register [{ex.Code}]: {ex.Message}" };
+            }
+
+            // Versuche ATOMAR und mit EINDEUTIGER Ausführungs-Id VOR dem Lauf reservieren. Eine neue
+            // Ausführung überschreibt keine abgeschlossenen Ergebnisse; ein erschöpftes Budget verhindert
+            // den Start (der Registerfehler wird sichtbar gemeldet).
+            string runId = $"run{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}-{Guid.NewGuid():N}".Substring(0, 28);
+            var trialByCandidate = candidates.ToDictionary(c => c.Id, c => $"{campaign.Id}-{runId}-{c.Id}");
+            var reservations = candidates.Select(c => new TrialRecord
+            {
+                Id = trialByCandidate[c.Id],
+                CampaignId = campaign.Id,
+                StrategyId = request.Run.Strategy,
+                StrategyVersion = code,
+                Origin = StrategyOrigin.Manual,
+                OriginReference = $"Walk-forward-Kampagne im Dashboard (Ausführung {runId})",
+                Parameters = c.Parameters,
+                Data = fingerprint,
+                Costs = costs,
+                CodeVersion = code,
+                Seed = 0,
+                PeriodFrom = ctx.Candles[0].OpenTime,
+                PeriodTo = plan.Holdout?.FromTime ?? ctx.Candles[^1].CloseTime,
+                PeriodRole = "walkforward",
+                Status = TrialStatus.Running,
+                Tags = new[] { "walkforward", request.SelectionMetric }
+            }).ToList();
+
+            try
+            {
+                await _store.ReserveTrialsAsync(campaign.Id, reservations, ct);
+            }
+            catch (ExperimentRegistryException ex)
+            {
+                return new QuantWalkForwardResponse { Ok = false, Error = $"Register [{ex.Code}]: {ex.Message} — der Lauf wurde nicht gestartet." };
+            }
 
             Task<SegmentOutcome> Evaluate(IReadOnlyDictionary<string, string> parameters,
                 IReadOnlyList<DataSplit> segments, SplitRole role, CancellationToken token)
@@ -269,7 +318,9 @@ public sealed class QuantApiService
                         token.ThrowIfCancellationRequested();
                         if (seg.Count < 2) continue;
                         var slice = ctx.Candles.Skip(seg.Start).Take(seg.Count).ToList();
-                        var strat = _backtest.CreateStrategy(request.Run with { Params = new Dictionary<string, string>(parameters) }, ctx.Instrument);
+                        IStrategy strat = _backtest.CreateStrategy(request.Run with { Params = new Dictionary<string, string>(parameters) }, ctx.Instrument);
+                        // Ausgewiesener Warmup wird durchgesetzt: in den ersten Bars jedes Abschnitts keine Ausführung.
+                        if (request.WarmupBars > 0) strat = new WarmupGuardStrategy(strat, request.WarmupBars);
                         var res = _backtest.RunEngine(ctx, strat, ConfigFrom(request.Run), candlesOverride: slice);
                         trades += res.Trades.Count;
                         net += res.Statistics.NetProfit;
@@ -297,11 +348,22 @@ public sealed class QuantApiService
                 catch (Exception ex) { return Task.FromResult(SegmentOutcome.Failed(ex.Message)); }
             }
 
-            var run = await WalkForwardRunner.RunAsync(plan, candidates, Evaluate, request.SelectionMetric,
-                SelectionDirection.HigherIsBetter, progress, ct);
+            WalkForwardRunResult run;
+            try
+            {
+                run = await WalkForwardRunner.RunAsync(plan, candidates, Evaluate, request.SelectionMetric,
+                    SelectionDirection.HigherIsBetter, progress, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                // Abbruch dauerhaft erfassen: die reservierten Versuche werden als Failed (Abbruch) finalisiert.
+                await MarkReservationsCancelledAsync(campaign.Id, trialByCandidate.Values, ct);
+                throw;
+            }
 
-            // --- Versuche im Register erfassen (auch die schlechten) ---
-            int recorded = await RecordTrialsAsync(campaign, request, ctx, candidates, run, ct);
+            // --- Reservierte Versuche mit Ergebnissen finalisieren (auch die schlechten) ---
+            var finalizeNotes = new List<string>();
+            int recorded = await FinalizeTrialsAsync(campaign.Id, trialByCandidate, request, candidates, run, finalizeNotes, ct);
 
             var oosMetrics = PerformanceMetricsCalculator.Compute(run.OutOfSampleReturns, evalOptions);
 
@@ -337,7 +399,7 @@ public sealed class QuantApiService
                 CandidateSharpes = candidateSharpes,
                 CampaignId = campaign.Id,
                 TrialsRecorded = recorded,
-                Notes = run.Notes
+                Notes = run.Notes.Concat(finalizeNotes).ToList()
             };
         }
         catch (OperationCanceledException) { throw; }
@@ -576,14 +638,24 @@ public sealed class QuantApiService
             var ctx = await _backtest.LoadContextAsync(request.WalkForward.Run, ct);
             var candidateIds = wf.CandidateSharpes.Keys.ToList();
 
-            var wfRun = await RebuildCandidateMatrixAsync(request.WalkForward, ctx, ct);
+            var rebuilt = await RebuildCandidateMatrixAsync(request.WalkForward, ctx, ct);
+            var wfRun = rebuilt.Series;
             var notes = new List<string>(wf.Notes);
+            notes.AddRange(rebuilt.Notes);
 
             QuantOverfittingResponse WithoutPbo(string reason) => new()
             {
                 Ok = true, WalkForward = wf, PboUnavailableReason = reason, Notes = notes,
                 Candidates = candidateIds.Count
             };
+
+            // Befund-6-Nachprüfung: Musste die Zeitstempel-Ausrichtung die gemeinsame Datenbasis verkürzen
+            // (ein Kandidat brach vorzeitig ab: Kapital ≤ 0) oder fiel ein Kandidat mit einem Fehler aus, so
+            // wird PBO NACHVOLLZIEHBAR als nicht berechenbar gemeldet — nicht auf einer stillschweigend
+            // verkürzten Basis gerechnet. PSR/DSR bleiben davon unberührt (getrennte Reihe), werden hier aber
+            // — wie bei den übrigen „zu wenig Basis"-Fällen — bewusst nicht ausgewiesen.
+            var pboBlocked = CandidateMatrixAligner.PboBlockedReason(rebuilt.DroppedPeriods, rebuilt.Errors);
+            if (pboBlocked is not null) return WithoutPbo(pboBlocked);
 
             if (wfRun.Count == 0) return WithoutPbo("Keine Kandidaten-Renditereihen verfügbar.");
 
@@ -605,19 +677,50 @@ public sealed class QuantApiService
 
             var psr = ProbabilisticSharpe.Compute(selectedReturns);
 
-            var trialSharpes = wf.CandidateSharpes.Values.Where(v => v.HasValue).Select(v => v!.Value).ToList();
+            // --- DSR-Versuchsgrundlage: die VOLLE relevante Kampagnenhistorie, nicht nur der aktuelle Request ---
+            IReadOnlyList<TrialRecord> campaignTrials = wf.CampaignId is not null
+                ? await _store.ListTrialsAsync(wf.CampaignId, ct)
+                : Array.Empty<TrialRecord>();
+
+            List<double> trialSharpes;
+            if (campaignTrials.Count > 0)
+            {
+                trialSharpes = campaignTrials
+                    .Select(t => t.Metrics.TryGetValue("test.sharpe_per_period", out var v) ? v : null)
+                    .Where(v => v.HasValue).Select(v => v!.Value).ToList();
+                notes.Add($"DSR-Versuchsgrundlage: {trialSharpes.Count} von {campaignTrials.Count} im Register erfassten " +
+                          $"Versuchen der Kampagne '{wf.CampaignId}' mit gültigem Sharpe (gesamte relevante Historie, " +
+                          "nicht nur der aktuelle Request).");
+            }
+            else
+            {
+                trialSharpes = wf.CandidateSharpes.Values.Where(v => v.HasValue).Select(v => v!.Value).ToList();
+                notes.Add("DSR-Versuchsgrundlage: nur die Kandidaten des aktuellen Requests — keine Kampagnenhistorie " +
+                          "im Register gefunden. Die Versuchszahl beschreibt nicht notwendigerweise die vollständige Kampagne.");
+            }
+
             double? effective = null;
             string? rationale = null;
             if (request.EstimateEffectiveTrials)
             {
-                var (eff, why) = ProbabilisticSharpe.EstimateEffectiveTrials(ordered.Select(o => (IReadOnlyList<double>)o.Value).ToList());
-                effective = eff;
-                rationale = why;
+                // Die Korrelationsheuristik braucht die Renditereihen der Versuche. Sie liegen nur für die
+                // Kandidaten des aktuellen Requests vor. Nur wenn die erfasste Versuchszahl exakt diesen
+                // Kandidaten entspricht, wird die effektive Zahl darüber reduziert; sonst konservativ
+                // die tatsächliche Zahl (keine unbelegte Reduktion über eine unvollständige Korrelationsbasis).
+                if (campaignTrials.Count == 0 || campaignTrials.Count == ordered.Count)
+                {
+                    var (eff, why) = ProbabilisticSharpe.EstimateEffectiveTrials(ordered.Select(o => (IReadOnlyList<double>)o.Value).ToList());
+                    effective = eff;
+                    rationale = why;
+                }
+                else
+                {
+                    rationale = $"Effektive Versuchszahl nicht über die Korrelationsheuristik reduziert: die Kampagne umfasst " +
+                                $"{campaignTrials.Count} Versuche, aber nur die {ordered.Count} Kandidaten des aktuellen Requests " +
+                                "liegen als Renditereihen für eine Korrelationsschätzung vor — es wird konservativ die tatsächliche Zahl angesetzt.";
+                }
             }
             var dsr = ProbabilisticSharpe.ComputeDeflated(selectedReturns, trialSharpes, effective, rationale);
-
-            if (trialSharpes.Count < wf.CandidateSharpes.Count)
-                notes.Add($"{wf.CandidateSharpes.Count - trialSharpes.Count} Kandidat(en) ohne gültigen Sharpe gehen nicht in DSR ein.");
 
             return new QuantOverfittingResponse
             {
@@ -660,10 +763,26 @@ public sealed class QuantApiService
     }
 
     /// <summary>
+    /// Ergebnis der Matrix-Rekonstruktion: zeitlich ausgerichtete Kandidatenreihen plus Hinweise.
+    /// <see cref="DroppedPeriods"/> zählt die Perioden, die die Zeitstempel-Ausrichtung verwerfen musste
+    /// (vorzeitiger Abbruch/Kapital ≤ 0); <see cref="Errors"/> hält Kandidaten fest, die mit einem Fehler
+    /// ausfielen. Beide entscheiden, ob PBO überhaupt berechenbar ist (Befund-6-Nachprüfung).
+    /// </summary>
+    private sealed record CandidateMatrix(Dictionary<string, IReadOnlyList<double>> Series,
+        IReadOnlyList<string> Notes, int DroppedPeriods, IReadOnlyList<string> Errors);
+
+    /// <summary>
     /// Baut die Kandidaten-Renditematrix erneut auf — dieselbe Aufteilung, dieselben Kandidaten.
     /// Deterministisch, deshalb identisch zum Walk-forward-Lauf.
+    ///
+    /// Wichtig für PBO: Die Reihen werden NICHT positional auf gleiche Länge gekürzt (gleiche Länge ≠
+    /// gleiche Beobachtungsintervalle). Stattdessen werden je Fold nur die Zeitstempel behalten, die bei
+    /// ALLEN Kandidaten vorkommen. Bricht ein Kandidat in einem Fold vorzeitig ab (Kapital ≤ 0, keine
+    /// Perioden), gehen dessen fehlende Perioden für alle Kandidaten dieses Folds nicht ein — und die
+    /// späteren Werte anderer Kandidaten werden nie gegen frühere Zeiträume verglichen. Weggefallene
+    /// Perioden werden ausdrücklich vermerkt (keine stillschweigende Entfernung).
     /// </summary>
-    private async Task<Dictionary<string, IReadOnlyList<double>>> RebuildCandidateMatrixAsync(
+    private async Task<CandidateMatrix> RebuildCandidateMatrixAsync(
         QuantWalkForwardRequest request, BacktestApiService.RunContext ctx, CancellationToken ct)
     {
         var spec = new QuantContractSpec(ctx.Instrument.TickSize, ctx.Instrument.PointValue, ctx.Instrument.Currency);
@@ -683,38 +802,95 @@ public sealed class QuantApiService
             HoldoutFraction = request.HoldoutFraction
         });
 
-        var map = new Dictionary<string, List<double>>();
+        var ids = new List<string>();
         for (int i = 0; i < request.Candidates.Count; i++)
-            map[CandidateId(request.Candidates[i], i)] = new List<double>();
+            ids.Add(CandidateId(request.Candidates[i], i));
 
+        // Je Fold die zeitstempelbehaftete Renditereihe JEDES Kandidaten sammeln; die zeitliche
+        // Ausrichtung übernimmt der CandidateMatrixAligner (getrennt getestet). Ein Kandidat, der in einem
+        // Fold mit einem Fehler ausfällt, wird als leere Reihe geführt UND als Fehler vermerkt — beides
+        // führt dazu, dass PBO als nicht berechenbar gemeldet wird, statt auf verkürzter Basis zu rechnen.
+        var folds = new List<IReadOnlyList<CandidateFoldReturns>>();
+        var errors = new List<string>();
+        int foldIndex = 0;
         foreach (var fold in plan.Folds)
         {
             ct.ThrowIfCancellationRequested();
             var slice = ctx.Candles.Skip(fold.Test.Start).Take(fold.Test.Count).ToList();
+
+            var perCandidate = new List<CandidateFoldReturns>(ids.Count);
             for (int i = 0; i < request.Candidates.Count; i++)
             {
-                var id = CandidateId(request.Candidates[i], i);
-                var strat = _backtest.CreateStrategy(request.Run with { Params = new Dictionary<string, string>(request.Candidates[i]) }, ctx.Instrument);
-                var res = _backtest.RunEngine(ctx, strat, ConfigFrom(request.Run), candlesOverride: slice);
-                var curve = ReturnSeriesBuilder.BuildEquityCurve(res, spec, frequency);
-                map[id].AddRange(ReturnSeriesBuilder.ToReturnSeries(curve, EquityBasis.Total).Series.Returns);
+                try
+                {
+                    IStrategy strat = _backtest.CreateStrategy(request.Run with { Params = new Dictionary<string, string>(request.Candidates[i]) }, ctx.Instrument);
+                    if (request.WarmupBars > 0) strat = new WarmupGuardStrategy(strat, request.WarmupBars);
+                    var res = _backtest.RunEngine(ctx, strat, ConfigFrom(request.Run), candlesOverride: slice);
+                    var curve = ReturnSeriesBuilder.BuildEquityCurve(res, spec, frequency);
+                    var series = ReturnSeriesBuilder.ToReturnSeries(curve, EquityBasis.Total).Series;
+                    perCandidate.Add(new CandidateFoldReturns(ids[i], series.Timestamps, series.Returns));
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    errors.Add($"Kandidat '{ids[i]}' in Fold {foldIndex}: Auswertungsfehler ({ex.Message}).");
+                    perCandidate.Add(new CandidateFoldReturns(ids[i], Array.Empty<DateTimeOffset>(), Array.Empty<double>()));
+                }
             }
+            folds.Add(perCandidate);
+            foldIndex++;
         }
 
-        // Auf gleiche Länge kürzen (nur vollständig vergleichbare Perioden gehen in CSCV ein).
-        int min = map.Count == 0 ? 0 : map.Min(kv => kv.Value.Count);
-        return map.ToDictionary(kv => kv.Key, kv => (IReadOnlyList<double>)kv.Value.Take(min).ToList());
+        var (aligned, notes, droppedPeriods) = CandidateMatrixAligner.AlignByCommonTimestamps(ids, folds);
+        var allNotes = notes.ToList();
+        allNotes.AddRange(errors);
+        return new CandidateMatrix(new Dictionary<string, IReadOnlyList<double>>(aligned), allNotes, droppedPeriods, errors);
     }
 
     // =========================================================================================
     // Register / Kampagnen
     // =========================================================================================
 
+    private CostProfileSnapshot CostSnapshot(BacktestApiService.RunContext ctx, QuantWalkForwardRequest request) => new()
+    {
+        FeePerSide = ctx.Fee.CommissionPerSide + ctx.Fee.ExchangeFeePerSide + ctx.Fee.ClearingFeePerSide
+                     + ctx.Fee.RoutingFeePerSide + ctx.Fee.NfaFeePerSide + ctx.Fee.OtherFeePerSide,
+        SlippageTicks = ctx.Fee.EstimatedSlippageTicks,
+        TickSize = ctx.Instrument.TickSize,
+        PointValue = ctx.Instrument.PointValue,
+        ApplyFees = request.Run.ApplyFees,
+        Currency = ctx.Instrument.Currency,
+        IsExampleProfile = ctx.FeeIsExample || ctx.InstrumentIsExample
+    };
+
     private async Task<CampaignRecord> EnsureCampaignAsync(CampaignInput input, int candidateCount,
-        DateTimeOffset? holdoutFrom, DateTimeOffset? holdoutTo, CancellationToken ct)
+        DateTimeOffset? holdoutFrom, DateTimeOffset? holdoutTo, string dataSha, CancellationToken ct)
     {
         var existing = await _store.GetCampaignAsync(input.Id, ct);
-        if (existing is not null) return existing;
+        if (existing is not null)
+        {
+            // Gesperrte Kampagnenbedingungen dürfen sich nicht stillschweigend ändern.
+            var mismatches = new List<string>();
+            if (!string.IsNullOrWhiteSpace(input.SelectionMetric)
+                && !string.Equals(existing.SelectionMetric, input.SelectionMetric, StringComparison.OrdinalIgnoreCase))
+                mismatches.Add($"Auswahlkriterium (gesperrt: '{existing.SelectionMetric}', angefragt: '{input.SelectionMetric}')");
+            if (input.TrialBudget > 0 && existing.TrialBudget != input.TrialBudget)
+                mismatches.Add($"Versuchsbudget (gesperrt: {existing.TrialBudget}, angefragt: {input.TrialBudget})");
+            if (!string.IsNullOrWhiteSpace(input.SearchSpace)
+                && !string.Equals(existing.SearchSpace, input.SearchSpace, StringComparison.Ordinal))
+                mismatches.Add("Suchraum");
+            if (existing.HoldoutFrom?.UtcDateTime != holdoutFrom?.UtcDateTime
+                || existing.HoldoutTo?.UtcDateTime != holdoutTo?.UtcDateTime)
+                mismatches.Add("Holdout-Zeitraum");
+            if (!string.IsNullOrEmpty(existing.DataSha)
+                && !string.Equals(existing.DataSha, dataSha, StringComparison.OrdinalIgnoreCase))
+                mismatches.Add("Datenbezug (Fingerabdruck weicht ab)");
+            if (mismatches.Count > 0)
+                throw new ExperimentRegistryException("CAMPAIGN_LOCKED_MISMATCH",
+                    $"Kampagne '{existing.Id}' ist gesperrt; folgende Angaben weichen ab und werden nicht " +
+                    $"stillschweigend übernommen: {string.Join("; ", mismatches)}. Für geänderte Bedingungen eine neue Kampagne anlegen.");
+            return existing;
+        }
 
         return await _store.CreateCampaignAsync(new CampaignRecord
         {
@@ -728,35 +904,25 @@ public sealed class QuantApiService
                 : input.SearchSpace,
             SelectionMetric = input.SelectionMetric,
             TrialBudget = input.TrialBudget > 0 ? input.TrialBudget : candidateCount,
+            DataSha = dataSha,
             HoldoutFrom = holdoutFrom,
             HoldoutTo = holdoutTo
         }, ct);
     }
 
-    private async Task<int> RecordTrialsAsync(CampaignRecord campaign, QuantWalkForwardRequest request,
-        BacktestApiService.RunContext ctx, IReadOnlyList<ParameterCandidate> candidates,
-        WalkForwardRunResult run, CancellationToken ct)
+    /// <summary>
+    /// Finalisiert die zuvor reservierten Versuche mit den Lauf-Ergebnissen (Completed/Failed, inkl.
+    /// Kennzahlen). Registerfehler werden NICHT verschluckt, sondern in <paramref name="notes"/> sichtbar
+    /// gemacht. Die reservierten Ids bleiben eindeutig je Ausführung — abgeschlossene Ergebnisse früherer
+    /// Läufe werden nicht überschrieben.
+    /// </summary>
+    private async Task<int> FinalizeTrialsAsync(string campaignId, IReadOnlyDictionary<string, string> trialByCandidate,
+        QuantWalkForwardRequest request, IReadOnlyList<ParameterCandidate> candidates,
+        WalkForwardRunResult run, List<string> notes, CancellationToken ct)
     {
-        var fingerprint = DataFingerprint.Compute(ctx.Candles, ctx.Instrument.Symbol, ctx.TimeframeMinutes, ctx.Source);
-        var costs = new CostProfileSnapshot
-        {
-            FeePerSide = ctx.Fee.CommissionPerSide + ctx.Fee.ExchangeFeePerSide + ctx.Fee.ClearingFeePerSide
-                         + ctx.Fee.RoutingFeePerSide + ctx.Fee.NfaFeePerSide + ctx.Fee.OtherFeePerSide,
-            SlippageTicks = ctx.Fee.EstimatedSlippageTicks,
-            TickSize = ctx.Instrument.TickSize,
-            PointValue = ctx.Instrument.PointValue,
-            ApplyFees = request.Run.ApplyFees,
-            Currency = ctx.Instrument.Currency,
-            IsExampleProfile = ctx.FeeIsExample || ctx.InstrumentIsExample
-        };
-
-        string code = CodeVersion();
         int recorded = 0;
-
         foreach (var c in candidates)
         {
-            ct.ThrowIfCancellationRequested();
-
             var trainValues = run.Folds.Select(f => f.TrainValues.TryGetValue(c.Id, out var v) ? v : null)
                 .Where(v => v.HasValue).Select(v => v!.Value).ToList();
             var testValues = run.Folds.Select(f => f.TestValues.TryGetValue(c.Id, out var v) ? v : null)
@@ -775,42 +941,53 @@ public sealed class QuantApiService
             };
 
             bool usable = trainValues.Count > 0 || testValues.Count > 0;
-            var trial = new TrialRecord
+            var trialId = trialByCandidate[c.Id];
+            var reserved = await _store.GetTrialAsync(trialId, ct);
+            if (reserved is null)
             {
-                Id = $"{campaign.Id}-{c.Id}",
-                CampaignId = campaign.Id,
-                StrategyId = request.Run.Strategy,
-                StrategyVersion = code,
-                Origin = StrategyOrigin.Manual,
-                OriginReference = "Walk-forward-Kampagne im Dashboard",
-                Parameters = c.Parameters,
-                Data = fingerprint,
-                Costs = costs,
-                CodeVersion = code,
-                Seed = 0,
-                PeriodFrom = ctx.Candles[0].OpenTime,
-                PeriodTo = run.Plan.Holdout?.FromTime ?? ctx.Candles[^1].CloseTime,
-                PeriodRole = "walkforward",
+                notes.Add($"Versuch '{trialId}' war nach dem Lauf nicht mehr im Register auffindbar — Ergebnis nicht finalisiert.");
+                continue;
+            }
+
+            var finalized = reserved with
+            {
                 Status = usable ? TrialStatus.Completed : TrialStatus.Failed,
                 StatusReason = usable ? null : "Kein Fenster lieferte eine auswertbare Kennzahl.",
                 CompletedUtc = DateTimeOffset.UtcNow,
-                Metrics = metrics,
-                Tags = new[] { "walkforward", request.SelectionMetric }
+                Metrics = metrics
             };
 
             try
             {
-                var existing = await _store.GetTrialAsync(trial.Id, ct);
-                if (existing is null) await _store.AddTrialAsync(trial, ct);
-                else await _store.UpdateTrialAsync(trial, ct);
+                await _store.UpdateTrialAsync(finalized, ct);
                 recorded++;
             }
-            catch (ExperimentRegistryException)
+            catch (ExperimentRegistryException ex)
             {
-                // Budgetgrenze o. Ä. — der Lauf bleibt gültig, das Register bleibt unverfälscht.
+                notes.Add($"Versuch '{trialId}' konnte nicht finalisiert werden — Register [{ex.Code}]: {ex.Message}");
             }
         }
         return recorded;
+    }
+
+    /// <summary>Markiert reservierte Versuche nach einem Abbruch dauerhaft als Failed (Abbruch).</summary>
+    private async Task MarkReservationsCancelledAsync(string campaignId, IEnumerable<string> trialIds, CancellationToken ct)
+    {
+        foreach (var id in trialIds)
+        {
+            try
+            {
+                var reserved = await _store.GetTrialAsync(id, CancellationToken.None);
+                if (reserved is null) continue;
+                await _store.UpdateTrialAsync(reserved with
+                {
+                    Status = TrialStatus.Failed,
+                    StatusReason = "Lauf abgebrochen (Cancellation) — Reservierung dauerhaft als abgebrochen erfasst.",
+                    CompletedUtc = DateTimeOffset.UtcNow
+                }, CancellationToken.None);
+            }
+            catch (ExperimentRegistryException) { /* Best effort beim Abbruch; Reservierung bleibt sonst 'Running'. */ }
+        }
     }
 
     public async Task<IReadOnlyList<QuantCampaignDto>> ListCampaignsAsync(CancellationToken ct = default)
@@ -822,7 +999,8 @@ public sealed class QuantApiService
             var trials = await _store.ListTrialsAsync(c.Id, ct);
             result.Add(new QuantCampaignDto(c.Id, c.Name, c.CreatedUtc, c.Hypothesis, c.SearchSpace,
                 c.SelectionMetric, c.SelectionDirection.ToString(), c.TrialBudget, trials.Count,
-                c.HoldoutFrom, c.HoldoutTo, c.HoldoutConsumed, c.Locked));
+                c.HoldoutFrom, c.HoldoutTo, c.HoldoutConsumed, c.Locked,
+                c.HoldoutConsumedUtc, c.HoldoutEvaluatedReference, c.DataSha));
         }
         return result;
     }
@@ -842,6 +1020,41 @@ public sealed class QuantApiService
         => _papers.SaveAsync(entry, ct);
 
     public Task<IReadOnlyList<string>> ListBenchmarksAsync(CancellationToken ct = default) => _benchmarks.ListAsync(ct);
+
+    /// <summary>
+    /// Verbraucht den finalen Holdout einer Kampagne EINMALIG und bindet den Verbrauch an einen
+    /// Kandidaten/eine Konfiguration. Prüfen und Reservieren sind atomar (Store). Es gibt bewusst kein
+    /// „Nachsehen ohne Verbrauch": jeder erfolgreiche Aufruf verbraucht den Holdout.
+    ///
+    /// Ehrliche Grenze: Der technische Schutz besteht aus (1) dem reservierten, aus der Suche
+    /// ausgeschlossenen Holdout-Zeitraum, (2) dem Leakage-Guard gegen überlappende Nicht-Holdout-Versuche
+    /// und (3) diesem einmaligen, gebundenen Verbrauch-Flag. Das ist keine umfassende organisatorische
+    /// Garantie gegen Blicke außerhalb dieses Pfads.
+    /// </summary>
+    public async Task<QuantHoldoutConsumeResponse> ConsumeHoldoutAsync(string campaignId, string? candidateReference, CancellationToken ct = default)
+    {
+        try
+        {
+            string reference = string.IsNullOrWhiteSpace(candidateReference)
+                ? $"code {CodeVersion()} @ {DateTimeOffset.UtcNow:u}"
+                : $"{candidateReference} | code {CodeVersion()} @ {DateTimeOffset.UtcNow:u}";
+            var updated = await _store.ConsumeHoldoutAsync(campaignId, reference, ct);
+            return new QuantHoldoutConsumeResponse
+            {
+                Ok = true,
+                CampaignId = updated.Id,
+                HoldoutConsumed = updated.HoldoutConsumed,
+                HoldoutConsumedUtc = updated.HoldoutConsumedUtc,
+                EvaluationReference = updated.HoldoutEvaluatedReference,
+                HoldoutFrom = updated.HoldoutFrom,
+                HoldoutTo = updated.HoldoutTo
+            };
+        }
+        catch (ExperimentRegistryException ex)
+        {
+            return new QuantHoldoutConsumeResponse { Ok = false, CampaignId = campaignId, Error = $"Register [{ex.Code}]: {ex.Message}" };
+        }
+    }
 
     // =========================================================================================
     // Hilfsfunktionen

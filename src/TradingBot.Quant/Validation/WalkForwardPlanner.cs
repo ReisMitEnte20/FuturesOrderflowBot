@@ -44,6 +44,21 @@ public static class WalkForwardPlanner
         int step = options.StepBars is > 0 ? options.StepBars.Value : options.TestBars;
         var folds = new List<WalkForwardFold>();
 
+        // Überlappende Testfenster ablehnen: Die Auswertung liefert EINE verkettete Out-of-Sample-Kurve.
+        // Bei StepBars < TestBars überschneiden sich aufeinanderfolgende Testfenster; eine reine
+        // Hintereinander-Verkettung würde dieselben Perioden mehrfach zählen und die Zeitachse
+        // rückwärts laufen lassen. Eine korrekte Zusammenführung überlappender OOS-Segmente (Ensemble)
+        // ist bewusst NICHT implementiert — deshalb wird die Aufteilung nachvollziehbar abgelehnt.
+        if (step < options.TestBars)
+        {
+            notes.Add($"Schrittweite {step} Bars ist kleiner als das Testfenster {options.TestBars} Bars — " +
+                      "die Testfenster würden sich überlappen. Für die einzelne, verkettete Out-of-Sample-Kurve " +
+                      "existiert keine korrekte Zusammenführung überlappender Perioden; die Aufteilung wird " +
+                      "abgelehnt, um doppelt gezählte Perioden und rückwärts laufende Zeitstempel zu vermeiden. " +
+                      "Bitte StepBars ≥ TestBars wählen (Standard: StepBars = TestBars, lückenlose disjunkte Tests).");
+            return new WalkForwardPlan { Folds = folds, Holdout = holdout, Options = options, TotalBars = total, Notes = notes };
+        }
+
         if (usable < options.TrainBars + options.TestBars)
         {
             notes.Add($"Zu wenige Bars für ein vollständiges Fenster: {usable} verfügbar, " +

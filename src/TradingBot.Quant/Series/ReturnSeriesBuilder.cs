@@ -4,7 +4,16 @@ using TradingBot.Backtesting.Ohlc;
 namespace TradingBot.Quant.Series;
 
 /// <summary>Ergebnis der Renditereihen-Bildung inklusive der Hinweise, die der Bericht ausweisen muss.</summary>
-public sealed record ReturnSeriesBuildResult(ReturnSeries Series, IReadOnlyList<string> Notes, bool Truncated);
+public sealed record ReturnSeriesBuildResult(ReturnSeries Series, IReadOnlyList<string> Notes, bool Truncated)
+{
+    /// <summary>
+    /// Die erste Rendite wurde gegen das Startkapital am Startzeitpunkt der Kurve gemessen (nicht gegen
+    /// einen vorangehenden Periodenpunkt). Bei aggregierten Reihen kann diese erste Periode eine
+    /// TEILPERIODE sein — sie ist ausdrücklich als solche gekennzeichnet und wird nicht als voller
+    /// Kalendertag/-woche/-monat ausgegeben.
+    /// </summary>
+    public bool FirstPeriodFromStartCapital { get; init; }
+}
 
 /// <summary>
 /// Baut aus einem <see cref="OhlcBacktestResult"/> eine zeitlich ausgerichtete Kapitalkurve und daraus
@@ -73,7 +82,12 @@ public static class ReturnSeriesBuilder
             Points = points,
             InitialCapital = result.InitialBalance,
             Frequency = frequency,
-            Currency = spec.Currency
+            Currency = spec.Currency,
+            // Startanker = Ende des ersten unaggregierten Bars. An diesem Punkt hält die Engine noch
+            // keine Position (Fill erst am nächsten Open), das Kapital entspricht dem Startkapital.
+            // Wir merken den ZEITPUNKT, nicht den Kapitalwert — so bleibt die erste (ggf. durch
+            // Aggregation eingeschmolzene) Periode messbar, auch wenn sie beim Startkapital endet.
+            StartTime = barPoints[0].Time
         };
     }
 
@@ -113,37 +127,54 @@ public static class ReturnSeriesBuilder
         ArgumentNullException.ThrowIfNull(curve);
         var notes = new List<string>();
 
-        if (curve.Points.Count < 2)
+        ReturnSeriesBuildResult EmptyResult(string note, bool truncated) => new(
+            ReturnSeries.Empty with
+            {
+                Name = curve.Name, Basis = basis, Frequency = curve.Frequency,
+                Currency = curve.Currency, InitialCapital = (double)curve.InitialCapital
+            },
+            AppendNote(notes, note), truncated);
+
+        if (curve.Points.Count == 0)
+            return EmptyResult("Keine Kurvenpunkte — keine Renditen.", truncated: false);
+
+        double anchorCapital = (double)curve.InitialCapital;
+
+        // Startanker über den EXPLIZITEN Startzeitpunkt, nicht über Kapitalgleichheit. Liegt der erste
+        // Kurvenpunkt zeitlich beim (oder vor dem) Startzeitpunkt, IST er der unaggregierte Startbar und
+        // dient als Basis (erste Rendite ab dem zweiten Punkt). Liegt er später — die erste Periode wurde
+        // durch Aggregation eingeschmolzen —, wird die erste Rendite gegen das Startkapital gemessen.
+        // Wichtig: Endet diese Periode zufällig wieder beim Startkapital (z. B. nach einem Round-Turn),
+        // verschwindet sie NICHT; sie erscheint als reguläre Periode mit Rendite 0.
+        bool firstPointIsAnchor = curve.StartTime is null || curve.Points[0].Time <= curve.StartTime.Value;
+
+        double prev;
+        int startIndex;
+        bool anchoredToStart;
+        if (!firstPointIsAnchor && anchorCapital > 0)
         {
-            notes.Add($"Zu wenige Perioden für Renditen ({curve.Points.Count}). Mindestens 2 nötig.");
-            return new ReturnSeriesBuildResult(
-                ReturnSeries.Empty with
-                {
-                    Name = curve.Name, Basis = basis, Frequency = curve.Frequency,
-                    Currency = curve.Currency, InitialCapital = (double)curve.InitialCapital
-                },
-                notes, Truncated: false);
+            prev = anchorCapital;
+            startIndex = 0;
+            anchoredToStart = true;
         }
+        else
+        {
+            if (curve.Points.Count < 2)
+                return EmptyResult($"Zu wenige Perioden für Renditen ({curve.Points.Count}). Mindestens 2 nötig.", truncated: false);
+            prev = (double)Level(curve.Points[0], basis);
+            startIndex = 1;
+            anchoredToStart = false;
+        }
+
+        if (prev <= 0)
+            return EmptyResult("Kapital ist bereits zu Beginn ≤ 0 — Renditen nicht definiert.", truncated: true);
 
         var times = new List<DateTimeOffset>();
         var rets = new List<double>();
         var levels = new List<double>();
         bool truncated = false;
 
-        double prev = (double)Level(curve.Points[0], basis);
-        if (prev <= 0)
-        {
-            notes.Add("Kapital ist bereits zu Beginn ≤ 0 — Renditen nicht definiert.");
-            return new ReturnSeriesBuildResult(
-                ReturnSeries.Empty with
-                {
-                    Name = curve.Name, Basis = basis, Frequency = curve.Frequency,
-                    Currency = curve.Currency, InitialCapital = (double)curve.InitialCapital
-                },
-                notes, Truncated: true);
-        }
-
-        for (int i = 1; i < curve.Points.Count; i++)
+        for (int i = startIndex; i < curve.Points.Count; i++)
         {
             double cur = (double)Level(curve.Points[i], basis);
             if (prev <= 0)
@@ -158,6 +189,10 @@ public static class ReturnSeriesBuilder
             prev = cur;
         }
 
+        if (anchoredToStart && rets.Count > 0)
+            notes.Add($"Erste Rendite gegen das Startkapital am Startzeitpunkt ({curve.StartTime:u}) gemessen. " +
+                      $"Sie kann eine Teilperiode sein und ist kein vollständiger {curve.Frequency}-Zeitraum.");
+
         return new ReturnSeriesBuildResult(
             new ReturnSeries
             {
@@ -170,7 +205,16 @@ public static class ReturnSeriesBuilder
                 Frequency = curve.Frequency,
                 Currency = curve.Currency
             },
-            notes, truncated);
+            notes, truncated)
+        {
+            FirstPeriodFromStartCapital = anchoredToStart && rets.Count > 0
+        };
+    }
+
+    private static List<string> AppendNote(List<string> notes, string note)
+    {
+        notes.Add(note);
+        return notes;
     }
 
     private static decimal Level(QuantEquityPoint p, EquityBasis basis)

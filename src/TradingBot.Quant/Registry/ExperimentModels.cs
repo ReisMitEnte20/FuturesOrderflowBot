@@ -124,11 +124,25 @@ public sealed record CampaignRecord
     /// <summary>Maximale Zahl an Versuchen. Wird beim Hinzufügen erzwungen.</summary>
     public required int TrialBudget { get; init; }
 
+    /// <summary>
+    /// Datenbezug der Kampagne (SHA-256-Fingerabdruck des zugrunde liegenden Datensatzes). Wird beim
+    /// Anlegen gesperrt; eine spätere Wiederverwendung mit anderem Datenbezug wird abgelehnt. Null, wenn
+    /// beim Anlegen kein Fingerabdruck vorlag.
+    /// </summary>
+    public string? DataSha { get; init; }
+
     /// <summary>Finaler Holdout, der während der Suche nicht ausgewertet werden darf.</summary>
     public DateTimeOffset? HoldoutFrom { get; init; }
     public DateTimeOffset? HoldoutTo { get; init; }
     /// <summary>Wurde der Holdout bereits ausgewertet? Danach ist er verbraucht.</summary>
     public bool HoldoutConsumed { get; init; }
+    /// <summary>Zeitpunkt des (einmaligen) Holdout-Verbrauchs.</summary>
+    public DateTimeOffset? HoldoutConsumedUtc { get; init; }
+    /// <summary>
+    /// An welchen Kandidaten und welche Konfiguration die finale Holdout-Auswertung gebunden war
+    /// (Nachvollziehbarkeit: eine finale Auswertung ist eindeutig einem Kandidaten zugeordnet).
+    /// </summary>
+    public string? HoldoutEvaluatedReference { get; init; }
 
     /// <summary>Nach dem Sperren sind Budget/Suchraum/Kriterium unveränderlich.</summary>
     public bool Locked { get; init; }

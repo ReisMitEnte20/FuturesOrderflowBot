@@ -251,4 +251,106 @@ public class QuantValidationTests
         scenarios.Should().Contain(s => s.Parameters["SlowPeriod"] == "19" && s.Parameters["FastPeriod"] == "9");
         scenarios.Should().OnlyContain(s => s.Parameters["Mode"] == "text");
     }
+
+    // -------------------------------------------------------------------------------------------
+    // Befund 4: Überlappende Testfenster (StepBars < TestBars) werden abgelehnt, statt Perioden
+    // doppelt zu zählen oder rückwärts laufende Zeitstempel zu erzeugen.
+    // -------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void Overlapping_test_windows_are_rejected_with_a_clear_note()
+    {
+        var plan = WalkForwardPlanner.Plan(Times(1000),
+            new WalkForwardOptions { TrainBars = 200, TestBars = 100, StepBars = 50 });
+
+        plan.IsEmpty.Should().BeTrue();
+        plan.Folds.Should().BeEmpty();
+        plan.Notes.Should().Contain(n => n.Contains("überlappen") && n.Contains("StepBars ≥ TestBars"));
+    }
+
+    [Fact]
+    public void Step_equal_to_test_length_stays_disjoint_and_is_accepted()
+    {
+        // Gegenprobe: StepBars == TestBars ist der lückenlose, disjunkte Standardfall und bleibt gültig.
+        var plan = WalkForwardPlanner.Plan(Times(1000),
+            new WalkForwardOptions { TrainBars = 200, TestBars = 100, StepBars = 100 });
+
+        plan.IsEmpty.Should().BeFalse();
+        // Testfenster laufen streng vorwärts und überschneiden sich nicht.
+        var starts = plan.Folds.Select(f => f.Test.Start).ToList();
+        starts.Should().BeInAscendingOrder();
+        for (int i = 1; i < starts.Count; i++)
+            (starts[i] - starts[i - 1]).Should().BeGreaterThanOrEqualTo(100);
+    }
+
+    // -------------------------------------------------------------------------------------------
+    // Befund 6: PBO-Matrix wird ZEITLICH ausgerichtet. Bricht ein Kandidat in einem frühen Fold
+    // vorzeitig ab, dürfen seine späteren Werte nicht gegen frühere Zeiträume anderer verglichen werden.
+    // -------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void Candidate_matrix_aligns_by_timestamp_and_drops_early_terminated_periods()
+    {
+        var t = Times(3);                         // t0,t1,t2 im Fold 0
+        var u = Enumerable.Range(0, 2).Select(i => T0.AddDays(1).AddMinutes(5 * i)).ToList(); // u0,u1 im Fold 1
+
+        // Fold 0: Kandidat A liefert 3 Perioden, Kandidat B bricht nach 2 ab (Kapital ≤ 0).
+        // Fold 1: beide liefern 2 Perioden.
+        var folds = new List<IReadOnlyList<CandidateFoldReturns>>
+        {
+            new List<CandidateFoldReturns>
+            {
+                new("A", t, new[] { 0.01, 0.02, 0.03 }),
+                new("B", new[] { t[0], t[1] }, new[] { 0.05, 0.06 })
+            },
+            new List<CandidateFoldReturns>
+            {
+                new("A", u, new[] { 0.10, 0.20 }),
+                new("B", u, new[] { 0.30, 0.40 })
+            }
+        };
+
+        var (series, notes, dropped) = CandidateMatrixAligner.AlignByCommonTimestamps(new[] { "A", "B" }, folds);
+
+        // Beide Reihen sind gleich lang und zeitlich ausgerichtet (t0,t1 | u0,u1).
+        series["A"].Should().Equal(0.01, 0.02, 0.10, 0.20);
+        series["B"].Should().Equal(0.05, 0.06, 0.30, 0.40);
+        // A's überzählige frühe Periode (0.03 bei t2) wird NICHT gegen B's spätere Fold-1-Werte gestellt.
+        series["A"].Should().NotContain(0.03);
+        notes.Should().Contain(n => n.Contains("Fold 0") && n.Contains("nicht bei allen Kandidaten"));
+        // Die verworfene Periode wird strukturiert gezählt, damit die PBO-Stufe sie erkennen kann.
+        dropped.Should().Be(1);
+    }
+
+    // -------------------------------------------------------------------------------------------
+    // Befund 6 (Nachprüfung): Verkürzt die Zeitstempel-Ausrichtung die gemeinsame Datenbasis, weil ein
+    // Kandidat vorzeitig abbrach (Kapital ≤ 0) oder mit einem Fehler ausfiel, MUSS PBO als nicht
+    // berechenbar gemeldet werden — statt einen Wert auf stillschweigend gekürzter Basis auszuweisen.
+    // -------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void Pbo_is_computable_when_no_period_was_dropped_and_no_candidate_failed()
+    {
+        CandidateMatrixAligner.PboBlockedReason(0, Array.Empty<string>()).Should().BeNull();
+    }
+
+    [Fact]
+    public void Pbo_is_blocked_when_the_alignment_had_to_shorten_the_basis()
+    {
+        var reason = CandidateMatrixAligner.PboBlockedReason(2, Array.Empty<string>());
+
+        reason.Should().NotBeNull();
+        reason.Should().Contain("nicht berechenbar");
+        reason.Should().Contain("2 Periode");        // die verworfenen Perioden werden benannt
+    }
+
+    [Fact]
+    public void Pbo_is_blocked_when_a_candidate_failed_with_an_error()
+    {
+        var reason = CandidateMatrixAligner.PboBlockedReason(0, new[] { "Kandidat 'c1' in Fold 0: Auswertungsfehler (x)." });
+
+        reason.Should().NotBeNull();
+        reason.Should().Contain("nicht berechenbar");
+        reason.Should().Contain("Fehler");
+    }
 }

@@ -82,6 +82,14 @@ public sealed record QuantEquityCurve
     public ReturnFrequency Frequency { get; init; }
     public string Currency { get; init; } = "USD";
 
+    /// <summary>
+    /// Expliziter Startzeitpunkt der Kurve (Ende des ersten unaggregierten Bars, an dem das Kapital
+    /// noch dem Startkapital entspricht). Er ist der Anker für die ERSTE Periodenrendite und wird aus
+    /// den Engine-Metadaten übernommen — NICHT über Kapitalgleichheit erkannt, denn derselbe
+    /// Kapitalwert kann nach Trades oder einer Nullrendite erneut auftreten. Null, wenn unbekannt.
+    /// </summary>
+    public DateTimeOffset? StartTime { get; init; }
+
     /// <summary>Wie die offene Position am Periodenende bewertet wurde (Dokumentation für den Bericht).</summary>
     public string MarkToMarketNote { get; init; } =
         "Offene Position zum Bar-Close bewertet, abzüglich Round-Turn-Gebühren und Exit-Slippage.";

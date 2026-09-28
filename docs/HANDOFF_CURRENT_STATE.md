@@ -24,6 +24,88 @@
   - `c32ab819` feat(backtesting): Gap-Stop-Slippage (Long Open−Slip, Short Open+Slip; TP/Limit unverändert) + unabhängige Referenztests `OhlcEngineReferenceCasesTests.cs`
   - `32e56457` docs(handoff): diese Datei (fachliche OHLC-Prüfrunde)
 
+## Review-Fix-Runde PR #7 (2026-09-28) — uncommittet, wartet auf Freigabe
+
+Sieben Code-Review-Befunde zu PR #7 (Basis `7ca36f58`) geprüft. **Alle sieben bestätigt und behoben.**
+Kein Commit/Push/Merge in dieser Runde. Build grün, **.NET 599/599** (vorher 581; +18 Regressionstests),
+Frontend **10/10**, `tsc`/Produktionsbuild sauber. Backend+React gestartet, Research und
+Backtest/Trade-Navigation im Browser geprüft (0 Konsolenfehler); Pipeline zusätzlich per API end-to-end
+belegt.
+
+1. **Erste Periodenrendite** (`ReturnSeriesBuilder`): Nach Aggregation ging die Bewegung vom Startkapital
+   zum ersten Periodenschluss verloren. Neu: expliziter **zeitbasierter** Startanker (`QuantEquityCurve.StartTime`
+   aus den Engine-Metadaten) — **nicht** über Kapitalgleichheit (derselbe Wert kann nach Trades erneut auftreten).
+   Erste Teilperiode wird ausgewiesen (`FirstPeriodFromStartCapital` + Hinweis). Sichtbar: Analyze zeigt nun
+   **5 statt 4** Renditeperioden. Tests: `First_aggregated_period_is_measured_from_the_start_capital`,
+   `First_period_is_not_dropped_just_because_it_ends_at_the_start_capital` (Round-Turn endet bei Startkapital →
+   Rendite 0 bleibt erhalten), `Bar_frequency_keeps_the_first_bar_as_baseline`, `Daily_aggregation_via_builder_...`.
+2. **Versuchsbudget & unveränderliche Historie** (`QuantApiService`, `JsonExperimentStore`): Kampagne wird gegen
+   gesperrte Angaben geprüft (`CAMPAIGN_LOCKED_MISMATCH`); Versuche werden **vor** der Ausführung **atomar**
+   reserviert (`ReserveTrialsAsync`, Budget alles-oder-nichts, parallel-sicher); eindeutige Run-Id ⇒ abgeschlossene
+   Ergebnisse werden nicht überschrieben; Abbruch/Failed dauerhaft erfasst; Registerfehler sichtbar gemeldet.
+   Per API belegt: Re-Run ⇒ 8 Versuche, zwei Run-Ids; Auswahlkriterium-Änderung ⇒ Ablehnung.
+3. **Warmup ohne Wirkung** (`WarmupGuardStrategy`, neu): Dekorator reicht jede Kerze an die Strategie weiter
+   (Indikator-Anlauf mit verfügbaren Daten), sperrt aber die **Ausführung** während des Warmups. Nachweis mit
+   früh signalisierender Teststrategie (Engine: Entry Bar 1 ohne Warmup → Bar 4 mit Warmup 3).
+4. **Doppelte OOS-Perioden** (`WalkForwardPlanner`): Bei `StepBars < TestBars` überlappen Testfenster; die
+   Aufteilung wird jetzt nachvollziehbar **abgelehnt** (kein Doppelzählen, keine rückwärts laufenden Zeitstempel).
+5. **Teilkerzen-Flags auf Teilausschnitten** (`BacktestApiService.RunEngine`): Leading/Trailing-Flags werden nur
+   noch übernommen, wenn der Ausschnitt am echten Datenanfang/-ende anliegt; innenliegende Fenster behalten ihre
+   vollständigen Randkerzen. Tests am `Data.EvaluatedBars`/`*PartialExcluded`.
+6. **PBO-Zeitausrichtung & DSR-Grundlage** (`CandidateMatrixAligner`, neu; `QuantApiService`): Matrix wird je Fold
+   **zeitstempelbasiert** (Schnittmenge) statt positional gekürzt; vorzeitige Abbrüche fallen sichtbar weg. DSR
+   nutzt die **volle Kampagnenhistorie** aus dem Register; effektive Versuchszahl wird nur reduziert, wenn die
+   Korrelationsbasis vollständig vorliegt, sonst konservativ. Per API belegt: „DSR-Versuchsgrundlage: 4 von 4 …
+   der Kampagne …".
+7. **Holdout-Schutz** (`JsonExperimentStore`, Endpoint `POST /api/quant/campaigns/{id}/holdout/consume`):
+   Prüfen+Reservieren atomar unter einer Sperre (TOCTOU behoben, auch in `AddTrialAsync`); Verbrauch ist
+   **einmalig** und an Kandidat/Konfiguration **gebunden**; kein „Nachsehen ohne Verbrauch". **Ehrliche Grenze:**
+   der technische Schutz besteht aus reserviertem Holdout-Zeitraum + Leakage-Guard + einmaligem Verbrauch-Flag —
+   keine umfassende organisatorische Garantie. Per API belegt: zweiter Verbrauch ⇒ `HOLDOUT_CONSUMED`.
+
+Offene Punkte dieser Runde: Freigabe für Commit/Push von PR #7 steht aus; lokales `main` (`a18599f7`) weiter
+veraltet ggü. `origin/main` (`6c9cc5f1`); Hindsight-Sync des Fix-Stands ausstehend (siehe unten).
+
+## Nachprüfungsrunde PR #7 (2026-09-28, Team-Workspace-Übernahme) — uncommittet, wartet auf Freigabe
+
+Übernahme vom bisherigen privaten Claude in den Team-Workspace. Repo, Branch `integrate/dashboard-backtest`,
+HEAD `7ca36f58` und der uncommittete Working Tree (15 geändert + 4 neu) wurden gegen Git, Code und Tests
+abgeglichen — deckungsgleich mit dem oben gemeldeten Fix-Stand. Kein Commit/Push/Merge. Drei offene
+Nachprüfpunkte (A/B/C) bearbeitet:
+
+**A. PBO — bei vorzeitigem Abbruch NICHT stillschweigend verkürzen (Code geändert):**
+Bestätigt, dass die Zeitstempel-Schnittmenge des `CandidateMatrixAligner` bei einem vorzeitig abbrechenden
+Kandidaten (Kapital ≤ 0 ⇒ `ReturnSeriesBuilder.ToReturnSeries` bricht die Reihe ab) die betroffenen Perioden
+aus ALLEN Reihen entfernt. Der vorherige Stand berechnete PBO danach dennoch auf der gekürzten Basis (nur ein
+Hinweis). **Neu:** `CandidateMatrixAligner.AlignByCommonTimestamps` liefert zusätzlich die Zahl verworfener
+Perioden; neue Politik `CandidateMatrixAligner.PboBlockedReason(droppedPeriods, candidateErrors)`;
+`QuantApiService.RebuildCandidateMatrixAsync` erfasst je Kandidat/Fold Abbrüche (Kapital ≤ 0) UND Fehler
+(try/catch), `OverfittingAsync` meldet PBO dann **nachvollziehbar als nicht berechenbar** (`PboUnavailableReason`)
+statt auf verkürzter Basis zu rechnen. PSR/DSR-Verhalten unverändert. Regressionstests in
+`QuantValidationTests.cs`: `..._reports_dropped_periods...` (dropped=1) sowie drei `Pbo_is_(computable|blocked)_...`.
+
+**B. Holdout — Reservierung vs. echte Auswertung (verifiziert; Grenze bleibt offen):**
+`ConsumeHoldoutAsync` (Store + Service) prüft und reserviert atomar unter einer Sperre, ist einmalig und
+parallel-sicher — getestet (`Parallel_holdout_consumption_succeeds_exactly_once` ⇒ genau 1 Erfolg;
+`Holdout_consumption_is_one_shot_and_bound_to_a_reference`; Leakage-Guard). **Ehrliche, weiterhin OFFENE
+Grenze:** Der Endpoint `POST /api/quant/campaigns/{id}/holdout/consume` setzt nur das gebundene
+Reservierungs-Flag; es gibt **keine an diese Reservierung gebundene finale Holdout-Metrikberechnung**. „Zwingend
+durch die Reservierung laufende Auswertung" ist damit technisch nicht gegeben, weil es (bewusst, kein neues
+Feature ohne Auftrag) keinen Berechnungspfad gibt. Kein umfassender Schutz behauptet.
+
+**C. Research-UI-Rücksprung — nicht reproduzierbar:**
+Code geprüft (`Research.tsx`, `router.tsx`, `Layout.tsx`): Tab ist lokaler `useState`, keine `<form>`, kein
+`navigate`/`window.location` bei Interaktion. Browser-Abnahme am laufenden Dev-Server (Prod-Build zusätzlich
+grün): Direktnavigation `/research`, Tabwechsel (u. a. Overfitting hin/zurück), Job-Start bis Ergebnis
+(**PBO 41,4 %**, 9 Kandidaten, 70/70 Kombinationen), Weg-/Rücknavigation `/backtest`↔`/research` — alles stabil,
+kein Rücksprung, kein Tab-Reset, **0 Konsolenfehler**. Der frühere Effekt war vermutlich ein transientes
+Vite-HMR-Artefakt (Windows) einer langlaufenden Dev-Session. Kein Codeänderungsbedarf.
+
+Teststand dieser Runde: `dotnet build TradingBot.sln` grün; **.NET 602/602** (vorher 599; +3 PBO-Regressionstests);
+Frontend **10/10** (`node --test`); `tsc -b && vite build` erfolgreich. Backend `:5034` und React `:5899` frisch
+gestartet und geprüft. Working Tree unverändert im Dateiumfang (nur Inhalte in bereits geänderten/neuen Dateien:
+`CandidateMatrixAligner.cs`, `QuantApiService.cs`, `QuantValidationTests.cs`).
+
 ## Aktuelle Nutzerentscheidung (Vorrang vor älteren Notizen)
 
 - **Tick-Replay-Weiterentwicklung pausiert.** Priorität: **OHLCV-Backtesting im React-Dashboard `dashboard/`**, bestehende Engine-Funktionen wiederverwenden.
@@ -115,6 +197,11 @@ Details und Methodenfestlegungen: **`docs/QUANT_RESEARCH.md`**.
 - **Hindsight (2026-09-26, später am Tag):** Übergabe nach dem Push gespeichert — Dokument **`1aba4910-6788-40f9-b396-7c466a086cc5`** (Branch gepusht, Draft-PR #6, Teststand 477).
 - **Hindsight (2026-09-27, erster Versuch):** Das Speichern meldete HTTP 429, hat aber **teilweise** funktioniert — Dokument **`f63ee306-db35-48a3-8cbc-5b58e236ae62`** existiert und beschreibt den Quant-Ausbau als *uncommittet*. Diese Angabe ist seit den Commits **überholt**.
 - **AUSSTEHENDE Hindsight-Synchronisierung (2026-09-27):** Das Nachtragen von **Commit-Hashes, PR #7 und dem gemergten PR #6 / neuen `origin/main`** scheiterte erneut an HTTP 429 (Tageslimit der Gemini-Free-Tier-Extraktion). **Keine Retry-Schleife.** Maßgeblich sind bis dahin diese Datei, `docs/QUANT_RESEARCH.md` und die Git-Historie; bei nächster Gelegenheit in Hindsight nachtragen.
+- **AUSSTEHENDE Hindsight-Synchronisierung (2026-09-28):** Das Speichern der **Review-Fix-Runde zu PR #7** (sieben behobene Befunde) scheiterte erneut an HTTP 429 (Tageslimit der Gemini-Free-Tier-Extraktion, Limit 20/Tag). **Keine Retry-Schleife.** Maßgeblich sind bis dahin diese Datei und `docs/QUANT_RESEARCH.md`; bei nächster Gelegenheit nachtragen.
+- **AUSSTEHENDE Hindsight-Synchronisierung (2026-09-28, Nachprüfungsrunde / Team-Workspace):** Recall der Bank `FuturesOrderflowBot` gelang (letzter Schreibstand dort 2026-09-26; die Fix-Runde 2026-09-27/28 fehlt weiterhin — Hindsight ist also veraltet, wie erwartet). Der kompakte `sync_retain` der Nachprüfungsrunde scheiterte erneut an **HTTP 429** (Gemini Free-Tier, 20/Tag). **Speicherversuch, NICHT bestätigt.** Keine Retry-Schleife. Maßgeblich bleiben diese Datei, `docs/QUANT_RESEARCH.md` und die Git-Historie.
+- **Speicherstatus-Prüfung (2026-09-28, ausdrücklicher Nachtrag): Speicherung fehlgeschlagen; bei anschließender Lesekontrolle keine neue Übergabe abrufbar. Interne Teilverarbeitung nicht abschließend nachgewiesen.** `list_documents` zeigt unverändert 15 Dokumente, neuestes `a229ed0d` (2026-09-26 22:09, event 2026-09-27, committeter PR-#7-Stand, 581 Tests). Weder die Fix-Runde noch die Nachprüfungsrunde sind als Dokument abrufbar; auch nach dem erneut fehlgeschlagenen `sync_retain` ist keine neue Übergabe/keine neue memory_unit lesbar. Ob serverintern eine Teilverarbeitung stattfand, lässt sich von außen nicht abschließend belegen — „keine neuen Dokumente sichtbar" beweist das nicht. Der Fehler betrifft die Gemini-Fakten-Extraktion. Fehlerdetails laut API-Antwort: Anbieter Google `generativelanguage.googleapis.com`, Modell `gemini-3.8-flash`, Metrik `generate_content_free_tier_requests` / quotaId `GenerateRequestsPerDayPerProjectPerModel-FreeTier`, quotaValue **20** (pro Tag/Projekt/Modell, Free-Tier, location „global"); `RetryInfo.retryDelay` ~13 s = generischer Backoff-Hinweis, **kein** bestätigter Tages-Reset. Konkrete Ursache laut Meldung: das Free-Tier-Tageslimit der Gemini-Anbindung ist erreicht — Quota/Abrechnung des verwendeten Google-Projekts prüfen. Keine Anbieter-/Modell-/Key-/Billing-Änderungen vorgenommen. Nachtragen nach Quota-Reset.
+- **CodeMunch (2026-09-28, Nachprüfungsrunde):** `jcodemunch_guide` + `resolve_repo` genutzt; nach den Änderungen `index_folder` neu aufgebaut: **409 Dateien, 6118 Symbole** (vorher 405/6037) — `CandidateMatrixAligner`, `WarmupGuardStrategy` und die neuen Tests sind jetzt enthalten.
+- **CodeMunch (2026-09-28):** Session-Statistik gelesen (persistiert 3139 gesparte Tokens, 15 Task-Runs). Der Index vom 2026-09-27 ist maßgeblich; die neuen Dateien (`WarmupGuardStrategy`, `CandidateMatrixAligner`) sind noch nicht indiziert (Re-Index bei nächster Gelegenheit).
 - **CodeMunch-Index** am 2026-09-27 per `index_folder` neu aufgebaut: **405 Dateien, 6037 Symbole** (vorher 363/4964) — `TradingBot.Quant` und die Research-Seite sind jetzt enthalten.
 
 ## Betrieb (lokal, Simulation-only)

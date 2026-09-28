@@ -154,6 +154,14 @@ quant.MapGet("/trials", async (string? campaignId, QuantApiService s, Cancellati
 quant.MapGet("/trials/{id}", async (string id, QuantApiService s, CancellationToken ct) =>
     await s.GetTrialAsync(id, ct) is { } t ? Results.Ok(t) : Results.NotFound(new { error = $"Versuch '{id}' unbekannt." }));
 
+// Finaler Holdout: einmaliger, an einen Kandidaten gebundener Verbrauch. Ein zweiter/paralleler
+// Aufruf schlägt fehl (kein „Nachsehen ohne Verbrauch").
+quant.MapPost("/campaigns/{id}/holdout/consume", async (string id, HoldoutConsumeRequest? body, QuantApiService s, CancellationToken ct) =>
+{
+    var res = await s.ConsumeHoldoutAsync(id, body?.CandidateReference, ct);
+    return res.Ok ? Results.Ok(res) : Results.BadRequest(res);
+});
+
 // Paper-Research-Einträge (Quelle, Hypothese, Regeln, dokumentierte Abweichungen).
 quant.MapGet("/papers", async (QuantApiService s, CancellationToken ct) => Results.Ok(await s.ListPapersAsync(ct)));
 quant.MapPost("/papers", async (PaperResearchEntry entry, QuantApiService s, CancellationToken ct) =>

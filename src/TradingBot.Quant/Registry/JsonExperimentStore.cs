@@ -78,14 +78,17 @@ public sealed class JsonExperimentStore : IExperimentStore
         ArgumentNullException.ThrowIfNull(trial);
         if (string.IsNullOrWhiteSpace(trial.Id)) throw new ExperimentRegistryException("TRIAL_ID_MISSING", "Versuch braucht eine Id.");
 
-        var campaign = await GetCampaignAsync(trial.CampaignId, ct)
-            ?? throw new ExperimentRegistryException("CAMPAIGN_UNKNOWN", $"Kampagne '{trial.CampaignId}' existiert nicht. Kampagne vor den Versuchen anlegen.");
-
-        GuardHoldout(campaign, trial);
-
+        // Kampagnen-/Holdout-Prüfung, Existenz- und Budgetprüfung sowie das Schreiben laufen unter EINER
+        // Sperre — sonst könnte zwischen Prüfung und Schreiben ein paralleler Request das Budget sprengen
+        // oder den bereits verbrauchten Holdout erneut treffen (Time-of-check/Time-of-use).
         await _lock.WaitAsync(ct);
         try
         {
+            var campaign = await GetCampaignAsync(trial.CampaignId, ct)
+                ?? throw new ExperimentRegistryException("CAMPAIGN_UNKNOWN", $"Kampagne '{trial.CampaignId}' existiert nicht. Kampagne vor den Versuchen anlegen.");
+
+            GuardHoldout(campaign, trial);
+
             Directory.CreateDirectory(TrialDir(trial.CampaignId));
             if (File.Exists(TrialPath(trial.CampaignId, trial.Id)))
                 throw new ExperimentRegistryException("TRIAL_EXISTS", $"Versuch '{trial.Id}' existiert bereits.");
@@ -98,6 +101,44 @@ public sealed class JsonExperimentStore : IExperimentStore
 
             await WriteAsync(TrialPath(trial.CampaignId, trial.Id), trial, ct);
             return trial;
+        }
+        finally { _lock.Release(); }
+    }
+
+    public async Task<IReadOnlyList<TrialRecord>> ReserveTrialsAsync(string campaignId, IReadOnlyList<TrialRecord> trials, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(trials);
+        if (trials.Count == 0) return Array.Empty<TrialRecord>();
+
+        await _lock.WaitAsync(ct);
+        try
+        {
+            var campaign = await GetCampaignAsync(campaignId, ct)
+                ?? throw new ExperimentRegistryException("CAMPAIGN_UNKNOWN", $"Kampagne '{campaignId}' existiert nicht. Kampagne vor den Versuchen anlegen.");
+
+            Directory.CreateDirectory(TrialDir(campaignId));
+
+            // Erst prüfen (alle Versuche), dann atomar schreiben — passt nicht alles, wird NICHTS reserviert.
+            foreach (var t in trials)
+            {
+                if (string.IsNullOrWhiteSpace(t.Id))
+                    throw new ExperimentRegistryException("TRIAL_ID_MISSING", "Versuch braucht eine Id.");
+                if (!string.Equals(t.CampaignId, campaignId, StringComparison.Ordinal))
+                    throw new ExperimentRegistryException("TRIAL_CAMPAIGN_MISMATCH", $"Versuch '{t.Id}' gehört nicht zur Kampagne '{campaignId}'.");
+                GuardHoldout(campaign, t);
+                if (File.Exists(TrialPath(campaignId, t.Id)))
+                    throw new ExperimentRegistryException("TRIAL_EXISTS", $"Versuch '{t.Id}' existiert bereits.");
+            }
+
+            int used = Directory.EnumerateFiles(TrialDir(campaignId), "*.json").Count();
+            if (used + trials.Count > campaign.TrialBudget)
+                throw new ExperimentRegistryException("BUDGET_EXCEEDED",
+                    $"Versuchsbudget der Kampagne '{campaign.Id}' reicht nicht ({used} belegt + {trials.Count} angefordert > {campaign.TrialBudget}). " +
+                    "Budget wurde vor der Kampagne festgelegt und wird nicht stillschweigend erhöht.");
+
+            foreach (var t in trials)
+                await WriteAsync(TrialPath(campaignId, t.Id), t, ct);
+            return trials;
         }
         finally { _lock.Release(); }
     }
@@ -147,20 +188,27 @@ public sealed class JsonExperimentStore : IExperimentStore
         return list.OrderBy(t => t.CreatedUtc).ThenBy(t => t.Id, StringComparer.Ordinal).ToList();
     }
 
-    public async Task<CampaignRecord> ConsumeHoldoutAsync(string campaignId, CancellationToken ct = default)
+    public async Task<CampaignRecord> ConsumeHoldoutAsync(string campaignId, string? evaluationReference = null, CancellationToken ct = default)
     {
-        var campaign = await GetCampaignAsync(campaignId, ct)
-            ?? throw new ExperimentRegistryException("CAMPAIGN_UNKNOWN", $"Kampagne '{campaignId}' existiert nicht.");
-        if (campaign.HoldoutFrom is null && campaign.HoldoutTo is null)
-            throw new ExperimentRegistryException("NO_HOLDOUT", "Für diese Kampagne ist kein Holdout definiert.");
-        if (campaign.HoldoutConsumed)
-            throw new ExperimentRegistryException("HOLDOUT_CONSUMED",
-                "Der finale Holdout dieser Kampagne wurde bereits ausgewertet und ist verbraucht.");
-
+        // Prüfen UND Verbrauchen unter einer Sperre — sonst könnten zwei parallele finale Auswertungen
+        // den (nur einmal gültigen) Holdout beide „unberührt" vorfinden und beide auswerten.
         await _lock.WaitAsync(ct);
         try
         {
-            var updated = campaign with { HoldoutConsumed = true };
+            var campaign = await GetCampaignAsync(campaignId, ct)
+                ?? throw new ExperimentRegistryException("CAMPAIGN_UNKNOWN", $"Kampagne '{campaignId}' existiert nicht.");
+            if (campaign.HoldoutFrom is null && campaign.HoldoutTo is null)
+                throw new ExperimentRegistryException("NO_HOLDOUT", "Für diese Kampagne ist kein Holdout definiert.");
+            if (campaign.HoldoutConsumed)
+                throw new ExperimentRegistryException("HOLDOUT_CONSUMED",
+                    "Der finale Holdout dieser Kampagne wurde bereits ausgewertet und ist verbraucht.");
+
+            var updated = campaign with
+            {
+                HoldoutConsumed = true,
+                HoldoutConsumedUtc = DateTimeOffset.UtcNow,
+                HoldoutEvaluatedReference = evaluationReference ?? campaign.HoldoutEvaluatedReference
+            };
             await WriteAsync(CampaignPath(campaignId), updated, ct);
             return updated;
         }

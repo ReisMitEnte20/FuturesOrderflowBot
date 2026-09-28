@@ -174,6 +174,114 @@ public class QuantRegistryAndBenchmarkTests : IDisposable
         again.Code.Should().Be("HOLDOUT_CONSUMED");
     }
 
+    // -------------------------------------------------------------------------------------
+    // Befund 2: Budget atomar reservieren; parallele Reservierungen dürfen es nicht überschreiten;
+    // abgeschlossene Ergebnisse nicht überschreiben.
+    // -------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task Reserving_more_trials_than_the_budget_reserves_none()
+    {
+        var store = Store();
+        await store.CreateCampaignAsync(Campaign(budget: 2));
+
+        var ex = await Assert.ThrowsAsync<ExperimentRegistryException>(() =>
+            store.ReserveTrialsAsync("c1", new[] { Trial("t1"), Trial("t2"), Trial("t3") }));
+        ex.Code.Should().Be("BUDGET_EXCEEDED");
+
+        // Bei Budgetüberschreitung wird NICHTS geschrieben (Alles-oder-nichts).
+        (await store.ListTrialsAsync("c1")).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Reserving_within_budget_writes_all_and_running_reservations_can_be_finalized()
+    {
+        var store = Store();
+        await store.CreateCampaignAsync(Campaign(budget: 3));
+
+        var reserved = await store.ReserveTrialsAsync("c1", new[]
+        {
+            Trial("t1") with { Status = TrialStatus.Running },
+            Trial("t2") with { Status = TrialStatus.Running }
+        });
+        reserved.Should().HaveCount(2);
+        (await store.ListTrialsAsync("c1")).Should().OnlyContain(t => t.Status == TrialStatus.Running);
+
+        // Finalisieren überschreibt NUR die eigene Reservierung, ohne Budgetzählung.
+        await store.UpdateTrialAsync(Trial("t1") with { Status = TrialStatus.Completed, Metrics = new Dictionary<string, double?> { ["sharpe"] = 0.5 } });
+        (await store.GetTrialAsync("t1"))!.Status.Should().Be(TrialStatus.Completed);
+    }
+
+    [Fact]
+    public async Task Parallel_reservations_never_exceed_the_budget()
+    {
+        var store = Store();
+        await store.CreateCampaignAsync(Campaign(budget: 3));
+
+        // Fünf gleichzeitige Reservierungen à einem Versuch; nur drei passen ins Budget.
+        var tasks = Enumerable.Range(0, 5).Select(i => Task.Run(async () =>
+        {
+            try { await store.ReserveTrialsAsync("c1", new[] { Trial($"t{i}") }); return true; }
+            catch (ExperimentRegistryException) { return false; }
+        })).ToList();
+
+        var results = await Task.WhenAll(tasks);
+        results.Count(ok => ok).Should().Be(3);
+        (await store.ListTrialsAsync("c1")).Should().HaveCount(3);   // Budget nie überschritten
+    }
+
+    [Fact]
+    public async Task An_existing_trial_id_is_not_silently_overwritten()
+    {
+        var store = Store();
+        await store.CreateCampaignAsync(Campaign(budget: 5));
+        await store.ReserveTrialsAsync("c1", new[] { Trial("run1-c0") });
+
+        // Eine erneute Reservierung derselben Id wird abgelehnt (kein Überschreiben abgeschlossener Ergebnisse).
+        var ex = await Assert.ThrowsAsync<ExperimentRegistryException>(() =>
+            store.ReserveTrialsAsync("c1", new[] { Trial("run1-c0") }));
+        ex.Code.Should().Be("TRIAL_EXISTS");
+    }
+
+    // -------------------------------------------------------------------------------------
+    // Befund 7: Holdout-Verbrauch atomar, einmalig und an einen Kandidaten gebunden.
+    // -------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task Holdout_consumption_is_one_shot_and_bound_to_a_reference()
+    {
+        var store = Store();
+        var from = T0.AddDays(300);
+        var to = T0.AddDays(365);
+        await store.CreateCampaignAsync(Campaign(holdoutFrom: from, holdoutTo: to));
+
+        var updated = await store.ConsumeHoldoutAsync("c1", "Kandidat FastPeriod=9,SlowPeriod=21");
+        updated.HoldoutConsumed.Should().BeTrue();
+        updated.HoldoutConsumedUtc.Should().NotBeNull();
+        updated.HoldoutEvaluatedReference.Should().Contain("FastPeriod=9");
+
+        var again = await Assert.ThrowsAsync<ExperimentRegistryException>(() => store.ConsumeHoldoutAsync("c1", "erneut"));
+        again.Code.Should().Be("HOLDOUT_CONSUMED");
+    }
+
+    [Fact]
+    public async Task Parallel_holdout_consumption_succeeds_exactly_once()
+    {
+        var store = Store();
+        var from = T0.AddDays(300);
+        var to = T0.AddDays(365);
+        await store.CreateCampaignAsync(Campaign(holdoutFrom: from, holdoutTo: to));
+
+        var tasks = Enumerable.Range(0, 6).Select(i => Task.Run(async () =>
+        {
+            try { await store.ConsumeHoldoutAsync("c1", $"cand{i}"); return true; }
+            catch (ExperimentRegistryException) { return false; }
+        })).ToList();
+
+        var results = await Task.WhenAll(tasks);
+        results.Count(ok => ok).Should().Be(1);   // exakt eine Auswertung verbraucht den Holdout
+    }
+
     [Fact]
     public async Task Registry_survives_a_restart_because_it_is_persisted()
     {

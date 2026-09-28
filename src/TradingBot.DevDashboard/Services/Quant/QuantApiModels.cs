@@ -317,7 +317,24 @@ public sealed record QuantOverfittingResponse
 
 public sealed record QuantCampaignDto(string Id, string Name, DateTimeOffset CreatedUtc, string Hypothesis,
     string SearchSpace, string SelectionMetric, string SelectionDirection, int TrialBudget, int TrialsUsed,
-    DateTimeOffset? HoldoutFrom, DateTimeOffset? HoldoutTo, bool HoldoutConsumed, bool Locked);
+    DateTimeOffset? HoldoutFrom, DateTimeOffset? HoldoutTo, bool HoldoutConsumed, bool Locked,
+    DateTimeOffset? HoldoutConsumedUtc = null, string? HoldoutEvaluatedReference = null, string? DataSha = null);
+
+/// <summary>Anfrage für den einmaligen Holdout-Verbrauch: Bindung an Kandidat/Konfiguration.</summary>
+public sealed record HoldoutConsumeRequest(string? CandidateReference);
+
+/// <summary>Antwort auf den einmaligen, gebundenen Holdout-Verbrauch einer Kampagne.</summary>
+public sealed record QuantHoldoutConsumeResponse
+{
+    public bool Ok { get; init; }
+    public string? Error { get; init; }
+    public string? CampaignId { get; init; }
+    public bool HoldoutConsumed { get; init; }
+    public DateTimeOffset? HoldoutConsumedUtc { get; init; }
+    public string? EvaluationReference { get; init; }
+    public DateTimeOffset? HoldoutFrom { get; init; }
+    public DateTimeOffset? HoldoutTo { get; init; }
+}
 
 public sealed record QuantTrialDto(string Id, string CampaignId, DateTimeOffset CreatedUtc, DateTimeOffset? CompletedUtc,
     string StrategyId, string StrategyVersion, string Origin, string? OriginReference,

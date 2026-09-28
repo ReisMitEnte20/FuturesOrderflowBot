@@ -306,8 +306,25 @@ public sealed class BacktestApiService
         FeeProfile? feeOverride = null, IReadOnlyList<Candle>? candlesOverride = null)
     {
         var candles = candlesOverride ?? ctx.Candles;
+        bool lead, trail;
+        if (candlesOverride is null)
+        {
+            lead = ctx.LeadingPartial;
+            trail = ctx.TrailingPartial;
+        }
+        else
+        {
+            // Teilkerzen-Flags beschreiben ausschließlich die ECHTEN Ränder des Gesamtdatensatzes.
+            // Ein innenliegender Ausschnitt (Walk-forward-Fenster o. Ä.) hat vollständige Randkerzen;
+            // die globalen Flags gelten nur, wenn der Ausschnitt exakt am Anfang bzw. Ende des
+            // Gesamtdatensatzes anliegt. Sonst würden vollständige Innenkerzen fälschlich entfernt.
+            lead = ctx.LeadingPartial && candles.Count > 0 && ctx.Candles.Count > 0
+                   && candles[0].OpenTime == ctx.Candles[0].OpenTime;
+            trail = ctx.TrailingPartial && candles.Count > 0 && ctx.Candles.Count > 0
+                    && candles[^1].CloseTime == ctx.Candles[^1].CloseTime;
+        }
         return _engine.Run(candles, strategy, ctx.Instrument, feeOverride ?? ctx.Fee, config,
-            ctx.Source, ctx.TimeframeMinutes, ctx.LeadingPartial, ctx.TrailingPartial);
+            ctx.Source, ctx.TimeframeMinutes, lead, trail);
     }
 
     /// <summary>Baut eine initialisierte Strategie-Instanz (öffentlich für die Quant-Auswertung).</summary>

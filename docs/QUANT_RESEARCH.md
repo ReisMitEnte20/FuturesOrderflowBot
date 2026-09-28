@@ -276,3 +276,42 @@ Live-Trading.**
 - **Kein SPA/Reality Check, kein CPCV** (beide als eigene Bausteine vorgesehen).
 - **Keine Aussage über künftige Performance.** Niedriger PBO, hoher PSR/DSR und bestandene
   Stresstests sind die Abwesenheit bestimmter Warnsignale — kein Nachweis einer Edge.
+
+## Präzisierungen aus der Review-Runde (2026-09-28)
+
+Sieben Code-Review-Befunde zu PR #7 wurden behoben; die betroffenen Methoden verhalten sich nun so:
+
+- **Erste Periodenrendite.** Die Kapitalkurve trägt einen expliziten Startzeitpunkt
+  (`QuantEquityCurve.StartTime`) aus den Engine-Metadaten. Die erste Rendite wird gegen das
+  Startkapital an diesem Zeitpunkt gemessen — der Startanker wird **zeitbasiert** erkannt, nicht über
+  Kapitalgleichheit (derselbe Kapitalwert kann nach Trades oder einer Nullrendite erneut auftreten).
+  Eine durch Aggregation eingeschmolzene erste Periode geht damit nicht verloren, auch wenn sie beim
+  Startkapital endet (Rendite 0). Eine solche erste Periode kann eine **Teilperiode** sein und wird
+  ausdrücklich gekennzeichnet (`FirstPeriodFromStartCapital`), nicht als voller Kalendertag ausgegeben.
+- **Walk-forward-Aufteilung.** Überlappende Testfenster (`StepBars < TestBars`) werden abgelehnt, weil
+  für die einzelne, verkettete Out-of-Sample-Kurve keine korrekte Zusammenführung überlappender
+  Perioden existiert (kein Doppelzählen, keine rückwärts laufenden Zeitstempel).
+- **Warmup.** Der ausgewiesene Warmup sperrt die **Handelsausführung** in den ersten Bars jedes
+  Abschnitts (`WarmupGuardStrategy`); die Indikatoren sehen die Kerzen weiterhin (Anlauf mit
+  verfügbaren Daten). Der Bewertungszeitraum bleibt zwischen Kandidaten vergleichbar.
+- **Teilkerzen bei Ausschnitten.** Die Leading/Trailing-Teilkerzen-Flags gelten nur für die echten
+  Ränder des Gesamtdatensatzes. Innenliegende Walk-forward-Fenster behalten ihre vollständigen
+  Randkerzen.
+- **PBO-Matrix.** Die Kandidatenreihen werden je Fold **zeitstempelbasiert** ausgerichtet (nur bei
+  allen Kandidaten vorhandene Perioden); vorzeitige Abbrüche/Kapital ≤ 0 fallen sichtbar weg. Gleiche
+  Länge wird nicht mehr mit gleichem Beobachtungsintervall verwechselt.
+- **DSR-Versuchsgrundlage.** DSR bezieht die **vollständige relevante Kampagnenhistorie** aus dem
+  Register (nicht nur den aktuellen Request). Die effektive Versuchszahl wird nur über die
+  Korrelationsheuristik reduziert, wenn die Renditereihen aller erfassten Versuche vorliegen; sonst
+  wird konservativ die tatsächliche Zahl angesetzt und die Grenze benannt.
+- **Holdout-Schutz (ehrliche Reichweite).** Prüfen und Verbrauchen laufen atomar unter einer Sperre;
+  der Verbrauch ist **einmalig** und an einen Kandidaten/eine Konfiguration gebunden
+  (`POST /api/quant/campaigns/{id}/holdout/consume`). Es gibt kein „Nachsehen ohne Verbrauch". Der
+  **technische** Schutz besteht aus (1) dem reservierten, aus der Suche ausgeschlossenen
+  Holdout-Zeitraum, (2) dem Leakage-Guard gegen überlappende Nicht-Holdout-Versuche und (3) diesem
+  einmaligen, gebundenen Verbrauch-Flag. Das ist **keine** umfassende organisatorische Garantie gegen
+  Blicke außerhalb dieses Pfads.
+- **Versuchsregister.** Versuche werden vor der Ausführung atomar reserviert (Budget alles-oder-nichts,
+  parallel-sicher); jede Ausführung erhält eine eindeutige Run-Id, sodass abgeschlossene Ergebnisse
+  nicht überschrieben werden; Failed/Abbruch bleiben dauerhaft erfasst; Änderungen an gesperrtem
+  Suchraum, Auswahlkriterium, Datenbezug oder Holdout werden abgelehnt statt stillschweigend übernommen.

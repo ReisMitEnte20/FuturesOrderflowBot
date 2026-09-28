@@ -141,6 +141,109 @@ public class QuantSeriesAndMetricsTests
     }
 
     // -------------------------------------------------------------------------------------------
+    // Befund 1: Nach Aggregation darf die Bewegung vom Startkapital zum ersten Periodenschluss NICHT
+    // verlorengehen. Der Startanker ist zeitbasiert (StartTime), nicht kapitalbasiert.
+    // -------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void First_aggregated_period_is_measured_from_the_start_capital()
+    {
+        // Startkapital 100; Tagesschlüsse 110 → 99 → 108,90. Vollständige Renditen: +10 %, −10 %, +10 %,
+        // Verkettung endet bei 108,90. Ohne den Startanker fehlte die erste Bewegung (100 → 110).
+        var curve = new QuantEquityCurve
+        {
+            Name = "Tagesreihe",
+            InitialCapital = 100m,
+            Frequency = ReturnFrequency.Daily,
+            StartTime = T0,                                  // Startzeitpunkt VOR dem ersten Tagesschluss
+            Points = new List<QuantEquityPoint>
+            {
+                new() { Time = T0.AddDays(1), RealizedEquity = 110m,    TotalEquity = 110m },
+                new() { Time = T0.AddDays(2), RealizedEquity = 99m,     TotalEquity = 99m },
+                new() { Time = T0.AddDays(3), RealizedEquity = 108.90m, TotalEquity = 108.90m }
+            }
+        };
+
+        var built = ReturnSeriesBuilder.ToReturnSeries(curve, EquityBasis.Realized);
+
+        built.FirstPeriodFromStartCapital.Should().BeTrue();
+        built.Series.Returns.Should().HaveCount(3);
+        built.Series.Returns[0].Should().BeApproximately(0.10, 1e-12);
+        built.Series.Returns[1].Should().BeApproximately(-0.10, 1e-12);
+        built.Series.Returns[2].Should().BeApproximately(0.10, 1e-12);
+        // Verkettung ab Startkapital endet exakt beim letzten Tagesschluss.
+        (100.0 * built.Series.Returns.Aggregate(1.0, (a, r) => a * (1.0 + r)))
+            .Should().BeApproximately(108.90, 1e-9);
+        built.Notes.Should().Contain(n => n.Contains("Startkapital") && n.Contains("Teilperiode"));
+    }
+
+    [Fact]
+    public void First_period_is_not_dropped_just_because_it_ends_at_the_start_capital()
+    {
+        // Korrektur des Startanker-Kriteriums: Auch NACH Trades kann das Kapital wieder dem
+        // Startkapital entsprechen. Der erste (aggregierte) Tag endet hier trotz Handel wieder bei 100.
+        // Er darf NICHT allein wegen der Kapitalgleichheit verschwinden — Rendite 0 ist eine echte Periode.
+        var curve = new QuantEquityCurve
+        {
+            Name = "Round-Turn am ersten Tag",
+            InitialCapital = 100m,
+            Frequency = ReturnFrequency.Daily,
+            StartTime = T0,
+            Points = new List<QuantEquityPoint>
+            {
+                new() { Time = T0.AddDays(1), RealizedEquity = 100m, TotalEquity = 100m, OpenQuantity = 0 },
+                new() { Time = T0.AddDays(2), RealizedEquity = 110m, TotalEquity = 110m }
+            }
+        };
+
+        var built = ReturnSeriesBuilder.ToReturnSeries(curve, EquityBasis.Realized);
+
+        built.FirstPeriodFromStartCapital.Should().BeTrue();
+        built.Series.Returns.Should().HaveCount(2);          // die erste Periode bleibt erhalten
+        built.Series.Returns[0].Should().Be(0.0);            // 100 → 100: echte Nullrendite, nicht weggelassen
+        built.Series.Returns[1].Should().BeApproximately(0.10, 1e-12);
+    }
+
+    [Fact]
+    public void Bar_frequency_keeps_the_first_bar_as_baseline_without_a_spurious_zero()
+    {
+        // Unaggregiert ist der erste Bar der echte Startanker (StartTime == erster Punkt): keine
+        // zusätzliche „Startkapital"-Rendite, Verhalten unverändert (3 Renditen aus 4 Punkten).
+        var curve = ReturnSeriesBuilder.BuildEquityCurve(BuildResult(), Mes, ReturnFrequency.Bar);
+        curve.StartTime.Should().Be(curve.Points[0].Time);
+
+        var built = ReturnSeriesBuilder.ToReturnSeries(curve, EquityBasis.Realized);
+        built.FirstPeriodFromStartCapital.Should().BeFalse();
+        built.Series.Returns.Should().HaveCount(3);
+        built.Series.Returns[0].Should().Be(0.0);
+    }
+
+    [Fact]
+    public void Daily_aggregation_via_builder_retains_the_first_days_move_from_start_capital()
+    {
+        // End-to-End: aus Intraday-Bars an zwei Tagen wird eine Tagesreihe. Der erste Tag wird gegen das
+        // Startkapital gemessen und geht NICHT verloren.
+        var result = BuildResult();
+        var equity = new List<OhlcEquityPoint>
+        {
+            new() { BarIndex = 0, Time = T0.AddMinutes(5), RealizedNetPnL = 0m,  Equity = 10_000m, OpenPnL = 0m },
+            new() { BarIndex = 1, Time = T0.AddHours(1),   RealizedNetPnL = 10m, Equity = 10_010m, OpenPnL = 0m },
+            new() { BarIndex = 2, Time = T0.AddDays(1),    RealizedNetPnL = 30m, Equity = 10_030m, OpenPnL = 0m }
+        };
+        var twoDays = result with { Trades = Array.Empty<OhlcBacktestTrade>(), Equity = equity };
+
+        var curve = ReturnSeriesBuilder.BuildEquityCurve(twoDays, Mes, ReturnFrequency.Daily);
+        curve.StartTime.Should().Be(T0.AddMinutes(5));
+        curve.Points.Should().HaveCount(2);                  // Tag 1 (10.010), Tag 2 (10.030)
+
+        var built = ReturnSeriesBuilder.ToReturnSeries(curve, EquityBasis.Realized);
+        built.FirstPeriodFromStartCapital.Should().BeTrue();
+        built.Series.Returns.Should().HaveCount(2);
+        built.Series.Returns[0].Should().BeApproximately(10_010.0 / 10_000.0 - 1.0, 1e-12);
+        built.Series.Returns[1].Should().BeApproximately(10_030.0 / 10_010.0 - 1.0, 1e-12);
+    }
+
+    // -------------------------------------------------------------------------------------------
     // Kennzahlen-Referenz. Kapitalkurve (Tagesfrequenz), Startkapital 100:
     //   100 → 110 → 99 → 123,75 → 123,75 → 136,125
     //   Renditen: +0,10 ; −0,10 ; +0,25 ; 0,00 ; +0,10
