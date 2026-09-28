@@ -10,7 +10,8 @@ import {
   type MarketDataSettings,
   type MarketDataProvider,
 } from "@/lib/marketdataSettings";
-import { Settings, Trash2, CheckCircle, Database, Clock, ChevronDown, LogIn } from "lucide-react";
+import { RithmicConformanceCard } from "@/components/trading/RithmicConformanceCard";
+import { Settings, Trash2, CheckCircle, Database, Clock, ChevronDown, AlertTriangle } from "lucide-react";
 
 const PROVIDERS: { value: MarketDataProvider; label: string }[] = [
   { value: "rithmic", label: "Rithmic" },
@@ -25,10 +26,7 @@ const INTERVALS = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"];
 export function SettingsPage() {
   const [settings, setSettings] = useState<MarketDataSettings>(() => loadMarketDataSettings());
   const [saved, setSaved] = useState(false);
-  const [showSecret, setShowSecret] = useState(false);
   const [providerOpen, setProviderOpen] = useState(false);
-  const [loggedIn, setLoggedIn] = useState(false);
-  const [connecting, setConnecting] = useState(false);
 
   useEffect(() => {
     if (saved) {
@@ -36,15 +34,6 @@ export function SettingsPage() {
       return () => clearTimeout(timer);
     }
   }, [saved]);
-
-  const handleLogin = async () => {
-    if (!settings.rithmic.username || !settings.rithmic.password) return;
-    setConnecting(true);
-    await new Promise((r) => setTimeout(r, 1500));
-    setConnecting(false);
-    setLoggedIn(true);
-    setSaved(true);
-  };
 
   const handleSave = () => {
     saveMarketDataSettings(settings);
@@ -54,11 +43,8 @@ export function SettingsPage() {
   const handleClear = () => {
     clearMarketDataSettings();
     setSettings({ ...DEFAULT_SETTINGS });
-    setLoggedIn(false);
     setSaved(true);
   };
-
-  const hasCredentials = settings.rithmic.username.length > 0 || settings.rithmic.password.length > 0;
 
   return (
     <div className="p-4 space-y-4 max-w-xl mx-auto">
@@ -96,8 +82,7 @@ export function SettingsPage() {
                     key={p.value}
                     onClick={() => {
                       setSettings({ ...settings, provider: p.value });
-                      setLoggedIn(false);
-                      setProviderOpen(false);
+                                        setProviderOpen(false);
                     }}
                     className={`w-full text-left px-3 py-2 text-sm font-mono hover:bg-[var(--panel-2)] ${
                       settings.provider === p.value ? "text-[var(--key)]" : "text-[var(--fg-dim)]"
@@ -112,77 +97,31 @@ export function SettingsPage() {
         </CardBody>
       </Card>
 
-      {/* Rithmic Login */}
+      {/* Rithmic */}
       {settings.provider === "rithmic" && (
         <Card>
           <CardHeader>
-            <p className="text-sm font-mono text-[var(--fg)]">Rithmic Connect</p>
+            <p className="text-sm font-mono text-[var(--fg)] flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-[var(--gold)]" />
+              Rithmic (R|Protocol, nur Marktdaten)
+            </p>
           </CardHeader>
-          <CardBody className="space-y-4">
-            <div>
-              <label className="block text-[10px] font-mono text-[var(--fg-faint)] uppercase tracking-wider mb-1">
-                Username
-              </label>
-              <input
-                type="text"
-                value={settings.rithmic.username}
-                onChange={(e) => { setSettings({ ...settings, rithmic: { ...settings.rithmic, username: e.target.value } }); setLoggedIn(false); }}
-                placeholder="Login"
-                disabled={loggedIn}
-                className="w-full bg-[var(--bg)] border border-[var(--line)] rounded-md px-3 py-2 text-sm font-mono text-[var(--fg)] placeholder:text-[var(--fg-faint)] focus:border-[var(--key)] focus:outline-none disabled:opacity-50"
-              />
-            </div>
-            <div>
-              <label className="block text-[10px] font-mono text-[var(--fg-faint)] uppercase tracking-wider mb-1">
-                Password
-              </label>
-              <div className="flex gap-2">
-                <input
-                  type={showSecret ? "text" : "password"}
-                  value={settings.rithmic.password}
-                  onChange={(e) => { setSettings({ ...settings, rithmic: { ...settings.rithmic, password: e.target.value } }); setLoggedIn(false); }}
-                  placeholder="Password"
-                  disabled={loggedIn}
-                  className="flex-1 bg-[var(--bg)] border border-[var(--line)] rounded-md px-3 py-2 text-sm font-mono text-[var(--fg)] placeholder:text-[var(--fg-faint)] focus:border-[var(--key)] focus:outline-none disabled:opacity-50"
-                />
-                <Button variant="default" size="sm" onClick={() => setShowSecret(!showSecret)}>
-                  {showSecret ? "Hide" : "Show"}
-                </Button>
-              </div>
-            </div>
-            <div>
-              <label className="block text-[10px] font-mono text-[var(--fg-faint)] uppercase tracking-wider mb-1">
-                Server
-              </label>
-              <input
-                type="text"
-                value={settings.rithmic.baseUrl}
-                onChange={(e) => setSettings({ ...settings, rithmic: { ...settings.rithmic, baseUrl: e.target.value } })}
-                placeholder="https://api.rithmic.com"
-                disabled={loggedIn}
-                className="w-full bg-[var(--bg)] border border-[var(--line)] rounded-md px-3 py-2 text-sm font-mono text-[var(--fg)] placeholder:text-[var(--fg-faint)] focus:border-[var(--key)] focus:outline-none disabled:opacity-50"
-              />
-            </div>
-
-            {loggedIn ? (
-              <div className="flex items-center gap-2 text-[var(--key)] text-sm">
-                <CheckCircle className="h-4 w-4" />
-                Connected — {settings.rithmic.username}
-              </div>
-            ) : (
-              <Button
-                variant="primary"
-                onClick={handleLogin}
-                disabled={connecting || !settings.rithmic.username || !settings.rithmic.password}
-                className="w-full"
-              >
-                <LogIn className="h-4 w-4" />
-                {connecting ? "Connecting..." : "Connect"}
-              </Button>
-            )}
+          <CardBody className="space-y-2 text-xs font-mono text-[var(--fg-dim)]">
+            <p>
+              Login über „Connect“ oben rechts. Verbunden werden nur Ticker- und History-Plant (Live-Trades mit
+              Aggressor, BBO, Minuten-Bars) – kein Order-Plant, keine Orders.
+            </p>
+            <p>
+              Backend: <code>Rithmic:Enabled=true</code>, Gateways und App-Name in{" "}
+              <code>config/marketdata/rithmic.local.json</code>. Für echte Konten (z. B. LucidTrading) ist eine
+              Rithmic-Conformance der App nötig; zuerst gegen „Rithmic Test“ testen.
+            </p>
+            <p>Zugangsdaten werden hier nicht gespeichert.</p>
           </CardBody>
         </Card>
       )}
+
+      {settings.provider === "rithmic" && <RithmicConformanceCard />}
 
       {/* General Data Settings */}
       <Card>
@@ -200,7 +139,6 @@ export function SettingsPage() {
             <select
               value={settings.defaultSymbol}
               onChange={(e) => setSettings({ ...settings, defaultSymbol: e.target.value })}
-              disabled={loggedIn}
               className="w-full bg-[var(--bg)] border border-[var(--line)] rounded-md px-3 py-2 text-sm font-mono text-[var(--fg)] disabled:opacity-50 focus:border-[var(--key)] focus:outline-none"
             >
               {SYMBOLS.map((s) => <option key={s} value={s}>{s}</option>)}
@@ -213,7 +151,6 @@ export function SettingsPage() {
             <select
               value={settings.defaultInterval}
               onChange={(e) => setSettings({ ...settings, defaultInterval: e.target.value })}
-              disabled={loggedIn}
               className="w-full bg-[var(--bg)] border border-[var(--line)] rounded-md px-3 py-2 text-sm font-mono text-[var(--fg)] disabled:opacity-50 focus:border-[var(--key)] focus:outline-none"
             >
               {INTERVALS.map((i) => <option key={i} value={i}>{i}</option>)}
@@ -229,7 +166,6 @@ export function SettingsPage() {
               max={10000}
               value={settings.lookbackCandles}
               onChange={(e) => setSettings({ ...settings, lookbackCandles: Number(e.target.value) })}
-              disabled={loggedIn}
               className="w-full bg-[var(--bg)] border border-[var(--line)] rounded-md px-3 py-2 text-sm font-mono text-[var(--fg)] disabled:opacity-50 focus:border-[var(--key)] focus:outline-none"
             />
           </div>
@@ -243,7 +179,6 @@ export function SettingsPage() {
               max={300}
               value={settings.timeoutSeconds}
               onChange={(e) => setSettings({ ...settings, timeoutSeconds: Number(e.target.value) })}
-              disabled={loggedIn}
               className="w-full bg-[var(--bg)] border border-[var(--line)] rounded-md px-3 py-2 text-sm font-mono text-[var(--fg)] disabled:opacity-50 focus:border-[var(--key)] focus:outline-none"
             />
           </div>
@@ -257,7 +192,6 @@ export function SettingsPage() {
               max={10}
               value={settings.maxRetries}
               onChange={(e) => setSettings({ ...settings, maxRetries: Number(e.target.value) })}
-              disabled={loggedIn}
               className="w-full bg-[var(--bg)] border border-[var(--line)] rounded-md px-3 py-2 text-sm font-mono text-[var(--fg)] disabled:opacity-50 focus:border-[var(--key)] focus:outline-none"
             />
           </div>
@@ -296,8 +230,8 @@ export function SettingsPage() {
               <div className="text-[var(--fg-faint)]">Interval:</div>
               <div className="text-[var(--fg)]">{settings.defaultInterval}</div>
               <div className="text-[var(--fg-faint)]">Status:</div>
-              <div className={loggedIn ? "text-[var(--key)]" : hasCredentials ? "text-[var(--gold)]" : "text-[var(--fg-faint)]"}>
-                {loggedIn ? "Connected" : hasCredentials ? "Ready" : "Not set"}
+              <div className="text-[var(--fg-faint)]">
+                {settings.provider === "rithmic" ? "Login über Connect" : "Lokal"}
               </div>
             </div>
           </CardBody>

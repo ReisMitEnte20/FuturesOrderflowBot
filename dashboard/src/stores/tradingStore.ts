@@ -160,6 +160,16 @@ export const useTradingStore = create<TradingState>()(
     }),
     {
       name: "trading-storage",
+      // v1: ältere Versionen persistierten rithmicCredentials inkl. Passwort -> beim Laden entfernen.
+      version: 1,
+      migrate: (persisted) => {
+        const state = persisted as { rithmicCredentials?: (RithmicCredentials & { password?: string }) | null };
+        if (state?.rithmicCredentials) {
+          const { password: _dropped, ...rest } = state.rithmicCredentials;
+          state.rithmicCredentials = rest;
+        }
+        return state as TradingState;
+      },
       partialize: (state) => ({
         selectedSymbol: state.selectedSymbol,
         activeView: state.activeView,

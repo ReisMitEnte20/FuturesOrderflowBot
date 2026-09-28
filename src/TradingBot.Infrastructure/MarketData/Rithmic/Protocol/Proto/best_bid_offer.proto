@@ -1,0 +1,34 @@
+// Rekonstruiert aus dem Protobuf-Deskriptor von async_rithmic 1.6.6 (MIT, (c) 2024 Mickael Burguet): best_bid_offer.proto
+syntax = "proto3";
+
+package rti;
+
+option csharp_namespace = "TradingBot.Infrastructure.MarketData.Rithmic.Protocol.Messages";
+
+message BestBidOffer {
+  enum PresenceBits {
+    PRESENCEBITS_UNSPECIFIED = 0;
+    BID = 1;
+    ASK = 2;
+    LEAN_PRICE = 4;
+  }
+  int32 template_id = 154467;
+  string symbol = 110100;
+  string exchange = 110101;
+  uint32 presence_bits = 149138;
+  uint32 clear_bits = 154571;
+  bool is_snapshot = 110121;
+  double bid_price = 100022;
+  int32 bid_size = 100030;
+  int32 bid_orders = 154403;
+  int32 bid_implicit_size = 154867;
+  string bid_time = 100266;
+  double ask_price = 100025;
+  int32 ask_size = 100031;
+  int32 ask_orders = 154404;
+  int32 ask_implicit_size = 154868;
+  string ask_time = 100267;
+  double lean_price = 154909;
+  int32 ssboe = 150100;
+  int32 usecs = 150101;
+}

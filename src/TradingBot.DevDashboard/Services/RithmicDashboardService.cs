@@ -1,120 +1,258 @@
-using System.Net.Http.Headers;
-using System.Text;
-using System.Text.Json;
-using TradingBot.Infrastructure.MarketData.Rithmic;
-using TradingBot.Infrastructure.MarketData.Rithmic.Models;
+using TradingBot.Infrastructure.MarketData.Rithmic.Protocol;
 
 namespace TradingBot.DevDashboard.Services;
 
-public sealed class RithmicDashboardService
+/// <summary>
+/// Rithmic-Marktdaten fürs Dashboard über R|Protocol (Ticker + History Plant). NUR Marktdaten:
+/// kein Order-/PnL-Plant, keine Orders. Netzwerk nur bei explizitem Connect.
+/// Konfiguration (Abschnitt "Rithmic"): AppName, AppVersion, Gateways{Name → wss-URI}.
+/// Zugangsdaten werden nicht gespeichert – das Passwort geht nur in den Login-Request.
+/// </summary>
+public sealed class RithmicDashboardService : IAsyncDisposable
 {
-    private readonly HttpClient _httpClient;
+    private readonly IConfiguration _configuration;
     private readonly ILogger<RithmicDashboardService>? _logger;
-    private RithmicConfig? _currentConfig;
-    private bool _isConnected;
+    private readonly RithmicTransportFactory? _transportFactory;
+    private readonly SemaphoreSlim _connectLock = new(1, 1);
+
+    private RithmicMarketDataClient? _client;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, RithmicTickBuffer> _tickBuffers = new();
+    private RithmicConformanceSession? _conformance;
+    private string? _conformanceGateway;
+    private string? _conformanceError;
+    private string? _gatewayUrl;
     private string? _lastError;
 
-    public RithmicDashboardService(ILogger<RithmicDashboardService>? logger = null)
+    public RithmicDashboardService(
+        IConfiguration configuration,
+        ILogger<RithmicDashboardService>? logger = null,
+        RithmicTransportFactory? transportFactory = null)
     {
-        _httpClient = new HttpClient();
+        _configuration = configuration;
         _logger = logger;
-        _isConnected = false;
+        _transportFactory = transportFactory;
     }
 
-    public bool IsConnected => _isConnected;
-    public string? LastError => _lastError;
-    public RithmicConfig? CurrentConfig => _currentConfig;
+    public bool IsConnected => _client?.IsConnected == true;
+
+    public IReadOnlyDictionary<string, string> Gateways =>
+        _configuration.GetSection("Rithmic:Gateways").GetChildren()
+            .Where(c => !string.IsNullOrWhiteSpace(c.Value))
+            .ToDictionary(c => c.Key, c => c.Value!);
+
+    public RithmicOptionsResult GetOptions() => new(
+        Gateways.Keys.ToList(),
+        !string.IsNullOrWhiteSpace(_configuration["Rithmic:AppName"]));
 
     public async Task<RithmicConnectResult> ConnectAsync(RithmicConnectRequest request, CancellationToken cancellationToken = default)
     {
+        if (string.IsNullOrWhiteSpace(request.UserId) || string.IsNullOrEmpty(request.Password) || string.IsNullOrWhiteSpace(request.System))
+            return Fail("User ID, Passwort und System sind erforderlich.", null);
+
+        if (!TryBuildOptions(request.Gateway, out var options, out var gatewayUrl, out var error))
+            return Fail(error!, gatewayUrl);
+
+        await _connectLock.WaitAsync(cancellationToken);
         try
         {
-            _lastError = null;
-
-            var config = new RithmicConfig
+            if (IsConnected)
             {
-                Username = request.UserId,
-                Password = request.Password,
-                BaseUrl = GetGatewayBaseUrl(request.System, request.Gateway),
-                TimeoutSeconds = 30,
-            };
-
-            _currentConfig = config;
-
-            using var client = new HttpClient
-            {
-                BaseAddress = new Uri(config.BaseUrl),
-                Timeout = TimeSpan.FromSeconds(config.TimeoutSeconds)
-            };
-
-            var testRequest = new HttpRequestMessage(HttpMethod.Get, "/api/v1/health");
-            var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{config.Username}:{config.Password}"));
-            testRequest.Headers.Authorization = new AuthenticationHeaderValue("Basic", credentials);
-
-            var response = await client.SendAsync(testRequest, cancellationToken);
-
-            if (response.IsSuccessStatusCode || response.StatusCode == System.Net.HttpStatusCode.NotFound)
-            {
-                _isConnected = true;
-                _logger?.LogInformation("Rithmic connected to {Gateway} ({System})", request.Gateway, request.System);
-                return new RithmicConnectResult(true, "Connected successfully", config.BaseUrl);
+                // Idempotent: gleiche Verbindung erneut angefragt (z. B. UI nach Reload) -> Erfolg melden.
+                if (_client!.User == request.UserId.Trim() && _client.SystemName == request.System && _gatewayUrl == gatewayUrl)
+                    return new RithmicConnectResult(true, "Bereits verbunden.", gatewayUrl);
+                // Anderes Konto/Gateway: ablehnen, ohne den Status der bestehenden Verbindung zu verfälschen.
+                return new RithmicConnectResult(false, $"Bereits verbunden als {_client.User} ({_client.SystemName}) – zuerst Disconnect.", _gatewayUrl);
             }
 
-            _isConnected = false;
-            var error = $"Connection failed: {response.StatusCode}";
-            _lastError = error;
-            _logger?.LogWarning("Rithmic connection failed: {Error}", error);
-            return new RithmicConnectResult(false, error, config.BaseUrl);
+            if (_client is not null)
+                await _client.DisposeAsync();
+
+            _client = new RithmicMarketDataClient(options!, _transportFactory, new LoggerAdapter(_logger));
+            _client.TradeReceived += OnTradeReceived;
+            _gatewayUrl = gatewayUrl;
+
+            await _client.ConnectAsync(new RithmicLoginCredentials(request.UserId.Trim(), request.Password, request.System), true, cancellationToken);
+            _lastError = null;
+            _logger?.LogInformation("Rithmic verbunden: {System} über {Gateway}", request.System, request.Gateway);
+            var message = _client.HasHistory ? "Verbunden (Ticker + History)." : "Verbunden (nur Ticker – History-Plant nicht verfügbar).";
+            return new RithmicConnectResult(true, message, gatewayUrl);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is RithmicProtocolException or OperationCanceledException
+                                       or System.Net.WebSockets.WebSocketException or System.Net.Http.HttpRequestException)
         {
-            _isConnected = false;
-            _lastError = ex.Message;
-            _logger?.LogError(ex, "Rithmic connection error");
-            return new RithmicConnectResult(false, ex.Message, _currentConfig?.BaseUrl);
+            if (_client is not null)
+                await _client.DisposeAsync();
+            _client = null;
+            _logger?.LogWarning("Rithmic-Connect fehlgeschlagen: {Error}", ex.Message);
+            return Fail(ex is OperationCanceledException ? "Timeout beim Verbindungsaufbau." : ex.Message, gatewayUrl);
+        }
+        finally
+        {
+            _connectLock.Release();
         }
     }
 
-    public Task<RithmicDisconnectResult> DisconnectAsync(CancellationToken cancellationToken = default)
+    public async Task<RithmicDisconnectResult> DisconnectAsync(CancellationToken cancellationToken = default)
     {
-        _isConnected = false;
-        _currentConfig = null;
-        _logger?.LogInformation("Rithmic disconnected");
-        return Task.FromResult(new RithmicDisconnectResult(true, "Disconnected"));
-    }
-
-    public RithmicStatusResult GetStatus()
-    {
-        return new RithmicStatusResult(
-            _isConnected,
-            _currentConfig?.Username,
-            _currentConfig?.BaseUrl,
-            _lastError
-        );
-    }
-
-    private static string GetGatewayBaseUrl(string system, string gateway)
-    {
-        return (system, gateway.ToLowerInvariant()) switch
+        var client = Interlocked.Exchange(ref _client, null);
+        if (client is not null)
         {
-            ("LucidTrading", "chicago") => "https://api.lucidtrading.com",
-            ("LucidTrading", "new york") => "https://api-ny.lucidtrading.com",
-            ("LucidTrading", "london") => "https://api-lon.lucidtrading.com",
-            ("LucidTrading", "frankfurt") => "https://api-fra.lucidtrading.com",
-            ("LucidTrading", "tokyo") => "https://api-tyo.lucidtrading.com",
-            ("LucidTrading", "singapore") => "https://api-sin.lucidtrading.com",
-            ("LucidTrading", "sydney") => "https://api-syd.lucidtrading.com",
-            ("Rithmic", "chicago") => "https://api.rithmic.com",
-            ("Rithmic", "new york") => "https://api-ny.rithmic.com",
-            ("Rithmic", "london") => "https://api-lon.rithmic.com",
-            ("Rithmic", "frankfurt") => "https://api-fra.rithmic.com",
-            ("Rithmic", "tokyo") => "https://api-tyo.rithmic.com",
-            ("Rithmic", "singapore") => "https://api-sin.rithmic.com",
-            ("Rithmic", "sydney") => "https://api-syd.rithmic.com",
-            ("Rithmic Paper Trading", _) => "https://api-demo.rithmic.com",
-            ("Rithmic Mock Trading", _) => "https://api-mock.rithmic.com",
-            _ => "https://api.rithmic.com"
-        };
+            client.TradeReceived -= OnTradeReceived;
+            await client.DisposeAsync();
+        }
+        _tickBuffers.Clear();
+        _gatewayUrl = null;
+        _lastError = null;
+        return new RithmicDisconnectResult(true, "Disconnected");
+    }
+
+    public RithmicStatusResult GetStatus() => new(
+        IsConnected,
+        IsConnected ? _client!.User : null,
+        IsConnected ? _gatewayUrl : null,
+        _client?.LastError ?? (IsConnected ? null : _lastError),
+        IsConnected ? _client!.SystemName : null,
+        _client?.HasHistory == true);
+
+    public Task SubscribeAsync(string symbol, string exchange, CancellationToken cancellationToken = default)
+    {
+        var client = RequireClient();
+        // Puffer VOR dem Abo anlegen, damit der erste Live-Trade nicht verloren geht.
+        _tickBuffers.GetOrAdd(TickKey(symbol, exchange), _ => new RithmicTickBuffer());
+        return client.SubscribeAsync(symbol, exchange, cancellationToken);
+    }
+
+    /// <summary>Live-Trades eines abonnierten Instruments seit <paramref name="since"/> (Seq).</summary>
+    public RithmicTickPage GetTicks(string symbol, string exchange, long since, int limit)
+    {
+        RequireClient();
+        if (!_tickBuffers.TryGetValue(TickKey(symbol, exchange), out var buffer))
+            throw new InvalidOperationException($"{symbol} ({exchange}) ist nicht abonniert – zuerst /subscribe.");
+        return buffer.Get(since, Math.Clamp(limit, 1, 5_000));
+    }
+
+    private void OnTradeReceived(string symbol, string exchange, TradingBot.Domain.Models.MarketTick tick)
+    {
+        if (_tickBuffers.TryGetValue(TickKey(symbol, exchange), out var buffer))
+            buffer.Add(tick);
+    }
+
+    private static string TickKey(string symbol, string exchange) => $"{exchange}:{symbol}";
+
+    public IReadOnlyCollection<RithmicQuote> GetQuotes() => _client?.Quotes ?? [];
+
+    public Task<IReadOnlyList<RithmicTimeBar>> GetMinuteBarsAsync(
+        string symbol, string exchange, DateTimeOffset from, DateTimeOffset to, int periodMinutes, CancellationToken cancellationToken = default) =>
+        RequireClient().GetMinuteBarsAsync(symbol, exchange, from, to, periodMinutes, cancellationToken);
+
+    public Task<string?> GetFrontMonthAsync(string rootSymbol, string exchange, CancellationToken cancellationToken = default) =>
+        RequireClient().GetFrontMonthAsync(rootSymbol, exchange, cancellationToken);
+
+    /// <summary>
+    /// Startet die Conformance-Session (Order Plant von "Rithmic Test", nur Login/Heartbeat, keine Orders).
+    /// Rithmic gibt Produktions-Gateways (für Prop-Firm-Konten) erst nach diesem Test frei.
+    /// </summary>
+    public async Task<RithmicConnectResult> StartConformanceAsync(RithmicConformanceRequest request, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(request.UserId) || string.IsNullOrEmpty(request.Password))
+            return FailConformance("User ID und Passwort (Rithmic-Test-Zugang) sind erforderlich.", null);
+        if (!TryBuildOptions(request.Gateway, out var options, out var gatewayUrl, out var error))
+            return FailConformance(error!, gatewayUrl);
+
+        await _connectLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (_conformance?.IsRunning == true)
+                return FailConformance("Conformance-Session läuft bereits.", _conformanceGateway);
+
+            var session = new RithmicConformanceSession(options!, _transportFactory, new LoggerAdapter(_logger));
+            await session.StartAsync(request.UserId.Trim(), request.Password, cancellationToken);
+            _conformance = session;
+            _conformanceGateway = gatewayUrl;
+            _conformanceError = null;
+            _logger?.LogInformation("Rithmic-Conformance gestartet über {Gateway}", request.Gateway);
+            return new RithmicConnectResult(true, "Conformance-Session läuft (Order Plant 'Rithmic Test', nur Heartbeat). App laufen lassen, bis Rithmic bestätigt.", gatewayUrl);
+        }
+        catch (Exception ex) when (ex is RithmicProtocolException or OperationCanceledException
+                                       or System.Net.WebSockets.WebSocketException or System.Net.Http.HttpRequestException)
+        {
+            _logger?.LogWarning("Rithmic-Conformance fehlgeschlagen: {Error}", ex.Message);
+            return FailConformance(ex is OperationCanceledException ? "Timeout beim Verbindungsaufbau." : ex.Message, gatewayUrl);
+        }
+        finally
+        {
+            _connectLock.Release();
+        }
+    }
+
+    public async Task<RithmicDisconnectResult> StopConformanceAsync()
+    {
+        var session = Interlocked.Exchange(ref _conformance, null);
+        if (session is not null)
+            await session.DisposeAsync();
+        _conformanceGateway = null;
+        _conformanceError = null;
+        return new RithmicDisconnectResult(true, "Conformance-Session beendet.");
+    }
+
+    public RithmicConformanceStatus GetConformanceStatus() => new(
+        _conformance?.IsRunning == true,
+        _conformance?.User,
+        _conformance?.IsRunning == true ? _conformanceGateway : null,
+        _conformance?.StartedAt,
+        _conformance?.LastError ?? _conformanceError);
+
+    public async ValueTask DisposeAsync()
+    {
+        await StopConformanceAsync();
+        await DisconnectAsync();
+        _connectLock.Dispose();
+    }
+
+    private RithmicMarketDataClient RequireClient() =>
+        _client is { IsConnected: true } c ? c : throw new InvalidOperationException("Rithmic ist nicht verbunden.");
+
+    private bool TryBuildOptions(string? gatewayName, out RithmicProtocolOptions? options, out string? gatewayUrl, out string? error)
+    {
+        options = null;
+        error = null;
+        if (!Gateways.TryGetValue(gatewayName ?? "", out gatewayUrl) || !Uri.TryCreate(gatewayUrl, UriKind.Absolute, out var gatewayUri))
+        {
+            gatewayUrl = null;
+            error = $"Gateway '{gatewayName}' ist nicht konfiguriert. Verfügbar: {string.Join(", ", Gateways.Keys)}";
+            return false;
+        }
+
+        var appName = _configuration["Rithmic:AppName"];
+        var appVersion = _configuration["Rithmic:AppVersion"];
+        if (string.IsNullOrWhiteSpace(appName) || string.IsNullOrWhiteSpace(appVersion))
+        {
+            error = "Rithmic:AppName/AppVersion fehlen in der Konfiguration.";
+            return false;
+        }
+
+        options = new RithmicProtocolOptions { GatewayUri = gatewayUri, AppName = appName, AppVersion = appVersion };
+        return true;
+    }
+
+    private RithmicConnectResult FailConformance(string message, string? gatewayUrl)
+    {
+        _conformanceError = message;
+        return new RithmicConnectResult(false, message, gatewayUrl);
+    }
+
+    private RithmicConnectResult Fail(string message, string? gatewayUrl)
+    {
+        _lastError = message;
+        return new RithmicConnectResult(false, message, gatewayUrl);
+    }
+
+    /// <summary>Brücke vom Core-Logger des Clients auf den ASP.NET-Logger.</summary>
+    private sealed class LoggerAdapter(ILogger? logger) : TradingBot.Core.Interfaces.ILogger
+    {
+        public void Info(string message) => logger?.LogInformation("{Message}", message);
+        public void Warning(string message) => logger?.LogWarning("{Message}", message);
+        public void Error(string message, Exception? exception = null) => logger?.LogError(exception, "{Message}", message);
     }
 }
 
@@ -123,12 +261,16 @@ public record RithmicConnectRequest(
     string Password,
     string System,
     string Gateway
-);
+)
+{
+    // Passwort nie in Logs/ToString ausgeben.
+    public override string ToString() => $"RithmicConnectRequest {{ UserId = {UserId}, System = {System}, Gateway = {Gateway} }}";
+}
 
 public record RithmicConnectResult(
     bool Success,
     string Message,
-    string GatewayUrl
+    string? GatewayUrl
 );
 
 public record RithmicDisconnectResult(
@@ -140,5 +282,27 @@ public record RithmicStatusResult(
     bool IsConnected,
     string? Username,
     string? GatewayUrl,
+    string? LastError,
+    string? SystemName,
+    bool HasHistory
+);
+
+public record RithmicOptionsResult(
+    IReadOnlyList<string> Gateways,
+    bool AppConfigured
+);
+
+public record RithmicSubscribeRequest(string Symbol, string Exchange);
+
+public record RithmicConformanceRequest(string UserId, string Password, string Gateway)
+{
+    public override string ToString() => $"RithmicConformanceRequest {{ UserId = {UserId}, Gateway = {Gateway} }}";
+}
+
+public record RithmicConformanceStatus(
+    bool IsRunning,
+    string? Username,
+    string? GatewayUrl,
+    DateTimeOffset? StartedAt,
     string? LastError
 );
