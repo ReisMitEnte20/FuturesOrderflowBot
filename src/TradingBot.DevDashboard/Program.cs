@@ -154,13 +154,25 @@ quant.MapGet("/trials", async (string? campaignId, QuantApiService s, Cancellati
 quant.MapGet("/trials/{id}", async (string id, QuantApiService s, CancellationToken ct) =>
     await s.GetTrialAsync(id, ct) is { } t ? Results.Ok(t) : Results.NotFound(new { error = $"Versuch '{id}' unbekannt." }));
 
-// Finaler Holdout: einmaliger, an einen Kandidaten gebundener Verbrauch. Ein zweiter/paralleler
-// Aufruf schlägt fehl (kein „Nachsehen ohne Verbrauch").
-quant.MapPost("/campaigns/{id}/holdout/consume", async (string id, HoldoutConsumeRequest? body, QuantApiService s, CancellationToken ct) =>
+// Finaler Holdout — einmalige, eingefrorene, dauerhaft gespeicherte Auswertung eines bereits
+// ausgewählten Kandidaten. Status/Ergebnis überleben einen Neustart; ein zweiter/paralleler Start
+// erzeugt keinen weiteren Lauf.
+quant.MapGet("/campaigns/{id}/holdout", async (string id, QuantApiService s, CancellationToken ct) =>
+    Results.Ok(await s.GetHoldoutAsync(id, ct)));
+quant.MapPost("/campaigns/{id}/holdout/evaluate", async (string id, HoldoutEvaluateRequest body, QuantApiService s, QuantJobManager jobs, CancellationToken ct) =>
 {
-    var res = await s.ConsumeHoldoutAsync(id, body?.CandidateReference, ct);
+    var res = await s.EvaluateHoldoutAsync(id, body, jobs, ct);
     return res.Ok ? Results.Ok(res) : Results.BadRequest(res);
 });
+// Der frühere reine Verbrauch-Endpunkt ist deaktiviert: kein zweiter, widersprüchlicher Verbrauchspfad
+// ohne gespeicherte Auswertung. Der Holdout wird ausschließlich über /holdout/evaluate verbraucht.
+quant.MapPost("/campaigns/{id}/holdout/consume", (string id) =>
+    Results.BadRequest(new QuantHoldoutConsumeResponse
+    {
+        Ok = false, CampaignId = id,
+        Error = "Register [HOLDOUT_CONSUME_DISABLED]: Der finale Holdout wird ausschließlich über " +
+                "POST /api/quant/campaigns/{id}/holdout/evaluate ausgewertet und dabei einmalig verbraucht."
+    }));
 
 // Paper-Research-Einträge (Quelle, Hypothese, Regeln, dokumentierte Abweichungen).
 quant.MapGet("/papers", async (QuantApiService s, CancellationToken ct) => Results.Ok(await s.ListPapersAsync(ct)));

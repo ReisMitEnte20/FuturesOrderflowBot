@@ -4,11 +4,13 @@ import { backtestApi, type DataSourceDef, type InstrumentDef, type RunRequest } 
 import {
   awaitJob,
   defaultEvaluationOptions,
+  formatByUnit,
   formatDate,
   formatNumber,
   formatPercent,
   quantApi,
   type CampaignInput,
+  type HoldoutEvaluationRecord,
   type QuantAnalyzeResponse,
   type QuantCampaign,
   type QuantEvaluationOptions,
@@ -21,6 +23,8 @@ import {
   type QuantWalkForwardResponse,
 } from "@/lib/quantApi";
 import { HeadlineStat, MetricList, NoteBlock, Unavailable } from "@/components/research/MetricList";
+import { EquityDrawdownChart } from "@/components/backtest/EquityDrawdownChart";
+import type { EquityPoint } from "@/lib/backtestApi";
 import {
   CostHeatmap,
   DistributionChart,
@@ -31,7 +35,7 @@ import {
   WalkForwardTimeline,
 } from "@/components/research/ResearchCharts";
 
-type TabId = "overview" | "benchmark" | "walkforward" | "montecarlo" | "robustness" | "overfitting" | "experiments";
+type TabId = "overview" | "benchmark" | "walkforward" | "montecarlo" | "robustness" | "overfitting" | "holdout" | "experiments";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "overview", label: "Übersicht" },
@@ -40,6 +44,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "montecarlo", label: "Monte Carlo" },
   { id: "robustness", label: "Robustheit" },
   { id: "overfitting", label: "Overfitting" },
+  { id: "holdout", label: "Holdout" },
   { id: "experiments", label: "Experimente" },
 ];
 
@@ -372,6 +377,7 @@ export function Research() {
         {tab === "overfitting" && (
           <OverfittingTab cfg={cfg} evalOpts={evalOpts} runRequest={runRequest} runJob={runJob} busy={busy} />
         )}
+        {tab === "holdout" && <HoldoutTab runRequest={runRequest} />}
         {tab === "experiments" && <ExperimentsTab />}
       </div>
     </div>
@@ -1271,6 +1277,286 @@ function OverfittingTab({
 // ==============================================================================================
 // Experimente (Versuchsregister)
 // ==============================================================================================
+
+// =============================================================================================
+// Holdout — finale, einmalige, eingefrorene Auswertung eines bereits ausgewählten Kandidaten.
+// Deutlich getrennt von Training und Walk-forward-OOS; das Backend erzwingt die Einmaligkeit.
+// =============================================================================================
+function HoldoutTab({ runRequest }: { runRequest: () => RunRequest }) {
+  const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+  const [campaigns, setCampaigns] = useState<QuantCampaign[]>([]);
+  const [campaignId, setCampaignId] = useState<string>("");
+  const [trials, setTrials] = useState<QuantTrial[]>([]);
+  const [trialId, setTrialId] = useState<string>("");
+  const [record, setRecord] = useState<HoldoutEvaluationRecord | null>(null);
+  const [state, setState] = useState<string>("");
+  const [holdoutFrom, setHoldoutFrom] = useState<string | null>(null);
+  const [holdoutTo, setHoldoutTo] = useState<string | null>(null);
+  const [warmupBars, setWarmupBars] = useState(50);
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const loadCampaigns = useCallback(async () => {
+    try { setCampaigns(await quantApi.campaigns()); } catch (e) { setError(msg(e)); }
+  }, []);
+  useEffect(() => { void loadCampaigns(); }, [loadCampaigns]);
+
+  const loadCampaign = useCallback(async (id: string) => {
+    setError(null); setRecord(null); setState(""); setTrialId(""); setConfirm(false); setProgress(0);
+    setHoldoutFrom(null); setHoldoutTo(null);
+    if (!id) { setTrials([]); return; }
+    try {
+      const [ts, h] = await Promise.all([quantApi.trials(id), quantApi.holdout(id)]);
+      setTrials(ts.filter((t) => t.periodRole !== "holdout"));
+      setRecord(h.evaluation); setState(h.state);
+      setHoldoutFrom(h.holdoutFrom); setHoldoutTo(h.holdoutTo);
+      if (h.error && !h.evaluation) setError(h.error);
+    } catch (e) { setError(msg(e)); }
+  }, []);
+  useEffect(() => { void loadCampaign(campaignId); }, [campaignId, loadCampaign]);
+
+  const selectedTrial = useMemo(() => trials.find((t) => t.id === trialId) ?? null, [trials, trialId]);
+  const canEvaluate = !!campaignId && !!selectedTrial && confirm && !busy && state === "Available";
+
+  const evaluate = async () => {
+    if (!campaignId || !selectedTrial) return;
+    abortRef.current?.abort();
+    const ac = new AbortController(); abortRef.current = ac;
+    setBusy(true); setError(null); setProgress(0);
+    try {
+      const run: RunRequest = { ...runRequest(), params: selectedTrial.parameters, strategy: selectedTrial.strategyId };
+      const ref = `${selectedTrial.id} (${Object.entries(selectedTrial.parameters).map(([k, v]) => `${k}=${v}`).join(" ")})`;
+      const resp = await quantApi.evaluateHoldout(campaignId, {
+        run, options: { ...defaultEvaluationOptions, frequency: "Bar" },
+        candidateReference: ref, candidateTrialId: selectedTrial.id, warmupBars, confirm: true,
+      }, ac.signal);
+      setState(resp.state); setRecord(resp.evaluation);
+      if (!resp.ok) { setError(resp.error ?? "Auswertung abgelehnt."); return; }
+      if (resp.jobId) {
+        try { await awaitJob(resp.jobId, (p) => setProgress(p), ac.signal); } catch { /* maßgeblich ist der gespeicherte Satz */ }
+      }
+      const final = await quantApi.holdout(campaignId, ac.signal);   // dauerhafter Zustand (auch nach Neustart)
+      setState(final.state); setRecord(final.evaluation);
+      if (final.error && !final.evaluation) setError(final.error);
+    } catch (e) { if (!ac.signal.aborted) setError(msg(e)); }
+    finally { setBusy(false); }
+  };
+
+  const cur = (v: number | null | undefined) => (v === null || v === undefined ? "n. b." : formatByUnit(v, "currency"));
+  const running = state === "Running" || busy;
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-md border border-[var(--gold)]/40 px-3 py-2 text-[11px] text-[var(--gold)] leading-relaxed">
+        <span className="font-medium">Finaler Holdout.</span> Ein bereits (aus Training/Walk-forward) ausgewählter Kandidat
+        wird mit eingefrorener Konfiguration <span className="font-medium">genau einmal</span> auf dem reservierten
+        Holdout-Zeitraum ausgewertet. Der Zugriff verbraucht den Holdout unwiderruflich — getrennt von Training und
+        Walk-forward-OOS. Die Einmaligkeit erzwingt das Backend unabhängig von dieser Oberfläche.
+      </div>
+
+      {error && <Unavailable title="Holdout-Hinweis" reason={error} />}
+
+      <div className="rounded-lg border border-[var(--line)] bg-[var(--panel)] p-3 space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-medium">Kampagne</span>
+          <select
+            value={campaignId}
+            onChange={(e) => setCampaignId(e.target.value)}
+            className="bg-[var(--bg-2)] border border-[var(--line)] rounded px-2 py-1 text-xs text-[var(--fg)] min-w-[200px]"
+          >
+            <option value="">— wählen —</option>
+            {campaigns.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.id} · {c.holdoutFrom ? (c.holdoutConsumed ? "Holdout verbraucht" : "Holdout reserviert") : "ohne Holdout"}
+              </option>
+            ))}
+          </select>
+          <button onClick={() => void loadCampaign(campaignId)} className="text-[11px] text-[var(--fg-faint)] hover:text-[var(--fg)]">
+            aktualisieren
+          </button>
+          {state && (
+            <span className={cn("ml-auto text-[11px] mono px-2 py-0.5 rounded",
+              state === "Completed" ? "text-[var(--key)]" : state === "Failed" || state === "Cancelled" ? "text-[var(--red)]"
+              : state === "Available" ? "text-[var(--fg-dim)]" : "text-[var(--gold)]")}>
+              Status: {state}
+            </span>
+          )}
+        </div>
+
+        {campaignId && (
+          <div className="text-[11px] text-[var(--fg-faint)]">
+            Reservierter Holdout-Zeitraum: <span className="text-[var(--fg-dim)] mono">
+              {holdoutFrom ? holdoutFrom.slice(0, 16) : "—"} → {holdoutTo ? holdoutTo.slice(0, 16) : "—"} UTC
+            </span>
+          </div>
+        )}
+
+        {campaignId && state === "NoHoldout" && (
+          <div className="text-[11px] text-[var(--fg-faint)]">Für diese Kampagne ist kein Holdout reserviert.</div>
+        )}
+        {campaignId && state === "ConsumedNoResult" && (
+          <div className="text-[11px] text-[var(--gold)]">
+            Der Holdout wurde bereits verbraucht, es liegt aber kein gespeichertes Auswertungsergebnis vor. Der Zustand
+            wird nicht zurückgesetzt.
+          </div>
+        )}
+
+        {campaignId && state === "Available" && (
+          <div className="space-y-2 border-t border-[var(--line)] pt-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-medium">Ausgewählter Kandidat</span>
+              <select
+                value={trialId}
+                onChange={(e) => setTrialId(e.target.value)}
+                className="bg-[var(--bg-2)] border border-[var(--line)] rounded px-2 py-1 text-xs text-[var(--fg)] min-w-[260px]"
+              >
+                <option value="">— Kandidat aus der Kampagne wählen —</option>
+                {trials.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.id} · {Object.entries(t.parameters).map(([k, v]) => `${k}=${v}`).join(" ")}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {trials.length === 0 && (
+              <div className="text-[11px] text-[var(--fg-faint)]">
+                Keine Kandidaten erfasst. Der Kandidat muss aus der Suche stammen (kein Holdout-basiertes Auswählen).
+              </div>
+            )}
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="text-[11px] text-[var(--fg-dim)] flex items-center gap-1">
+                Warmup-Bars (nur frühere Daten)
+                <input type="number" min={0} value={warmupBars}
+                  onChange={(e) => setWarmupBars(Math.max(0, Number(e.target.value) || 0))}
+                  className="w-20 bg-[var(--bg-2)] border border-[var(--line)] rounded px-2 py-1 text-xs mono" />
+              </label>
+            </div>
+            <label className="flex items-start gap-2 text-[11px] text-[var(--fg-dim)]">
+              <input type="checkbox" checked={confirm} onChange={(e) => setConfirm(e.target.checked)} className="mt-0.5" />
+              <span>Ich bestätige: Dieser Holdout wird durch die Auswertung <span className="text-[var(--gold)] font-medium">unwiderruflich verbraucht</span> und kann danach nicht erneut gestartet werden.</span>
+            </label>
+            <button
+              onClick={() => void evaluate()}
+              disabled={!canEvaluate}
+              className="px-3 py-1.5 text-xs rounded-md bg-[var(--key)] text-[var(--bg)] font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {busy ? "Auswertung läuft…" : "Holdout auswerten (verbraucht ihn)"}
+            </button>
+          </div>
+        )}
+
+        {running && (
+          <div className="h-1 w-full bg-[var(--line)] rounded overflow-hidden">
+            <div className="h-full bg-[var(--key)] transition-all" style={{ width: `${Math.round(progress * 100)}%` }} />
+          </div>
+        )}
+      </div>
+
+      {record && <HoldoutResult record={record} cur={cur} />}
+    </div>
+  );
+}
+
+function HoldoutResult({ record, cur }: { record: HoldoutEvaluationRecord; cur: (v: number | null | undefined) => string }) {
+  const initial = record.config.initialCapital;
+  const equityPts: EquityPoint[] = record.equity.map((p) => ({
+    barIndex: p.barIndex, time: new Date(p.timeMs).toISOString(),
+    realizedNetPnL: p.equity - initial, equity: p.equity, openPnL: 0,
+  }));
+  const metricKeys: { key: string; label: string; kind: "num" | "cur" }[] = [
+    { key: "sharpe", label: "Sharpe (Periode)", kind: "num" },
+    { key: "sortino", label: "Sortino", kind: "num" },
+    { key: "cagr", label: "CAGR", kind: "num" },
+    { key: "calmar", label: "Calmar", kind: "num" },
+  ];
+  return (
+    <div className="rounded-lg border border-[var(--line)] bg-[var(--panel)] p-3 space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="text-xs font-medium">Finales Holdout-Ergebnis</div>
+        <span className={cn("text-[11px] mono px-2 py-0.5 rounded",
+          record.status === "Completed" ? "text-[var(--key)]" : "text-[var(--red)]")}>
+          {record.status}
+        </span>
+        <span className="text-[11px] text-[var(--fg-faint)] ml-auto">
+          {record.config.candidateReference} · Kandidat {record.config.candidateTrialId ?? "—"}
+        </span>
+      </div>
+
+      {record.statusReason && (
+        <div className="text-[11px] text-[var(--red)]">{record.statusReason}</div>
+      )}
+
+      <div className="flex flex-wrap gap-px bg-[var(--line)] rounded overflow-hidden">
+        <HeadlineStat label="Netto-PnL" value={cur(record.netProfit)} tone={(record.netProfit ?? 0) >= 0 ? "good" : "bad"} />
+        <HeadlineStat label="Max-Drawdown" value={cur(record.maxDrawdown)} tone="bad" />
+        <HeadlineStat label="End-Equity" value={cur(record.finalEquity)} />
+        <HeadlineStat label="Trades" value={String(record.tradeCount)} />
+        {metricKeys.map((m) => (
+          <HeadlineStat key={m.key} label={m.label} value={formatNumber(record.metrics[m.key], 3)} />
+        ))}
+      </div>
+
+      <div className="text-[11px] text-[var(--fg-faint)]">
+        Bewertet: {record.holdoutBars} Holdout-Bars · Warmup {record.warmupBarsUsed} Bars (nur frühere Daten, keine
+        Trades/Kennzahlen im Warmup) · Datenbezug {record.usedDataSha ? record.usedDataSha.slice(0, 12) + "…" : "—"}
+      </div>
+
+      {equityPts.length > 0 ? (
+        <div>
+          <div className="text-[11px] text-[var(--fg-faint)] mb-1">Equity &amp; Drawdown (nur Holdout-Zeitraum)</div>
+          <EquityDrawdownChart equity={equityPts} initialBalance={initial} height={220} />
+        </div>
+      ) : (
+        <div className="text-[11px] text-[var(--fg-faint)]">Keine Equity-Punkte im Holdout.</div>
+      )}
+
+      {record.trades.length > 0 && (
+        <div className="overflow-x-auto">
+          <div className="text-[11px] text-[var(--fg-faint)] mb-1">Trade-Journal (Holdout)</div>
+          <table className="w-full text-[11px] mono">
+            <thead>
+              <tr className="text-[var(--fg-faint)] border-b border-[var(--line)]">
+                <th className="text-left font-normal px-2 py-1">#</th>
+                <th className="text-left font-normal px-2 py-1">Seite</th>
+                <th className="text-left font-normal px-2 py-1">Entry</th>
+                <th className="text-left font-normal px-2 py-1">Exit</th>
+                <th className="text-right font-normal px-2 py-1">Entry-Preis</th>
+                <th className="text-right font-normal px-2 py-1">Exit-Preis</th>
+                <th className="text-right font-normal px-2 py-1">Netto-PnL</th>
+                <th className="text-left font-normal px-2 py-1">Grund</th>
+              </tr>
+            </thead>
+            <tbody>
+              {record.trades.map((t) => (
+                <tr key={t.index} className="border-b border-[var(--line)]/60">
+                  <td className="px-2 py-1 text-[var(--fg-faint)]">{t.index + 1}</td>
+                  <td className="px-2 py-1 text-[var(--fg-dim)]">{t.side}</td>
+                  <td className="px-2 py-1 text-[var(--fg-faint)]">{new Date(t.entryTimeMs).toISOString().slice(5, 16).replace("T", " ")}</td>
+                  <td className="px-2 py-1 text-[var(--fg-faint)]">{new Date(t.exitTimeMs).toISOString().slice(5, 16).replace("T", " ")}</td>
+                  <td className="px-2 py-1 text-right text-[var(--fg-dim)]">{t.entryPrice.toFixed(2)}</td>
+                  <td className="px-2 py-1 text-right text-[var(--fg-dim)]">{t.exitPrice.toFixed(2)}</td>
+                  <td className={cn("px-2 py-1 text-right", t.netPnL >= 0 ? "text-[var(--key)]" : "text-[var(--red)]")}>{t.netPnL.toFixed(2)}</td>
+                  <td className="px-2 py-1 text-[var(--fg-faint)]">{t.exitReason}{t.ambiguous ? " (mehrdeutig)" : ""}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <NoteBlock title="Hinweise" items={record.notes} tone="method" />
+      <div className="text-[10px] text-[var(--fg-faint)]">
+        Eingefrorene Konfiguration: {record.config.strategyId} · {Object.entries(record.config.parameters).map(([k, v]) => `${k}=${v}`).join(" ")}
+        · Start {formatByUnit(record.config.initialCapital, "currency")} · Menge {record.config.quantity}
+        · Codestand {record.config.codeVersion}. Holdout-Ergebnisse fließen NICHT in Training, PBO oder DSR ein.
+      </div>
+    </div>
+  );
+}
 
 function ExperimentsTab() {
   const [campaigns, setCampaigns] = useState<QuantCampaign[]>([]);

@@ -336,6 +336,43 @@ public sealed record QuantHoldoutConsumeResponse
     public DateTimeOffset? HoldoutTo { get; init; }
 }
 
+/// <summary>
+/// Anfrage für die EINMALIGE finale Holdout-Auswertung eines bereits ausgewählten Kandidaten. Die
+/// Konfiguration (Run) wird eingefroren; der Kandidat muss zur Kampagne gehören. <see cref="Confirm"/>
+/// muss true sein — die Auswertung verbraucht den Holdout unwiderruflich.
+/// </summary>
+public sealed record HoldoutEvaluateRequest
+{
+    public required BacktestRunRequest Run { get; init; }
+    public QuantEvaluationOptions Options { get; init; } = new();
+    /// <summary>Eindeutige, menschenlesbare Referenz auf den ausgewählten Kandidaten (Pflicht).</summary>
+    public string? CandidateReference { get; init; }
+    /// <summary>Optionale Id des zugehörigen Walk-forward-Trials (Herkunftsnachweis, Kampagnenzugehörigkeit).</summary>
+    public string? CandidateTrialId { get; init; }
+    /// <summary>Warmup-Bars VOR dem Holdout (nur frühere Daten, keine Trades/Kennzahlen im Warmup).</summary>
+    public int WarmupBars { get; init; }
+    /// <summary>Ausdrückliche Bestätigung, dass dieser Holdout dadurch verbraucht wird.</summary>
+    public bool Confirm { get; init; }
+}
+
+/// <summary>Antwort auf Statusabfrage bzw. Start der finalen Holdout-Auswertung.</summary>
+public sealed record HoldoutEvaluationResponse
+{
+    public bool Ok { get; init; }
+    public string? Error { get; init; }
+    public required string CampaignId { get; init; }
+    /// <summary>Available | Reserved | Running | Completed | Failed | Cancelled | ConsumedNoResult | NoHoldout | UnknownCampaign.</summary>
+    public string State { get; init; } = "";
+    /// <summary>Job-Id des laufenden Auswertungslaufs (für Live-Fortschritt); null nach Neustart oder ohne Lauf.</summary>
+    public string? JobId { get; init; }
+    /// <summary>True, wenn bereits eine Auswertung existierte und KEIN neuer Lauf gestartet wurde.</summary>
+    public bool AlreadyExisted { get; init; }
+    /// <summary>Reservierter Holdout-Zeitraum der Kampagne (auch wenn noch nichts ausgewertet wurde).</summary>
+    public DateTimeOffset? HoldoutFrom { get; init; }
+    public DateTimeOffset? HoldoutTo { get; init; }
+    public HoldoutEvaluationRecord? Evaluation { get; init; }
+}
+
 public sealed record QuantTrialDto(string Id, string CampaignId, DateTimeOffset CreatedUtc, DateTimeOffset? CompletedUtc,
     string StrategyId, string StrategyVersion, string Origin, string? OriginReference,
     IReadOnlyDictionary<string, string> Parameters, string DataSha256, string DataSource, string DataSymbol,

@@ -54,4 +54,22 @@ public interface IExperimentStore
     /// „Nachsehen ohne Verbrauch". Danach sind weitere Holdout-Auswertungen gesperrt.
     /// </summary>
     Task<CampaignRecord> ConsumeHoldoutAsync(string campaignId, string? evaluationReference = null, CancellationToken ct = default);
+
+    /// <summary>Liest die (höchstens eine) dauerhaft gespeicherte finale Holdout-Auswertung einer Kampagne.</summary>
+    Task<HoldoutEvaluationRecord?> GetHoldoutEvaluationAsync(string campaignId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Reserviert die finale Holdout-Auswertung ATOMAR und EINMALIG: prüft, dass die Kampagne existiert, ein
+    /// Holdout definiert und noch nicht verbraucht ist, setzt danach unter EINER Sperre den Verbrauch-Flag der
+    /// Kampagne (gebunden an die eingefrorene Konfiguration) UND schreibt den Auswertungssatz im Zustand
+    /// <see cref="HoldoutEvaluationStatus.Reserved"/>. Ein zweiter oder paralleler Aufruf schlägt mit
+    /// <c>HOLDOUT_CONSUMED</c> fehl. Es gibt bewusst KEINE automatische Freigabe bei Fehler/Abbruch.
+    /// </summary>
+    Task<HoldoutEvaluationRecord> ReserveHoldoutEvaluationAsync(string campaignId, HoldoutEvaluationRecord reserved, CancellationToken ct = default);
+
+    /// <summary>
+    /// Aktualisiert den bestehenden Holdout-Auswertungssatz (Running/Completed/Failed/Cancelled inkl. Ergebnis).
+    /// Der einmalige Verbrauch-Flag der Kampagne wird dabei NIEMALS zurückgesetzt.
+    /// </summary>
+    Task<HoldoutEvaluationRecord> UpdateHoldoutEvaluationAsync(HoldoutEvaluationRecord record, CancellationToken ct = default);
 }

@@ -27,13 +27,16 @@ public sealed class JsonExperimentStore : IExperimentStore
         _root = rootDirectory ?? throw new ArgumentNullException(nameof(rootDirectory));
         Directory.CreateDirectory(CampaignDir);
         Directory.CreateDirectory(TrialRoot);
+        Directory.CreateDirectory(HoldoutDir);
     }
 
     private string CampaignDir => Path.Combine(_root, "campaigns");
     private string TrialRoot => Path.Combine(_root, "trials");
+    private string HoldoutDir => Path.Combine(_root, "holdout");
     private string CampaignPath(string id) => Path.Combine(CampaignDir, Sanitize(id) + ".json");
     private string TrialDir(string campaignId) => Path.Combine(TrialRoot, Sanitize(campaignId));
     private string TrialPath(string campaignId, string trialId) => Path.Combine(TrialDir(campaignId), Sanitize(trialId) + ".json");
+    private string HoldoutPath(string campaignId) => Path.Combine(HoldoutDir, Sanitize(campaignId) + ".json");
 
     public async Task<CampaignRecord> CreateCampaignAsync(CampaignRecord campaign, CancellationToken ct = default)
     {
@@ -211,6 +214,65 @@ public sealed class JsonExperimentStore : IExperimentStore
             };
             await WriteAsync(CampaignPath(campaignId), updated, ct);
             return updated;
+        }
+        finally { _lock.Release(); }
+    }
+
+    public async Task<HoldoutEvaluationRecord?> GetHoldoutEvaluationAsync(string campaignId, CancellationToken ct = default)
+    {
+        var path = HoldoutPath(campaignId);
+        return File.Exists(path) ? await ReadAsync<HoldoutEvaluationRecord>(path, ct) : null;
+    }
+
+    public async Task<HoldoutEvaluationRecord> ReserveHoldoutEvaluationAsync(string campaignId, HoldoutEvaluationRecord reserved, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(reserved);
+
+        // Prüfen UND Reservieren unter EINER Sperre: sonst könnten zwei parallele Requests beide einen freien
+        // Holdout vorfinden und je einen Lauf starten. Ein bereits existierender Auswertungssatz ODER ein
+        // gesetztes Verbrauch-Flag der Kampagne blockiert jede weitere Reservierung (kein verstecktes Retry).
+        await _lock.WaitAsync(ct);
+        try
+        {
+            var campaign = await GetCampaignAsync(campaignId, ct)
+                ?? throw new ExperimentRegistryException("CAMPAIGN_UNKNOWN", $"Kampagne '{campaignId}' existiert nicht.");
+            if (campaign.HoldoutFrom is null && campaign.HoldoutTo is null)
+                throw new ExperimentRegistryException("NO_HOLDOUT", "Für diese Kampagne ist kein Holdout definiert.");
+            if (File.Exists(HoldoutPath(campaignId)))
+                throw new ExperimentRegistryException("HOLDOUT_CONSUMED",
+                    "Für diese Kampagne existiert bereits eine finale Holdout-Auswertung; sie kann nicht erneut gestartet werden.");
+            if (campaign.HoldoutConsumed)
+                throw new ExperimentRegistryException("HOLDOUT_CONSUMED",
+                    "Der finale Holdout dieser Kampagne wurde bereits verbraucht und kann nicht erneut ausgewertet werden.");
+
+            var record = reserved with { CampaignId = campaignId, Status = HoldoutEvaluationStatus.Reserved };
+            // Erst den Auswertungssatz schreiben, dann den Verbrauch-Flag der Kampagne setzen — beides atomar
+            // unter der Sperre, gebunden an die eingefrorene Konfiguration (kein zweiter Verbrauchspfad).
+            await WriteAsync(HoldoutPath(campaignId), record, ct);
+            var updated = campaign with
+            {
+                HoldoutConsumed = true,
+                HoldoutConsumedUtc = DateTimeOffset.UtcNow,
+                HoldoutEvaluatedReference = record.Config.CandidateReference
+            };
+            await WriteAsync(CampaignPath(campaignId), updated, ct);
+            return record;
+        }
+        finally { _lock.Release(); }
+    }
+
+    public async Task<HoldoutEvaluationRecord> UpdateHoldoutEvaluationAsync(HoldoutEvaluationRecord record, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        await _lock.WaitAsync(ct);
+        try
+        {
+            if (!File.Exists(HoldoutPath(record.CampaignId)))
+                throw new ExperimentRegistryException("HOLDOUT_UNKNOWN",
+                    $"Für Kampagne '{record.CampaignId}' existiert keine reservierte Holdout-Auswertung.");
+            // Der einmalige Verbrauch-Flag der Kampagne wird hier NIE zurückgesetzt.
+            await WriteAsync(HoldoutPath(record.CampaignId), record, ct);
+            return record;
         }
         finally { _lock.Release(); }
     }

@@ -1113,6 +1113,324 @@ public sealed class QuantApiService
     }
 
     // =========================================================================================
+    // Finaler Holdout — einmalige, eingefrorene, dauerhaft gespeicherte Auswertung
+    // =========================================================================================
+
+    /// <summary>Liest den dauerhaften Holdout-Zustand einer Kampagne, ohne etwas zu verändern.</summary>
+    public async Task<HoldoutEvaluationResponse> GetHoldoutAsync(string campaignId, CancellationToken ct = default)
+    {
+        var campaign = await _store.GetCampaignAsync(campaignId, ct);
+        if (campaign is null)
+            return new HoldoutEvaluationResponse { Ok = false, CampaignId = campaignId, State = "UnknownCampaign", Error = $"Kampagne '{campaignId}' existiert nicht." };
+
+        var record = await _store.GetHoldoutEvaluationAsync(campaignId, ct);
+        if (record is not null)
+            return new HoldoutEvaluationResponse
+            {
+                Ok = true, CampaignId = campaignId, State = record.Status.ToString(),
+                HoldoutFrom = campaign.HoldoutFrom, HoldoutTo = campaign.HoldoutTo, Evaluation = record
+            };
+
+        if (campaign.HoldoutFrom is null && campaign.HoldoutTo is null)
+            return new HoldoutEvaluationResponse { Ok = true, CampaignId = campaignId, State = "NoHoldout" };
+
+        // Verbraucht, aber ohne gespeicherte Auswertung (z. B. Alt-Verbrauch): Zustand ausdrücklich darstellen,
+        // NICHT still zurücksetzen.
+        if (campaign.HoldoutConsumed)
+            return new HoldoutEvaluationResponse
+            {
+                Ok = true, CampaignId = campaignId, State = "ConsumedNoResult",
+                HoldoutFrom = campaign.HoldoutFrom, HoldoutTo = campaign.HoldoutTo,
+                Error = "Der Holdout wurde bereits verbraucht, es liegt aber kein gespeichertes Auswertungsergebnis vor."
+            };
+
+        return new HoldoutEvaluationResponse
+        {
+            Ok = true, CampaignId = campaignId, State = "Available",
+            HoldoutFrom = campaign.HoldoutFrom, HoldoutTo = campaign.HoldoutTo
+        };
+    }
+
+    /// <summary>
+    /// Startet die EINMALIGE finale Holdout-Auswertung eines bereits ausgewählten Kandidaten. Konfiguration
+    /// wird eingefroren und validiert; die Reservierung ist atomar und verbraucht den Holdout. Ein bereits
+    /// vorhandener Auswertungssatz erzeugt KEINEN neuen Lauf — der vorhandene Zustand wird zurückgegeben.
+    /// </summary>
+    public async Task<HoldoutEvaluationResponse> EvaluateHoldoutAsync(
+        string campaignId, HoldoutEvaluateRequest request, QuantJobManager jobs, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(jobs);
+
+        HoldoutEvaluationResponse Reject(string code, string message) =>
+            new() { Ok = false, CampaignId = campaignId, State = "Rejected", Error = $"Register [{code}]: {message}" };
+
+        HoldoutEvaluationResponse Existing(CampaignRecord c, HoldoutEvaluationRecord r) =>
+            new() { Ok = true, CampaignId = campaignId, State = r.Status.ToString(), AlreadyExisted = true,
+                    HoldoutFrom = c.HoldoutFrom, HoldoutTo = c.HoldoutTo, Evaluation = r };
+
+        var campaign = await _store.GetCampaignAsync(campaignId, ct);
+        if (campaign is null) return Reject("CAMPAIGN_UNKNOWN", $"Kampagne '{campaignId}' existiert nicht.");
+        if (campaign.HoldoutFrom is null || campaign.HoldoutTo is null)
+            return Reject("NO_HOLDOUT", "Für diese Kampagne ist kein Holdout definiert.");
+
+        // Wiederholter Request: vorhandenen Zustand/Ergebnis zurückgeben, KEIN neuer Lauf.
+        var already = await _store.GetHoldoutEvaluationAsync(campaignId, ct);
+        if (already is not null) return Existing(campaign, already);
+        if (campaign.HoldoutConsumed)
+            return Reject("HOLDOUT_CONSUMED", "Der Holdout wurde bereits verbraucht; eine erneute Auswertung ist gesperrt.");
+
+        if (!request.Confirm)
+            return Reject("CONFIRM_REQUIRED", "Die finale Holdout-Auswertung verbraucht den Holdout unwiderruflich und muss ausdrücklich bestätigt werden (Confirm=true).");
+
+        var candidateRef = (request.CandidateReference ?? string.Empty).Trim();
+        if (candidateRef.Length == 0)
+            return Reject("CANDIDATE_MISSING", "Keine Referenz auf den ausgewählten Kandidaten angegeben.");
+        if (string.IsNullOrWhiteSpace(request.Run.Strategy) || request.Run.Params is null || request.Run.Params.Count == 0)
+            return Reject("CONFIG_INCOMPLETE", "Strategie und vollständige Parameter des Kandidaten sind erforderlich.");
+
+        BacktestApiService.RunContext ctx;
+        try { ctx = await _backtest.LoadContextAsync(request.Run, ct); }
+        catch (Exception ex) { return Reject("DATA_LOAD_FAILED", ex.Message); }
+        if (ctx.Candles.Count == 0) return Reject("NO_DATA", "Keine gültigen OHLC-Bars im gewählten Zeitraum.");
+
+        var fingerprint = DataFingerprint.Compute(ctx.Candles, ctx.Instrument.Symbol, ctx.TimeframeMinutes, ctx.Source);
+        if (!string.IsNullOrEmpty(campaign.DataSha)
+            && !string.Equals(campaign.DataSha, fingerprint.Sha256, StringComparison.OrdinalIgnoreCase))
+            return Reject("DATA_MISMATCH",
+                $"Der Datenbezug weicht vom gesperrten Datenbezug der Kampagne ab (Fingerabdruck '{Short(fingerprint.Sha256)}' ≠ '{Short(campaign.DataSha)}').");
+
+        // Holdout-Fenster deterministisch per Zeitstempel lokalisieren.
+        int holdoutStart = -1;
+        for (int i = 0; i < ctx.Candles.Count; i++)
+            if (ctx.Candles[i].CloseTime >= campaign.HoldoutFrom.Value) { holdoutStart = i; break; }
+        int holdoutEnd = -1;
+        for (int i = ctx.Candles.Count - 1; i >= 0; i--)
+            if (ctx.Candles[i].CloseTime <= campaign.HoldoutTo.Value) { holdoutEnd = i; break; }
+        if (holdoutStart < 0 || holdoutEnd < holdoutStart)
+            return Reject("HOLDOUT_WINDOW_NOT_FOUND", "Der reservierte Holdout-Zeitraum liegt nicht in den geladenen Daten.");
+
+        // Der Kandidat muss zur Kampagne gehören (keine Auswahl anhand von Holdout-Ergebnissen).
+        var campaignTrials = await _store.ListTrialsAsync(campaignId, ct);
+        if (!string.IsNullOrWhiteSpace(request.CandidateTrialId))
+        {
+            var trial = campaignTrials.FirstOrDefault(t => string.Equals(t.Id, request.CandidateTrialId, StringComparison.Ordinal));
+            if (trial is null)
+                return Reject("CANDIDATE_NOT_IN_CAMPAIGN", $"Trial '{request.CandidateTrialId}' gehört nicht zur Kampagne '{campaignId}'.");
+            if (!SameParameters(trial.Parameters, request.Run.Params))
+                return Reject("CANDIDATE_CONFIG_MISMATCH", "Die Parameter weichen vom referenzierten Kampagnen-Trial ab.");
+        }
+        else if (!campaignTrials.Any(t => SameParameters(t.Parameters, request.Run.Params)))
+        {
+            return Reject("CANDIDATE_NOT_IN_CAMPAIGN",
+                "Der Kandidat (Parametersatz) wurde in dieser Kampagne nicht erfasst — kein nachweisbarer Bezug zur Suche.");
+        }
+
+        var frozen = new HoldoutFrozenConfig
+        {
+            CampaignId = campaignId,
+            CandidateReference = candidateRef,
+            CandidateTrialId = string.IsNullOrWhiteSpace(request.CandidateTrialId) ? null : request.CandidateTrialId,
+            StrategyId = request.Run.Strategy,
+            Parameters = new Dictionary<string, string>(request.Run.Params),
+            Symbol = ctx.Instrument.Symbol,
+            TimeframeMinutes = ctx.TimeframeMinutes,
+            InitialCapital = request.Run.InitialBalance,
+            Quantity = request.Run.Quantity,
+            StopLossTicks = request.Run.StopLossTicks,
+            TakeProfitTicks = request.Run.TakeProfitTicks,
+            Costs = CostSnapshotFrom(ctx, request.Run),
+            DataSha = fingerprint.Sha256,
+            HoldoutFrom = campaign.HoldoutFrom.Value,
+            HoldoutTo = campaign.HoldoutTo.Value,
+            WarmupBars = Math.Max(0, request.WarmupBars),
+            Frequency = request.Options.Frequency,
+            CodeVersion = CodeVersion()
+        };
+
+        string runId = ("holdout-" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "-" + Guid.NewGuid().ToString("N"));
+        runId = runId[..Math.Min(runId.Length, 40)];
+        var reserved = new HoldoutEvaluationRecord
+        {
+            CampaignId = campaignId, RunId = runId, Status = HoldoutEvaluationStatus.Reserved, Config = frozen,
+            HoldoutBars = holdoutEnd - holdoutStart + 1, WarmupBarsUsed = Math.Min(frozen.WarmupBars, holdoutStart)
+        };
+
+        HoldoutEvaluationRecord record;
+        try { record = await _store.ReserveHoldoutEvaluationAsync(campaignId, reserved, ct); }
+        catch (ExperimentRegistryException ex)
+        {
+            // Paralleler Request hat gewonnen? Vorhandenen Zustand zurückgeben, sonst den Fehler nennen.
+            var now = await _store.GetHoldoutEvaluationAsync(campaignId, ct);
+            var refreshed = await _store.GetCampaignAsync(campaignId, ct) ?? campaign;
+            return now is not null ? Existing(refreshed, now) : Reject(ex.Code, ex.Message);
+        }
+
+        var metricOptions = MetricOptions(request.Options);
+        int hs = holdoutStart, he = holdoutEnd;
+        string jobId = jobs.Start("holdout", async (p, jct) =>
+            (object)await RunHoldoutEvaluationAsync(record, ctx, hs, he, metricOptions, p, jct));
+
+        return new HoldoutEvaluationResponse
+        {
+            Ok = true, CampaignId = campaignId, State = HoldoutEvaluationStatus.Reserved.ToString(), JobId = jobId,
+            HoldoutFrom = campaign.HoldoutFrom, HoldoutTo = campaign.HoldoutTo, Evaluation = record
+        };
+    }
+
+    /// <summary>
+    /// Führt die reservierte Holdout-Auswertung aus: bewertet AUSSCHLIESSLICH den Holdout-Zeitraum, nutzt
+    /// Warmup nur aus früheren Daten (im Warmup keine Trades/Kennzahlen), speichert das Ergebnis dauerhaft.
+    /// Fehler/Abbruch werden dauerhaft erfasst; der Holdout wird NICHT automatisch wieder freigegeben.
+    /// </summary>
+    private async Task<HoldoutEvaluationRecord> RunHoldoutEvaluationAsync(
+        HoldoutEvaluationRecord reserved, BacktestApiService.RunContext ctx, int holdoutStart, int holdoutEnd,
+        PerformanceMetricsOptions metricOptions, IProgress<double>? progress, CancellationToken ct)
+    {
+        var cfg = reserved.Config;
+        var startedUtc = DateTimeOffset.UtcNow;
+        try
+        {
+            await _store.UpdateHoldoutEvaluationAsync(reserved with { Status = HoldoutEvaluationStatus.Running, StartedUtc = startedUtc }, ct);
+            progress?.Report(0.1);
+            ct.ThrowIfCancellationRequested();
+
+            int warmupStart = Math.Max(0, holdoutStart - cfg.WarmupBars);
+            int warmupCount = holdoutStart - warmupStart;
+            var slice = ctx.Candles.Skip(warmupStart).Take(holdoutEnd - warmupStart + 1).ToList();
+
+            var runReq = new BacktestRunRequest
+            {
+                Symbol = cfg.Symbol, TimeframeMinutes = cfg.TimeframeMinutes,
+                Strategy = cfg.StrategyId, Params = new Dictionary<string, string>(cfg.Parameters),
+                Quantity = cfg.Quantity, InitialBalance = cfg.InitialCapital,
+                StopLossTicks = cfg.StopLossTicks, TakeProfitTicks = cfg.TakeProfitTicks,
+                ApplyFees = cfg.Costs.ApplyFees, ExcludePartialEdges = true
+            };
+            IStrategy strat = _backtest.CreateStrategy(runReq, ctx.Instrument);
+            if (warmupCount > 0) strat = new WarmupGuardStrategy(strat, warmupCount);
+
+            var res = _backtest.RunEngine(ctx, strat, ConfigFrom(runReq), candlesOverride: slice);
+            progress?.Report(0.6);
+            ct.ThrowIfCancellationRequested();
+
+            var spec = new QuantContractSpec(ctx.Instrument.TickSize, ctx.Instrument.PointValue, ctx.Instrument.Currency);
+            var frequency = ParseFrequency(cfg.Frequency);
+            var curve = ReturnSeriesBuilder.BuildEquityCurve(res, spec, frequency);
+
+            // NUR der Holdout-Zeitraum: Punkte ab HoldoutFrom (der Warmup ist ausgeschlossen).
+            var holdoutPoints = curve.Points.Where(pt => pt.Time >= cfg.HoldoutFrom).ToList();
+            var notes = new List<string>();
+            int localHoldoutStart = warmupCount;
+
+            var realizedBuild = ReturnSeriesBuilder.ToReturnSeries(curve with { Points = holdoutPoints, StartTime = null }, EquityBasis.Realized);
+            notes.AddRange(realizedBuild.Notes);
+
+            var metricsResult = PerformanceMetricsCalculator.Compute(realizedBuild.Series, metricOptions);
+            var metrics = metricsResult.Metrics.ToDictionary(m => m.Key, m => m.IsAvailable ? m.Value : (double?)null);
+
+            var equityLevels = holdoutPoints.Select(pt => (double)pt.RealizedEquity).ToList();
+            double initial = (double)cfg.InitialCapital;
+            double finalEquity = equityLevels.Count > 0 ? equityLevels[^1] : initial;
+            double netProfit = finalEquity - initial;
+            double maxDd = MaxDrawdownAbs(equityLevels);
+
+            var trades = new List<HoldoutTradeRecord>();
+            int idx = 0;
+            foreach (var t in res.Trades)
+            {
+                if (t.EntryBarIndex < localHoldoutStart) continue;   // Warmup blockiert Ausführung — Sicherheitsnetz
+                trades.Add(new HoldoutTradeRecord(
+                    idx++, t.Side.ToString(), t.Quantity,
+                    t.EntryTime.ToUnixTimeMilliseconds(), t.ExitTime.ToUnixTimeMilliseconds(),
+                    (double)t.EntryPrice, (double)t.ExitPrice,
+                    t.EntryBarIndex - localHoldoutStart, t.ExitBarIndex - localHoldoutStart,
+                    (double)t.GrossPnL, (double)t.Fees, (double)t.NetPnL, t.ExitReason.ToString(),
+                    (double)t.StopLossPrice, (double)t.TakeProfitPrice, t.Ambiguous, t.Note));
+            }
+
+            var equityPoints = holdoutPoints.Select(pt => new HoldoutEquityPoint(
+                pt.Time.ToUnixTimeMilliseconds(), pt.BarIndex - localHoldoutStart, (double)pt.RealizedEquity, (double)pt.TotalEquity)).ToList();
+
+            var holdoutCandles = ctx.Candles.Skip(holdoutStart).Take(holdoutEnd - holdoutStart + 1).ToList();
+            var quality = QuantDataQualityChecker.Check(holdoutCandles, cfg.Symbol, cfg.TimeframeMinutes);
+            if (quality.Issues.Count > 0)
+                notes.Add("Datenqualität im Holdout: " + string.Join(", ", quality.Issues.Select(i => i.Code).Distinct()));
+            if (realizedBuild.Truncated)
+                notes.Add("Kapital ≤ 0 im Holdout — die Reihe wurde abgebrochen; Kennzahlen gelten nur bis dahin.");
+            if (realizedBuild.Series.Count == 0)
+                notes.Add("Zu wenige Holdout-Perioden für belastbare Kennzahlen.");
+
+            metrics["netprofit"] = netProfit;
+            metrics["maxdrawdown"] = maxDd;
+            metrics["trades"] = trades.Count;
+
+            var completed = reserved with
+            {
+                Status = HoldoutEvaluationStatus.Completed, StartedUtc = startedUtc, CompletedUtc = DateTimeOffset.UtcNow,
+                UsedDataSha = cfg.DataSha, HoldoutBars = holdoutEnd - holdoutStart + 1, WarmupBarsUsed = warmupCount,
+                Metrics = metrics, MaxDrawdown = maxDd, NetProfit = netProfit, FinalEquity = finalEquity,
+                TradeCount = trades.Count, Equity = equityPoints, Trades = trades, Notes = notes, StatusReason = null
+            };
+            progress?.Report(1);
+            return await _store.UpdateHoldoutEvaluationAsync(completed, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            var cancelled = reserved with
+            {
+                Status = HoldoutEvaluationStatus.Cancelled, StartedUtc = startedUtc, CompletedUtc = DateTimeOffset.UtcNow,
+                StatusReason = "Abgebrochen (Nutzer oder Laufzeitgrenze). Der Holdout bleibt verbraucht und wird nicht automatisch freigegeben."
+            };
+            try { await _store.UpdateHoldoutEvaluationAsync(cancelled, CancellationToken.None); } catch (ExperimentRegistryException) { /* Satz fehlt nicht */ }
+            throw;
+        }
+        catch (Exception ex)
+        {
+            var failed = reserved with
+            {
+                Status = HoldoutEvaluationStatus.Failed, StartedUtc = startedUtc, CompletedUtc = DateTimeOffset.UtcNow,
+                StatusReason = ex.Message
+            };
+            try { await _store.UpdateHoldoutEvaluationAsync(failed, CancellationToken.None); } catch (ExperimentRegistryException) { /* Satz fehlt nicht */ }
+            throw;
+        }
+    }
+
+    private static string Short(string sha) => sha.Length > 12 ? sha[..12] + "…" : sha;
+
+    private static bool SameParameters(IReadOnlyDictionary<string, string> a, IReadOnlyDictionary<string, string> b)
+    {
+        if (a.Count != b.Count) return false;
+        foreach (var kv in a)
+            if (!b.TryGetValue(kv.Key, out var v) || !string.Equals(v, kv.Value, StringComparison.Ordinal)) return false;
+        return true;
+    }
+
+    private static double MaxDrawdownAbs(IReadOnlyList<double> equity)
+    {
+        double peak = double.NegativeInfinity, maxDd = 0;
+        foreach (var e in equity)
+        {
+            if (e > peak) peak = e;
+            if (peak > double.NegativeInfinity) maxDd = Math.Max(maxDd, peak - e);
+        }
+        return maxDd;
+    }
+
+    private static CostProfileSnapshot CostSnapshotFrom(BacktestApiService.RunContext ctx, BacktestRunRequest run) => new()
+    {
+        FeePerSide = ctx.Fee.CommissionPerSide + ctx.Fee.ExchangeFeePerSide + ctx.Fee.ClearingFeePerSide
+                     + ctx.Fee.RoutingFeePerSide + ctx.Fee.NfaFeePerSide + ctx.Fee.OtherFeePerSide,
+        SlippageTicks = ctx.Fee.EstimatedSlippageTicks,
+        TickSize = ctx.Instrument.TickSize,
+        PointValue = ctx.Instrument.PointValue,
+        ApplyFees = run.ApplyFees,
+        Currency = ctx.Instrument.Currency,
+        IsExampleProfile = ctx.FeeIsExample || ctx.InstrumentIsExample
+    };
+
+    // =========================================================================================
     // Hilfsfunktionen
     // =========================================================================================
 

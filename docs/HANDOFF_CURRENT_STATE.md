@@ -106,6 +106,59 @@ Frontend **10/10** (`node --test`); `tsc -b && vite build` erfolgreich. Backend 
 gestartet und geprüft. Working Tree unverändert im Dateiumfang (nur Inhalte in bereits geänderten/neuen Dateien:
 `CandidateMatrixAligner.cs`, `QuantApiService.cs`, `QuantValidationTests.cs`).
 
+## Finaler Holdout-Auswertungspfad implementiert (2026-09-29) — uncommittet, wartet auf Freigabe
+
+Der zuvor als OFFEN gekennzeichnete finale Holdout-Auswertungspfad ist jetzt umgesetzt (Scope streng auf
+diesen Pfad begrenzt, keine neuen Quant-Verfahren). **Kein Commit/Push/Merge** (Freigabe steht aus).
+
+- **Dauerhafter Zustand + Zustandsmaschine:** neues Modell `HoldoutEvaluationRecord` (Registry) mit
+  `HoldoutEvaluationStatus` Reserved→Running→Completed/Failed/Cancelled, eingefrorener Konfiguration
+  (`HoldoutFrozenConfig`: Kampagne, Kandidat/Trial-Referenz, Strategie+Parameter, Instrument/Timeframe/
+  Kapital/Menge/SL/TP, Kostenschnappschuss, Datenfingerabdruck, exakte Holdout-Grenzen, Warmup,
+  Codeversion), Kennzahlen, Equity, Drawdown, Trade-Journal, Hinweise, Fehler-/Abbruchgrund.
+- **Store (`IExperimentStore`/`JsonExperimentStore`):** `ReserveHoldoutEvaluationAsync` (atomar unter einer
+  Sperre: prüft „nicht verbraucht", setzt den Verbrauch-Flag der Kampagne gebunden an die eingefrorene
+  Konfiguration UND schreibt den Reserved-Satz), `GetHoldoutEvaluationAsync`, `UpdateHoldoutEvaluationAsync`
+  (setzt den Verbrauch nie zurück). Persistiert unter `artifacts/quant/holdout/<campaignId>.json`
+  (gitignoriert) → **neustartsicher**. Der frühere `store.ConsumeHoldoutAsync` bleibt inkl. seiner Tests.
+- **Service (`QuantApiService`):** `EvaluateHoldoutAsync` friert die Konfiguration ein, validiert VOR der
+  Reservierung (Confirm, Kandidat vorhanden, Strategie/Parameter vollständig, Datenfingerabdruck == gesperrter
+  Kampagnen-Datenbezug, Holdout-Fenster in den Daten lokalisierbar, Kandidat gehört zur Kampagne), reserviert
+  atomar und startet den Lauf als `QuantJobManager`-Job (Fortschritt/Abbruch/Laufzeitgrenze). Wiederholter/
+  paralleler Request ⇒ vorhandener Zustand, KEIN neuer Lauf. `RunHoldoutEvaluationAsync` bewertet
+  ausschließlich den Holdout-Zeitraum, nutzt Warmup nur aus früheren Daten (WarmupGuard blockt Trades im
+  Warmup, keine Warmup-Perioden in den Kennzahlen), speichert Ergebnis dauerhaft; Fehler/Abbruch ⇒
+  Failed/Cancelled, **keine automatische Freigabe**. `GetHoldoutAsync` liefert Available/Reserved/Running/
+  Completed/Failed/Cancelled/ConsumedNoResult/NoHoldout (Alt-Verbrauch ohne Ergebnis wird ausdrücklich
+  angezeigt, nicht zurückgesetzt).
+- **Endpunkte:** `GET /api/quant/campaigns/{id}/holdout`, `POST …/holdout/evaluate`. Der frühere reine
+  `POST …/holdout/consume` ist **deaktiviert** (`HOLDOUT_CONSUME_DISABLED`) → kein zweiter, widersprüchlicher
+  Verbrauchspfad. Holdout-Ergebnisse werden als SEPARATER Satz geführt (kein Trial) → gelangen NICHT in
+  Trainingsauswahl, PBO-Kandidatenmatrix oder DSR-Versuchsgrundlage.
+- **Dashboard (`/research` → Tab „Holdout"):** Kampagnen-/Kandidatenauswahl, reservierter Zeitraum,
+  ausdrückliche Verbrauchs-Bestätigung vor der Erstauswertung, Fortschritt/Status, dauerhaft abrufbares
+  Ergebnis mit Equity-/Drawdown-Chart (wiederverwendet) und Trade-Journal, deutlich von Training/OOS
+  getrennt; nach Reservierung/Verbrauch keine erneute Startmöglichkeit (Backend erzwingt das unabhängig).
+
+**Tests:** neue `HoldoutEvaluationTests` (8) — echter Servicepfad mit deterministischen synthetischen
+OHLC-Daten bis zum gespeicherten Ergebnis (unabhängige Gegenrechnung NetProfit == Σ Trade-NetPnL), zwei
+parallele Starts ⇒ genau ein Lauf, Wiederholung/Reload nach „Neustart" ⇒ keine Neuberechnung, Fehlschlag
+nach Reservierung ⇒ dauerhaft, keine Freigabe, abweichender Datenfingerabdruck/Kandidat/Confirm ⇒ Ablehnung,
+kein Look-ahead/keine Vermischung, Holdout bleibt aus dem Versuchsregister. **.NET 617/617 grün**
+(609→617), Frontend **10/10**, `tsc + vite build` erfolgreich, `dotnet build` 0 Fehler.
+
+**Browser-Abnahme (synthetische Demo-Kampagne `holdout-ui-demo`, Sierra-Daten):** Kandidatenwahl →
+Bestätigung → Auswertung → Ergebnis (Completed, Net −314,36, Max-DD 314,36, 12 Trades, 176 Holdout-Bars,
+Warmup 50), Equity/Drawdown-Chart + Journal gerendert, **0 Konsolenfehler**; nach Verbrauch keine
+Start-Controls mehr; erneuter Request ⇒ AlreadyExisted (kein neuer Lauf); alter Consume-Endpunkt
+abgelehnt; Trial-Register unverändert (nur `walkforward`).
+
+**Verbleibende Grenzen:** Der Live-Fortschritt nutzt den In-Memory-`QuantJobManager`; nach einem Neustart
+mitten im Lauf bleibt ein Satz im Zustand `Running` (bewusst KEINE automatische Freigabe/Wiederholung) —
+maßgeblich ist der dauerhaft gespeicherte Satz. Die Browser-Abnahme lief mit einer synthetischen
+Demo-Kampagne (kein echter Forschungs-Holdout verbraucht). Datenquelle der Auswertung muss dem gesperrten
+Kampagnen-Datenbezug entsprechen (per Fingerabdruck erzwungen).
+
 ## Aktuelle Nutzerentscheidung (Vorrang vor älteren Notizen)
 
 - **Tick-Replay-Weiterentwicklung pausiert.** Priorität: **OHLCV-Backtesting im React-Dashboard `dashboard/`**, bestehende Engine-Funktionen wiederverwenden.

@@ -193,6 +193,54 @@ export interface QuantJobState {
   error?: string | null; result?: unknown;
 }
 
+// --- Finaler Holdout (einmalige, eingefrorene, dauerhaft gespeicherte Auswertung) ---
+
+export interface HoldoutFrozenConfig {
+  campaignId: string; candidateReference: string; candidateTrialId?: string | null;
+  strategyId: string; parameters: Record<string, string>;
+  symbol: string; timeframeMinutes: number; initialCapital: number; quantity: number;
+  stopLossTicks?: number | null; takeProfitTicks?: number | null;
+  costs: {
+    feePerSide: number; slippageTicks: number; tickSize: number; pointValue: number;
+    applyFees: boolean; currency: string; isExampleProfile: boolean;
+  };
+  dataSha: string; holdoutFrom: string; holdoutTo: string; warmupBars: number; frequency: string; codeVersion: string;
+}
+
+export interface HoldoutEquityPoint { timeMs: number; barIndex: number; equity: number; totalEquity: number; }
+
+export interface HoldoutTradeRecord {
+  index: number; side: string; quantity: number; entryTimeMs: number; exitTimeMs: number;
+  entryPrice: number; exitPrice: number; entryBarIndex: number; exitBarIndex: number;
+  grossPnL: number; fees: number; netPnL: number; exitReason: string;
+  stopLossPrice: number; takeProfitPrice: number; ambiguous: boolean; note?: string | null;
+}
+
+export type HoldoutStatus = "Reserved" | "Running" | "Completed" | "Failed" | "Cancelled";
+
+export interface HoldoutEvaluationRecord {
+  campaignId: string; runId: string; status: HoldoutStatus; config: HoldoutFrozenConfig;
+  reservedUtc: string; startedUtc: string | null; completedUtc: string | null;
+  usedDataSha?: string | null; holdoutBars: number; warmupBarsUsed: number;
+  metrics: Record<string, number | null>;
+  maxDrawdown: number | null; netProfit: number | null; finalEquity: number | null; tradeCount: number;
+  equity: HoldoutEquityPoint[]; trades: HoldoutTradeRecord[];
+  notes: string[]; statusReason?: string | null;
+}
+
+export interface HoldoutEvaluationResponse {
+  ok: boolean; error?: string | null; campaignId: string;
+  state: string; jobId?: string | null; alreadyExisted: boolean;
+  holdoutFrom: string | null; holdoutTo: string | null;
+  evaluation: HoldoutEvaluationRecord | null;
+}
+
+export interface HoldoutEvaluateRequest {
+  run: RunRequest; options: QuantEvaluationOptions;
+  candidateReference?: string | null; candidateTrialId?: string | null;
+  warmupBars: number; confirm: boolean;
+}
+
 async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: "POST",
@@ -235,6 +283,11 @@ export const quantApi = {
   campaigns: (signal?: AbortSignal) => get<QuantCampaign[]>("/campaigns", signal),
   trials: (campaignId?: string | null, signal?: AbortSignal) =>
     get<QuantTrial[]>(`/trials${campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : ""}`, signal),
+
+  holdout: (campaignId: string, signal?: AbortSignal) =>
+    get<HoldoutEvaluationResponse>(`/campaigns/${encodeURIComponent(campaignId)}/holdout`, signal),
+  evaluateHoldout: (campaignId: string, req: HoldoutEvaluateRequest, signal?: AbortSignal) =>
+    post<HoldoutEvaluationResponse>(`/campaigns/${encodeURIComponent(campaignId)}/holdout/evaluate`, req, signal),
 };
 
 /**
