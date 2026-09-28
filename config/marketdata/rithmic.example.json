@@ -1,1 +1,13 @@
-{"username": "YOUR_USERNAME", "password": "YOUR_PASSWORD", "baseUrl": "https://api.rithmic.com", "timeoutSeconds": 30, "maxRetries": 3, "defaultSymbol": "NQ", "defaultInterval": "1m", "lookbackCandles": 1000}
+{
+  "note": "Vorlage. Als config/marketdata/rithmic.local.json kopieren (gitignored). KEINE Passw\u00f6rter hier ablegen - Login nur \u00fcber das Dashboard.",
+  "Rithmic": {
+    "Enabled": true,
+    "AppName": "FuturesOrderflowBot",
+    "AppVersion": "0.1.0",
+    "Gateways": {
+      "Chicago (Produktion)": "wss://rprotocol.rithmic.com:443",
+      "Frankfurt (Produktion)": "wss://rprotocol-de.rithmic.com:443",
+      "Rithmic Test": "wss://rituz00100.rithmic.com:443"
+    }
+  }
+}

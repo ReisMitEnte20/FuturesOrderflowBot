@@ -2,7 +2,6 @@ export type MarketDataProvider = "rithmic" | "csv" | "sierra" | "atas";
 
 export interface MarketDataSettings {
   provider: MarketDataProvider;
-  rithmic: RithmicSettings;
   defaultSymbol: string;
   defaultInterval: string;
   lookbackCandles: number;
@@ -10,17 +9,10 @@ export interface MarketDataSettings {
   maxRetries: number;
 }
 
-export interface RithmicSettings {
-  username: string;
-  password: string;
-  baseUrl: string;
-}
-
 const STORAGE_KEY = "marketdata-settings";
 
 export const DEFAULT_SETTINGS: MarketDataSettings = {
   provider: "rithmic",
-  rithmic: { username: "", password: "", baseUrl: "https://api.rithmic.com" },
   defaultSymbol: "NQ",
   defaultInterval: "1m",
   lookbackCandles: 1000,
@@ -32,8 +24,10 @@ export function loadMarketDataSettings(): MarketDataSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
-      const parsed = JSON.parse(raw) as Partial<MarketDataSettings>;
-      return { ...DEFAULT_SETTINGS, ...parsed, rithmic: { ...DEFAULT_SETTINGS.rithmic, ...(parsed.rithmic || {}) } };
+      // Ältere Versionen speicherten Rithmic-Zugangsdaten (inkl. Passwort) im Klartext -> entfernen.
+      const { rithmic, ...parsed } = JSON.parse(raw) as Partial<MarketDataSettings> & { rithmic?: unknown };
+      if (rithmic !== undefined) localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
+      return { ...DEFAULT_SETTINGS, ...parsed };
     }
   } catch {
     /* ignore */

@@ -5,9 +5,9 @@ import { Button } from "@/components/common/Button";
 
 const API_BASE = "/api/rithmic";
 
-// Im lokalen Backtesting-Modus ist Rithmic serverseitig deaktiviert. Die UI löst standardmäßig KEINE
-// automatischen Rithmic-Requests aus; Aktivierung nur explizit über VITE_RITHMIC_ENABLED=true.
-const RITHMIC_ENABLED = (import.meta as any).env?.VITE_RITHMIC_ENABLED === "true";
+// /status ist ein rein LOKALER Snapshot des eigenen Backends (kein Rithmic-Netzwerkzugriff). Er wird beim Laden
+// und periodisch abgefragt, damit die Anzeige den echten Backend-Zustand zeigt (z. B. nach Reload/ForcedLogout).
+const STATUS_POLL_MS = 10_000;
 
 export function Topbar() {
   const [loginOpen, setLoginOpen] = useState(false);
@@ -17,22 +17,28 @@ export function Topbar() {
   const setCredentials = useTradingStore((s) => s.setRithmicCredentials);
 
   useEffect(() => {
-    if (RITHMIC_ENABLED) loadStatus();
+    loadStatus();
+    const timer = setInterval(loadStatus, STATUS_POLL_MS);
+    return () => clearInterval(timer);
   }, []);
 
   const loadStatus = async () => {
     try {
       const response = await fetch(`${API_BASE}/status`);
-      if (response.ok) {
-        const result = await response.json();
-        if (result.isConnected) {
-          setConnectionStatus("connected");
-        } else if (result.lastError) {
-          setConnectionStatus("error");
+      if (!response.ok) return;
+      const result = await response.json();
+      const store = useTradingStore.getState();
+      if (store.connectionStatus === "connecting") return; // laufenden Login nicht überschreiben
+      if (result.isConnected) {
+        setConnectionStatus("connected");
+        if (result.username && store.rithmicCredentials?.userId !== result.username) {
+          setCredentials({ userId: result.username, system: result.systemName ?? "", gateway: store.rithmicCredentials?.gateway ?? "" });
         }
+      } else {
+        setConnectionStatus(result.lastError ? "error" : "disconnected");
       }
     } catch {
-      // Ignore - backend might not be running
+      // Backend nicht erreichbar – Anzeige unverändert lassen.
     }
   };
 

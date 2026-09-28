@@ -5,6 +5,19 @@
     <ProjectReference Include="..\TradingBot.Domain\TradingBot.Domain.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" Version="3.36.2" />
+    <PackageReference Include="Grpc.Tools" Version="2.84.0">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <!-- Rithmic R|Protocol: nur Marktdaten-Nachrichten (Ticker/History Plant), KEINE Order-/PnL-Messages. -->
+  <ItemGroup>
+    <Protobuf Include="MarketData\Rithmic\Protocol\Proto\*.proto" GrpcServices="None" ProtoRoot="MarketData\Rithmic\Protocol\Proto" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>

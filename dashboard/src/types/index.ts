@@ -187,7 +187,6 @@ export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "er
 
 export interface RithmicCredentials {
   userId: string;
-  password: string;
   system: string;
   gateway: string;
 }

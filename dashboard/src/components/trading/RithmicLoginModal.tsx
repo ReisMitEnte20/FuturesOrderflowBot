@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTradingStore } from "@/stores/tradingStore";
 import { Button } from "@/components/common/Button";
 import { X } from "lucide-react";
 
-const SYSTEMS = ["Rithmic", "Rithmic Paper Trading", "Rithmic Mock Trading", "LucidTrading"];
-const GATEWAYS = ["Chicago", "New York", "London", "Frankfurt", "Tokyo", "Singapore", "Sydney"];
+// Vorschläge; maßgeblich ist die System-Liste, die das Gateway beim Connect meldet (Fehlermeldung listet sie).
+const SYSTEM_SUGGESTIONS = ["Rithmic Test", "Rithmic Paper Trading", "Rithmic 01", "LucidTrading"];
 
 const API_BASE = "/api/rithmic";
 
@@ -20,18 +20,41 @@ export function RithmicLoginModal({ open, onClose }: RithmicLoginModalProps) {
 
   const [userId, setUserId] = useState(creds?.userId || "");
   const [password, setPassword] = useState("");
-  const [system, setSystem] = useState(creds?.system || SYSTEMS[0]);
-  const [gateway, setGateway] = useState(creds?.gateway || "Chicago");
+  const [system, setSystem] = useState(creds?.system || SYSTEM_SUGGESTIONS[0]);
+  const [gateway, setGateway] = useState(creds?.gateway || "");
+  const [gateways, setGateways] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // Nur lokale Backend-Konfiguration (konfigurierte Gateways) – kein Rithmic-Netzwerkzugriff.
+  useEffect(() => {
+    if (!open) return;
+    fetch(`${API_BASE}/options`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.enabled === false) {
+          setError(data.message || "Rithmic ist im Backend deaktiviert.");
+          return;
+        }
+        const list: string[] = data.options?.gateways ?? [];
+        setGateways(list);
+        setGateway((g) => (g && list.includes(g) ? g : list[0] ?? ""));
+        if (data.options && !data.options.appConfigured) setError("Rithmic:AppName ist im Backend nicht konfiguriert.");
+      })
+      .catch(() => setError("Backend nicht erreichbar."));
+  }, [open]);
 
   if (!open) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    if (!userId.trim() || !password.trim()) {
-      setError("User ID and Password are required.");
+    if (!userId.trim() || !password.trim() || !system.trim()) {
+      setError("User ID, Password und System sind erforderlich.");
+      return;
+    }
+    if (!gateway) {
+      setError("Kein Gateway konfiguriert.");
       return;
     }
     setLoading(true);
@@ -44,7 +67,7 @@ export function RithmicLoginModal({ open, onClose }: RithmicLoginModalProps) {
         body: JSON.stringify({
           userId: userId.trim(),
           password,
-          system,
+          system: system.trim(),
           gateway,
         }),
       });
@@ -52,9 +75,9 @@ export function RithmicLoginModal({ open, onClose }: RithmicLoginModalProps) {
       const result = await response.json();
 
       if (response.ok && result.success) {
+        // Passwort wird bewusst NICHT gespeichert (nur im Formular-State für den einen Request).
         setCredentials({
           userId: userId.trim(),
-          password,
           system,
           gateway,
         });
@@ -118,17 +141,17 @@ export function RithmicLoginModal({ open, onClose }: RithmicLoginModalProps) {
               <label className="text-[10px] font-mono text-[var(--fg-faint)] uppercase tracking-wider">
                 System
               </label>
-              <select
+              <input
+                list="rithmic-systems"
                 value={system}
                 onChange={(e) => setSystem(e.target.value)}
                 className="w-full bg-[var(--bg)] border border-[var(--line)] rounded-md px-3 py-2 text-sm font-mono text-[var(--fg)] focus:outline focus:outline-2 focus:outline-[var(--key)]"
-              >
-                {SYSTEMS.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
+              />
+              <datalist id="rithmic-systems">
+                {SYSTEM_SUGGESTIONS.map((s) => (
+                  <option key={s} value={s} />
                 ))}
-              </select>
+              </datalist>
             </div>
 
             <div className="space-y-1.5">
@@ -140,7 +163,8 @@ export function RithmicLoginModal({ open, onClose }: RithmicLoginModalProps) {
                 onChange={(e) => setGateway(e.target.value)}
                 className="w-full bg-[var(--bg)] border border-[var(--line)] rounded-md px-3 py-2 text-sm font-mono text-[var(--fg)] focus:outline focus:outline-2 focus:outline-[var(--key)]"
               >
-                {GATEWAYS.map((g) => (
+                {gateways.length === 0 && <option value="">– keins konfiguriert –</option>}
+                {gateways.map((g) => (
                   <option key={g} value={g}>
                     {g}
                   </option>

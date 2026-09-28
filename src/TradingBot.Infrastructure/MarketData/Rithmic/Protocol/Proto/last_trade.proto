@@ -1,0 +1,45 @@
+// Rekonstruiert aus dem Protobuf-Deskriptor von async_rithmic 1.6.6 (MIT, (c) 2024 Mickael Burguet): last_trade.proto
+syntax = "proto3";
+
+package rti;
+
+option csharp_namespace = "TradingBot.Infrastructure.MarketData.Rithmic.Protocol.Messages";
+
+message LastTrade {
+  enum PresenceBits {
+    PRESENCEBITS_UNSPECIFIED = 0;
+    LAST_TRADE = 1;
+    NET_CHANGE = 2;
+    PRECENT_CHANGE = 4;
+    VOLUME = 8;
+    VWAP = 16;
+  }
+  enum TransactionType {
+    TRANSACTIONTYPE_UNSPECIFIED = 0;
+    BUY = 1;
+    SELL = 2;
+  }
+  int32 template_id = 154467;
+  string symbol = 110100;
+  string exchange = 110101;
+  uint32 presence_bits = 149138;
+  uint32 clear_bits = 154571;
+  bool is_snapshot = 110121;
+  double trade_price = 100006;
+  int32 trade_size = 100178;
+  LastTrade.TransactionType aggressor = 112003;
+  string exchange_order_id = 149238;
+  string aggressor_exchange_order_id = 154641;
+  double net_change = 100011;
+  double percent_change = 100056;
+  uint64 volume = 100032;
+  double vwap = 101379;
+  string trade_time = 100379;
+  int32 ssboe = 150100;
+  int32 usecs = 150101;
+  int32 source_ssboe = 150400;
+  int32 source_usecs = 150401;
+  int32 source_nsecs = 150404;
+  int32 jop_ssboe = 150600;
+  int32 jop_nsecs = 150604;
+}

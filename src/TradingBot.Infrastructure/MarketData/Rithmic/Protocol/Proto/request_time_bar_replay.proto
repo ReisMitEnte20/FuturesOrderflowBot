@@ -1,0 +1,38 @@
+// Rekonstruiert aus dem Protobuf-Deskriptor von async_rithmic 1.6.6 (MIT, (c) 2024 Mickael Burguet): request_time_bar_replay.proto
+syntax = "proto3";
+
+package rti;
+
+option csharp_namespace = "TradingBot.Infrastructure.MarketData.Rithmic.Protocol.Messages";
+
+message RequestTimeBarReplay {
+  enum BarType {
+    BARTYPE_UNSPECIFIED = 0;
+    SECOND_BAR = 1;
+    MINUTE_BAR = 2;
+    DAILY_BAR = 3;
+    WEEKLY_BAR = 4;
+  }
+  enum Direction {
+    DIRECTION_UNSPECIFIED = 0;
+    FIRST = 1;
+    LAST = 2;
+  }
+  enum TimeOrder {
+    TIMEORDER_UNSPECIFIED = 0;
+    FORWARDS = 1;
+    BACKWARDS = 2;
+  }
+  int32 template_id = 154467;
+  repeated string user_msg = 132760;
+  string symbol = 110100;
+  string exchange = 110101;
+  RequestTimeBarReplay.BarType bar_type = 119200;
+  int32 bar_type_period = 119112;
+  int32 start_index = 153002;
+  int32 finish_index = 153003;
+  int32 user_max_count = 154020;
+  RequestTimeBarReplay.Direction direction = 149253;
+  RequestTimeBarReplay.TimeOrder time_order = 149307;
+  bool resume_bars = 153642;
+}

@@ -1,0 +1,12 @@
+// Rekonstruiert aus dem Protobuf-Deskriptor von async_rithmic 1.6.6 (MIT, (c) 2024 Mickael Burguet): response_market_data_update.proto
+syntax = "proto3";
+
+package rti;
+
+option csharp_namespace = "TradingBot.Infrastructure.MarketData.Rithmic.Protocol.Messages";
+
+message ResponseMarketDataUpdate {
+  int32 template_id = 154467;
+  repeated string user_msg = 132760;
+  repeated string rp_code = 132766;
+}
