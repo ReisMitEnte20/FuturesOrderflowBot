@@ -394,4 +394,29 @@ public class HoldoutEvaluationTests : IDisposable
         rec.Config.StopLossTicks.Should().Be(40);      // eingefrorene effektive Werte
         rec.Config.TakeProfitTicks.Should().Be(60);
     }
+
+    [Fact]
+    public async Task An_old_snapshot_with_missing_effective_sl_or_tp_is_rejected_without_falling_back_to_current_defaults()
+    {
+        var (svc, _) = NewService();
+        var csv = WriteCsv(260);
+        var (cid, run, trialId) = await SeedViaWalkForward(svc, csv);
+
+        // Alt-Trial simulieren: vorhandener Execution-Snapshot, aber effektive SL/TP fehlen (null) — wie vor der
+        // Einführung des effektiven Einfrierens gespeichert.
+        var trial = (await svc.Store.ListTrialsAsync(cid)).First(t => t.Id == trialId);
+        await svc.Store.UpdateTrialAsync(trial with
+        {
+            Execution = trial.Execution! with { StopLossTicks = null, TakeProfitTicks = null }
+        });
+
+        // Kein Rückfall auf heutige Instrumentdefaults → Ablehnung vor der Reservierung.
+        var resp = await svc.EvaluateHoldoutAsync(cid, EvalReq(run, trialId), new QuantJobManager());
+        resp.Ok.Should().BeFalse();
+        resp.Error.Should().Contain("CANDIDATE_SNAPSHOT_INCOMPLETE");
+
+        // Kein Verbrauch, keine Auswertung angelegt.
+        (await svc.Store.GetHoldoutEvaluationAsync(cid)).Should().BeNull();
+        (await svc.Store.GetCampaignAsync(cid))!.HoldoutConsumed.Should().BeFalse();
+    }
 }

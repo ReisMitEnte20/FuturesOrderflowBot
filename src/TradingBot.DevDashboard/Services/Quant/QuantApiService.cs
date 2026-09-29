@@ -1241,20 +1241,28 @@ public sealed class QuantApiService
                 "damit der Kandidat vollständig erfasst wird — es werden keine Angaben aus aktuellen UI-Werten ergänzt.");
 
         var exec = trial.Execution;
+        // Alt-Snapshot ohne effektive SL/TP: NICHT auf heutige Instrumentdefaults zurückfallen — das könnte die
+        // Holdout-Ausführung still verändern. Fehlt einer der gespeicherten effektiven Werte, VOR der Reservierung
+        // ablehnen (kein Verbrauch); danach werden ausschließlich die gespeicherten Werte verwendet.
+        if (exec.StopLossTicks is null || exec.TakeProfitTicks is null)
+            return Reject("CANDIDATE_SNAPSHOT_INCOMPLETE",
+                $"Trial '{trial.Id}' enthält keine effektiven SL/TP-Werte im gespeicherten Snapshot (Alt-Trial). Die Kampagne " +
+                "erneut laufen lassen, damit der Kandidat vollständig erfasst wird — es werden keine aktuellen Instrumentdefaults ergänzt.");
+
         var reqCosts = CostSnapshotFrom(ctx, request.Run);
         var deviations = new List<string>();
         if (!string.Equals(request.Run.Strategy, trial.StrategyId, StringComparison.OrdinalIgnoreCase)) deviations.Add("Strategie");
         if (!SameParameters(trial.Parameters, request.Run.Params)) deviations.Add("Parameter");
         if (request.Run.Quantity != exec.Quantity) deviations.Add("Menge");
         if (request.Run.InitialBalance != exec.InitialCapital) deviations.Add("Startkapital");
-        // SL/TP EFFEKTIV vergleichen (Profil-Default aufgelöst): Der Snapshot hält den zur Trainingszeit
-        // effektiv verwendeten Wert. Ein inzwischen geänderter Profildefault ergibt für denselben (ggf. null-)
-        // Request eine andere effektive Auflösung → Abweichung, die VOR dem Verbrauch abgelehnt wird, statt die
-        // Holdout-Ausführung still zu verändern. Ist der Snapshot bereits effektiv, ist der ??-Fallback ein No-op.
+        // SL/TP EFFEKTIV vergleichen: Der Snapshot hält die zur Trainingszeit effektiv verwendeten Werte (oben als
+        // vollständig geprüft — kein Rückfall auf heutige Defaults). Der Profil-Fallback bleibt NUR für den aktuellen
+        // Request bestehen, damit ein (ggf. null-)Request gegen den vollständigen Snapshot verglichen werden kann:
+        // ein inzwischen geänderter Profildefault ergibt eine Abweichung, die VOR dem Verbrauch abgelehnt wird.
         int reqSl = request.Run.StopLossTicks ?? ctx.Instrument.DefaultStopLossTicks;
         int reqTp = request.Run.TakeProfitTicks ?? ctx.Instrument.DefaultTakeProfitTicks;
-        int snapSl = exec.StopLossTicks ?? ctx.Instrument.DefaultStopLossTicks;
-        int snapTp = exec.TakeProfitTicks ?? ctx.Instrument.DefaultTakeProfitTicks;
+        int snapSl = exec.StopLossTicks.Value;
+        int snapTp = exec.TakeProfitTicks.Value;
         if (reqSl != snapSl) deviations.Add("Stop-Loss");
         if (reqTp != snapTp) deviations.Add("Take-Profit");
         if (request.Run.ApplyFees != exec.ApplyFees) deviations.Add("Gebühren-Flag");
