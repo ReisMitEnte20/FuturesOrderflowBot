@@ -49,6 +49,35 @@ public class HoldoutMetricsTests
     }
 
     [Fact]
+    public void Absolute_results_use_the_full_run_even_when_the_return_series_is_truncated_at_capital_below_zero()
+    {
+        // Start 100 → −10 (Kapital ≤ 0, Renditereihe bricht ab) → 50 (Erholung im weiteren Lauf).
+        // Chart/Journal enthalten den VOLLSTÄNDIGEN Lauf; die Zusammenfassung muss dieselbe Grenze nutzen:
+        // End-Equity 50, Netto −50, absoluter Drawdown 110 (100 → −10). Der Renditeabbruch wird ausgewiesen.
+        var curve = new QuantEquityCurve
+        {
+            Name = "holdout",
+            InitialCapital = 100m,
+            Frequency = ReturnFrequency.Daily,
+            StartTime = T0,                       // Anker am Startkapital, vor dem ersten Holdout-Punkt
+            Points = new[]
+            {
+                P(T0.AddDays(1), 0, -10m),
+                P(T0.AddDays(2), 1, 50m),
+            }
+        };
+
+        var (series, maxDd, netProfit, finalEquity, returnsTruncated) = HoldoutMetrics.RealizedFromHoldout(curve, 100.0);
+
+        finalEquity.Should().BeApproximately(50.0, 1e-9);     // aus dem vollständigen Lauf, nicht aus der verkürzten Reihe
+        netProfit.Should().BeApproximately(-50.0, 1e-9);      // 50 − 100
+        maxDd.Should().BeApproximately(110.0, 1e-9);          // Peak 100 → Tal −10
+        returnsTruncated.Should().BeTrue();                   // Prozentkennzahlen ausdrücklich als abgebrochen markiert
+        // Die Renditereihe endet beim ersten nicht positiven Kapitalstand (nur die erste Periode 100 → −10).
+        series.Returns.Should().HaveCount(1);
+    }
+
+    [Fact]
     public void Max_drawdown_uses_the_start_capital_as_the_first_peak()
     {
         // Ohne Startkapital-Anker bliebe der Drawdown der steigenden Reihe 90→95 bei 0 (genau der Befund).

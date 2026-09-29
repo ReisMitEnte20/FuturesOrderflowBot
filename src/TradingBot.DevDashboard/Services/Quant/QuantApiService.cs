@@ -341,13 +341,15 @@ public sealed class QuantApiService
                 Data = fingerprint,
                 Costs = costs,
                 // Geprüfte Ausführungskonfiguration dauerhaft festhalten — die finale Holdout-Auswertung bindet
-                // sich später vollständig an diesen Snapshot (keine stille Ergänzung aus UI-Werten).
+                // sich später vollständig an diesen Snapshot (keine stille Ergänzung aus UI-Werten). SL/TP werden
+                // EFFEKTIV eingefroren (Profil-Default bereits aufgelöst), nicht als nullable Request-Wert: sonst
+                // würde ein später geänderter InstrumentProfile-Default die Holdout-Ausführung unbemerkt verändern.
                 Execution = new ExecutionConfigSnapshot
                 {
                     Quantity = request.Run.Quantity,
                     InitialCapital = request.Run.InitialBalance,
-                    StopLossTicks = request.Run.StopLossTicks,
-                    TakeProfitTicks = request.Run.TakeProfitTicks,
+                    StopLossTicks = request.Run.StopLossTicks ?? ctx.Instrument.DefaultStopLossTicks,
+                    TakeProfitTicks = request.Run.TakeProfitTicks ?? ctx.Instrument.DefaultTakeProfitTicks,
                     ApplyFees = request.Run.ApplyFees,
                     TimeframeMinutes = ctx.TimeframeMinutes
                 },
@@ -1245,8 +1247,16 @@ public sealed class QuantApiService
         if (!SameParameters(trial.Parameters, request.Run.Params)) deviations.Add("Parameter");
         if (request.Run.Quantity != exec.Quantity) deviations.Add("Menge");
         if (request.Run.InitialBalance != exec.InitialCapital) deviations.Add("Startkapital");
-        if (request.Run.StopLossTicks != exec.StopLossTicks) deviations.Add("Stop-Loss");
-        if (request.Run.TakeProfitTicks != exec.TakeProfitTicks) deviations.Add("Take-Profit");
+        // SL/TP EFFEKTIV vergleichen (Profil-Default aufgelöst): Der Snapshot hält den zur Trainingszeit
+        // effektiv verwendeten Wert. Ein inzwischen geänderter Profildefault ergibt für denselben (ggf. null-)
+        // Request eine andere effektive Auflösung → Abweichung, die VOR dem Verbrauch abgelehnt wird, statt die
+        // Holdout-Ausführung still zu verändern. Ist der Snapshot bereits effektiv, ist der ??-Fallback ein No-op.
+        int reqSl = request.Run.StopLossTicks ?? ctx.Instrument.DefaultStopLossTicks;
+        int reqTp = request.Run.TakeProfitTicks ?? ctx.Instrument.DefaultTakeProfitTicks;
+        int snapSl = exec.StopLossTicks ?? ctx.Instrument.DefaultStopLossTicks;
+        int snapTp = exec.TakeProfitTicks ?? ctx.Instrument.DefaultTakeProfitTicks;
+        if (reqSl != snapSl) deviations.Add("Stop-Loss");
+        if (reqTp != snapTp) deviations.Add("Take-Profit");
         if (request.Run.ApplyFees != exec.ApplyFees) deviations.Add("Gebühren-Flag");
         if (ctx.TimeframeMinutes != exec.TimeframeMinutes) deviations.Add("Timeframe");
         if (!string.Equals(ctx.Instrument.Symbol, trial.Data.Symbol, StringComparison.OrdinalIgnoreCase)) deviations.Add("Symbol");
@@ -1268,8 +1278,9 @@ public sealed class QuantApiService
             TimeframeMinutes = exec.TimeframeMinutes,
             InitialCapital = exec.InitialCapital,
             Quantity = exec.Quantity,
-            StopLossTicks = exec.StopLossTicks,
-            TakeProfitTicks = exec.TakeProfitTicks,
+            // Effektive (aufgelöste) Werte einfrieren — der Holdout verwendet sie direkt, ohne erneuten Profil-Fallback.
+            StopLossTicks = snapSl,
+            TakeProfitTicks = snapTp,
             Costs = trial.Costs,
             DataSha = fingerprint.Sha256,
             HoldoutFrom = campaign.HoldoutFrom.Value,
@@ -1390,7 +1401,9 @@ public sealed class QuantApiService
             if (quality.Issues.Count > 0)
                 notes.Add("Datenqualität im Holdout: " + string.Join(", ", quality.Issues.Select(i => i.Code).Distinct()));
             if (truncated)
-                notes.Add("Kapital ≤ 0 im Holdout — die Reihe wurde abgebrochen; Kennzahlen gelten nur bis dahin.");
+                notes.Add("Kapital ≤ 0 im Holdout: Die Renditereihe (Prozentkennzahlen wie Sharpe/CAGR/Vola) wurde beim " +
+                          "ersten nicht positiven Kapitalstand abgebrochen und gilt nur bis dahin. Absolute Ergebniszahlen " +
+                          "(End-Equity, Netto-PnL, absoluter Drawdown), Chart und Journal beziehen sich auf den vollständigen Holdout-Lauf.");
             if (series.Count == 0)
                 notes.Add("Zu wenige Holdout-Perioden für belastbare Kennzahlen.");
 

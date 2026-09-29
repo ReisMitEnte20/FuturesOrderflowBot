@@ -38,6 +38,38 @@ public class HoldoutEvaluationTests : IDisposable
 
     private QuantApiService ServiceOn(string registry) => new(new BacktestApiService(RepoRoot()), registry);
 
+    private QuantApiService ServiceWithConfig(string registry, string configRoot) => new(new BacktestApiService(configRoot), registry);
+
+    /// <summary>
+    /// Baut eine temporäre Repo-Wurzel mit kopierten config/instruments + config/fees, wobei die MES-
+    /// Default-SL/TP frei gewählt werden. Damit lässt sich ein GEÄNDERTER Profildefault zwischen Training
+    /// und Holdout real nachstellen (nur diese beiden Zahlen unterscheiden sich).
+    /// </summary>
+    private string BuildConfigRoot(int stopLossTicks, int takeProfitTicks)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "holdout-cfg-" + Guid.NewGuid().ToString("N"));
+        _dirs.Add(root);
+        var instr = Path.Combine(root, "config", "instruments");
+        var fees = Path.Combine(root, "config", "fees");
+        Directory.CreateDirectory(instr);
+        Directory.CreateDirectory(fees);
+
+        var realInstr = Path.Combine(RepoRoot(), "config", "instruments");
+        foreach (var f in Directory.EnumerateFiles(realInstr, "*.json"))
+            File.Copy(f, Path.Combine(instr, Path.GetFileName(f)));
+        var realFees = Path.Combine(RepoRoot(), "config", "fees");
+        if (Directory.Exists(realFees))
+            foreach (var f in Directory.EnumerateFiles(realFees, "*.json"))
+                File.Copy(f, Path.Combine(fees, Path.GetFileName(f)));
+
+        var mes = Path.Combine(instr, "mes.example.json");
+        var json = File.ReadAllText(mes);
+        json = System.Text.RegularExpressions.Regex.Replace(json, "\"defaultStopLossTicks\"\\s*:\\s*\\d+", $"\"defaultStopLossTicks\": {stopLossTicks}");
+        json = System.Text.RegularExpressions.Regex.Replace(json, "\"defaultTakeProfitTicks\"\\s*:\\s*\\d+", $"\"defaultTakeProfitTicks\": {takeProfitTicks}");
+        File.WriteAllText(mes, json);
+        return root;
+    }
+
     private (QuantApiService svc, string registry) NewService()
     {
         var registry = Path.Combine(Path.GetTempPath(), "holdout-tests-" + Guid.NewGuid().ToString("N"));
@@ -321,5 +353,45 @@ public class HoldoutEvaluationTests : IDisposable
 
         (await svc.Store.ListTrialsAsync(cid)).Count.Should().Be(trialsBefore);   // kein neues (Holdout-)Trial
         (await svc.Store.GetHoldoutEvaluationAsync(cid)).Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task Snapshot_freezes_effective_sl_tp_so_a_later_profile_default_change_cannot_silently_alter_the_holdout()
+    {
+        var csv = WriteCsv(260);
+        var registry = Path.Combine(Path.GetTempPath(), "holdout-tests-" + Guid.NewGuid().ToString("N"));
+        _dirs.Add(registry);
+
+        // Training mit null-SL/TP → Profildefaults greifen (MES: SL 40, TP 60).
+        var svcTrain = ServiceWithConfig(registry, BuildConfigRoot(stopLossTicks: 40, takeProfitTicks: 60));
+        var (cid, run, trialId) = await SeedViaWalkForward(svcTrain, csv);
+
+        // Der Request selbst trägt KEIN explizites SL/TP …
+        run.StopLossTicks.Should().BeNull();
+        run.TakeProfitTicks.Should().BeNull();
+        // … aber der Snapshot hält die EFFEKTIVEN (aufgelösten) Werte, nicht null.
+        var trial = (await svcTrain.Store.ListTrialsAsync(cid)).First(t => t.Id == trialId);
+        trial.Execution.Should().NotBeNull();
+        trial.Execution!.StopLossTicks.Should().Be(40);
+        trial.Execution.TakeProfitTicks.Should().Be(60);
+
+        // Profildefault WIRD GEÄNDERT (SL 40 → 80). Derselbe null-Request löste jetzt effektiv 80 auf ≠ 40 →
+        // Ablehnung VOR dem Verbrauch, statt die Holdout-Ausführung still zu verändern.
+        var svcChanged = ServiceWithConfig(registry, BuildConfigRoot(stopLossTicks: 80, takeProfitTicks: 60));
+        var rejected = await svcChanged.EvaluateHoldoutAsync(cid, EvalReq(run, trialId), new QuantJobManager());
+        rejected.Ok.Should().BeFalse();
+        rejected.Error.Should().Contain("CANDIDATE_CONFIG_MISMATCH");
+        rejected.Error.Should().Contain("Stop-Loss");
+        (await svcChanged.Store.GetHoldoutEvaluationAsync(cid)).Should().BeNull();
+        (await svcChanged.Store.GetCampaignAsync(cid))!.HoldoutConsumed.Should().BeFalse();
+
+        // Unveränderte Profildefaults → gleiche effektive Auflösung → Lauf nutzt die gespeicherten effektiven Werte.
+        var svcSame = ServiceWithConfig(registry, BuildConfigRoot(stopLossTicks: 40, takeProfitTicks: 60));
+        var ok = await svcSame.EvaluateHoldoutAsync(cid, EvalReq(run, trialId), new QuantJobManager());
+        ok.Ok.Should().BeTrue(ok.Error);
+        var rec = await WaitTerminal(svcSame, cid, TimeSpan.FromSeconds(30));
+        rec.Status.Should().Be(HoldoutEvaluationStatus.Completed);
+        rec.Config.StopLossTicks.Should().Be(40);      // eingefrorene effektive Werte
+        rec.Config.TakeProfitTicks.Should().Be(60);
     }
 }

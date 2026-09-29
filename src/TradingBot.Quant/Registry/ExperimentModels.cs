@@ -103,7 +103,11 @@ public sealed record ExecutionConfigSnapshot
 {
     public int Quantity { get; init; }
     public decimal InitialCapital { get; init; }
+    /// <summary>EFFEKTIV verwendeter Stop-Loss in Ticks (InstrumentProfile-Default bereits aufgelöst) — NICHT
+    /// der nullable Request-Wert. So verwendet die spätere Holdout-Auswertung denselben Wert wie das Training,
+    /// auch wenn der Profildefault inzwischen geändert wurde.</summary>
     public int? StopLossTicks { get; init; }
+    /// <summary>EFFEKTIV verwendeter Take-Profit in Ticks (InstrumentProfile-Default bereits aufgelöst).</summary>
     public int? TakeProfitTicks { get; init; }
     public bool ApplyFees { get; init; } = true;
     public int TimeframeMinutes { get; init; }
