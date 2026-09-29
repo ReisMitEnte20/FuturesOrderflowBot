@@ -1,5 +1,7 @@
 using TradingBot.DevDashboard.Components;
 using TradingBot.DevDashboard.Services;
+using TradingBot.DevDashboard.Services.Quant;
+using TradingBot.Quant.Research;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -20,7 +22,12 @@ builder.Services.AddSingleton(new PaperDemoService(repoRoot)); // PAPER SIMULATI
 builder.Services.AddSingleton<ResearchDemoService>();          // RESEARCH / SIMULATION ONLY (deterministische Demo)
 builder.Services.AddSingleton<ReplayDemoService>();            // RESEARCH / SIMULATION ONLY (deterministisches Replay)
 builder.Services.AddSingleton<SierraBacktestReplayService>(); // LOCAL HISTORICAL REPLAY / SIMULATION ONLY (lokale Datei, read-only)
-builder.Services.AddSingleton(new BacktestApiService(repoRoot)); // OHLC-BACKTEST (Simulation-only, keine Execution/Broker)
+var backtestApi = new BacktestApiService(repoRoot);
+builder.Services.AddSingleton(backtestApi); // OHLC-BACKTEST (Simulation-only, keine Execution/Broker)
+// QUANT-RESEARCH (Auswertung, Validierung, Monte Carlo, Overfitting) — rechnet ausschließlich lokal
+// auf den Ergebnissen der OHLC-Engine. Keine Broker-/Marktdaten-Calls, keine Orders.
+builder.Services.AddSingleton(new QuantApiService(backtestApi, repoRoot));
+builder.Services.AddSingleton<QuantJobManager>();
 
 // JSON: Enums als Strings (z. B. ExitReason) für das React-Frontend.
 builder.Services.ConfigureHttpJsonOptions(o =>
@@ -131,6 +138,78 @@ bt.MapPost("/run", async (BacktestRunRequest request, BacktestApiService s, Canc
 {
     var result = await s.RunAsync(request, ct);
     return result.Ok ? Results.Ok(result) : Results.BadRequest(result);
+});
+
+// Quant-Research-API (Auswertung, Validierung, Monte Carlo, Overfitting, Versuchsregister).
+// Alle Berechnungen laufen im Backend; das React-Dashboard stellt ausschließlich echte Ergebnisse dar.
+// Lang laufende Verfahren werden als Job gestartet: mit Fortschritt, Abbruch und Laufzeitgrenze.
+var quant = app.MapGroup("/api/quant").RequireCors(ReactCors);
+
+quant.MapGet("/status", async (QuantApiService s, CancellationToken ct) =>
+    Results.Ok(await s.GetStatusAsync(rithmicEnabled, ct)));
+
+quant.MapGet("/benchmarks", async (QuantApiService s, CancellationToken ct) =>
+    Results.Ok(await s.ListBenchmarksAsync(ct)));
+
+// Einzelauswertung: schnell genug für einen direkten Aufruf.
+quant.MapPost("/analyze", async (QuantAnalyzeRequest request, QuantApiService s, CancellationToken ct) =>
+{
+    var result = await s.AnalyzeAsync(request, null, ct);
+    return result.Ok ? Results.Ok(result) : Results.BadRequest(result);
+});
+
+// Lang laufende Verfahren als Job.
+quant.MapPost("/jobs/walkforward", (QuantWalkForwardRequest request, QuantApiService s, QuantJobManager jobs) =>
+    Results.Ok(new { jobId = jobs.Start("walkforward", async (p, ct) => await s.WalkForwardAsync(request, p, ct)) }));
+
+quant.MapPost("/jobs/montecarlo", (QuantMonteCarloRequest request, QuantApiService s, QuantJobManager jobs) =>
+    Results.Ok(new { jobId = jobs.Start("montecarlo", async (p, ct) => await s.MonteCarloAsync(request, p, ct)) }));
+
+quant.MapPost("/jobs/robustness", (QuantRobustnessRequest request, QuantApiService s, QuantJobManager jobs) =>
+    Results.Ok(new { jobId = jobs.Start("robustness", async (p, ct) => await s.RobustnessAsync(request, p, ct)) }));
+
+quant.MapPost("/jobs/overfitting", (QuantOverfittingRequest request, QuantApiService s, QuantJobManager jobs) =>
+    Results.Ok(new { jobId = jobs.Start("overfitting", async (p, ct) => await s.OverfittingAsync(request, p, ct)) }));
+
+quant.MapGet("/jobs", (QuantJobManager jobs) => Results.Ok(jobs.List()));
+quant.MapGet("/jobs/{id}", (string id, QuantJobManager jobs) =>
+    jobs.Get(id) is { } state ? Results.Ok(state) : Results.NotFound(new { error = $"Job '{id}' unbekannt." }));
+quant.MapPost("/jobs/{id}/cancel", (string id, QuantJobManager jobs) =>
+    Results.Ok(new { cancelled = jobs.Cancel(id) }));
+
+// Versuchsregister (vollständig, inklusive negativer und verworfener Versuche).
+quant.MapGet("/campaigns", async (QuantApiService s, CancellationToken ct) => Results.Ok(await s.ListCampaignsAsync(ct)));
+quant.MapGet("/trials", async (string? campaignId, QuantApiService s, CancellationToken ct) =>
+    Results.Ok(await s.ListTrialsAsync(campaignId, ct)));
+quant.MapGet("/trials/{id}", async (string id, QuantApiService s, CancellationToken ct) =>
+    await s.GetTrialAsync(id, ct) is { } t ? Results.Ok(t) : Results.NotFound(new { error = $"Versuch '{id}' unbekannt." }));
+
+// Finaler Holdout — einmalige, eingefrorene, dauerhaft gespeicherte Auswertung eines bereits
+// ausgewählten Kandidaten. Status/Ergebnis überleben einen Neustart; ein zweiter/paralleler Start
+// erzeugt keinen weiteren Lauf.
+quant.MapGet("/campaigns/{id}/holdout", async (string id, QuantApiService s, CancellationToken ct) =>
+    Results.Ok(await s.GetHoldoutAsync(id, ct)));
+quant.MapPost("/campaigns/{id}/holdout/evaluate", async (string id, HoldoutEvaluateRequest body, QuantApiService s, QuantJobManager jobs, CancellationToken ct) =>
+{
+    var res = await s.EvaluateHoldoutAsync(id, body, jobs, ct);
+    return res.Ok ? Results.Ok(res) : Results.BadRequest(res);
+});
+// Der frühere reine Verbrauch-Endpunkt ist deaktiviert: kein zweiter, widersprüchlicher Verbrauchspfad
+// ohne gespeicherte Auswertung. Der Holdout wird ausschließlich über /holdout/evaluate verbraucht.
+quant.MapPost("/campaigns/{id}/holdout/consume", (string id) =>
+    Results.BadRequest(new QuantHoldoutConsumeResponse
+    {
+        Ok = false, CampaignId = id,
+        Error = "Register [HOLDOUT_CONSUME_DISABLED]: Der finale Holdout wird ausschließlich über " +
+                "POST /api/quant/campaigns/{id}/holdout/evaluate ausgewertet und dabei einmalig verbraucht."
+    }));
+
+// Paper-Research-Einträge (Quelle, Hypothese, Regeln, dokumentierte Abweichungen).
+quant.MapGet("/papers", async (QuantApiService s, CancellationToken ct) => Results.Ok(await s.ListPapersAsync(ct)));
+quant.MapPost("/papers", async (PaperResearchEntry entry, QuantApiService s, CancellationToken ct) =>
+{
+    try { return Results.Ok(await s.SavePaperAsync(entry, ct)); }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
 });
 
 app.Run();

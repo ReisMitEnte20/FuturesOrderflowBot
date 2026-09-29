@@ -272,6 +272,64 @@ public sealed class BacktestApiService
         return baseFee;
     }
 
+    /// <summary>
+    /// Alles, was für einen Engine-Lauf nötig ist — einmal geladen, mehrfach verwendbar.
+    /// Die Quant-Auswertung führt viele Läufe auf DENSELBEN Daten aus; ohne diesen Kontext würde
+    /// die große Sierra-Datei je Lauf erneut gelesen.
+    /// </summary>
+    public sealed record RunContext(
+        IReadOnlyList<Candle> Candles,
+        InstrumentProfile Instrument,
+        FeeProfile Fee,
+        bool LeadingPartial,
+        bool TrailingPartial,
+        string Source,
+        int TimeframeMinutes,
+        IReadOnlyList<OhlcImportIssue> Issues,
+        bool InstrumentIsExample,
+        bool FeeIsExample);
+
+    /// <summary>Lädt Kerzen, Instrument- und Kostenprofil für wiederholte Läufe.</summary>
+    public async Task<RunContext> LoadContextAsync(BacktestRunRequest req, CancellationToken ct = default)
+    {
+        var instrument = (await _instruments.GetAllAsync(ct)).FirstOrDefault(i =>
+                             string.Equals(i.Symbol, req.Symbol, StringComparison.OrdinalIgnoreCase))
+                         ?? throw new InvalidOperationException($"Kein InstrumentProfile für '{req.Symbol}' in config/instruments.");
+        var fee = await ResolveFeeAsync(req, ct);
+        var (candles, lead, trail, issues, source, tf) = LoadCandles(req, instrument.Symbol);
+        return new RunContext(candles, instrument, fee, lead, trail, source, tf, issues,
+            OnlyExampleProfiles(_instrumentsDir), req.FeePerSideOverride is null && OnlyExampleProfiles(_feesDir));
+    }
+
+    /// <summary>Führt die OHLC-Engine auf einem bereits geladenen Kontext aus (optional auf einem Teilbereich).</summary>
+    public OhlcBacktestResult RunEngine(RunContext ctx, IStrategy strategy, OhlcBacktestConfig config,
+        FeeProfile? feeOverride = null, IReadOnlyList<Candle>? candlesOverride = null)
+    {
+        var candles = candlesOverride ?? ctx.Candles;
+        bool lead, trail;
+        if (candlesOverride is null)
+        {
+            lead = ctx.LeadingPartial;
+            trail = ctx.TrailingPartial;
+        }
+        else
+        {
+            // Teilkerzen-Flags beschreiben ausschließlich die ECHTEN Ränder des Gesamtdatensatzes.
+            // Ein innenliegender Ausschnitt (Walk-forward-Fenster o. Ä.) hat vollständige Randkerzen;
+            // die globalen Flags gelten nur, wenn der Ausschnitt exakt am Anfang bzw. Ende des
+            // Gesamtdatensatzes anliegt. Sonst würden vollständige Innenkerzen fälschlich entfernt.
+            lead = ctx.LeadingPartial && candles.Count > 0 && ctx.Candles.Count > 0
+                   && candles[0].OpenTime == ctx.Candles[0].OpenTime;
+            trail = ctx.TrailingPartial && candles.Count > 0 && ctx.Candles.Count > 0
+                    && candles[^1].CloseTime == ctx.Candles[^1].CloseTime;
+        }
+        return _engine.Run(candles, strategy, ctx.Instrument, feeOverride ?? ctx.Fee, config,
+            ctx.Source, ctx.TimeframeMinutes, lead, trail);
+    }
+
+    /// <summary>Baut eine initialisierte Strategie-Instanz (öffentlich für die Quant-Auswertung).</summary>
+    public IStrategy CreateStrategy(BacktestRunRequest req, InstrumentProfile instrument) => BuildStrategy(req, instrument);
+
     private IStrategy BuildStrategy(BacktestRunRequest req, InstrumentProfile instrument)
     {
         var strategy = req.Strategy.ToLowerInvariant() switch

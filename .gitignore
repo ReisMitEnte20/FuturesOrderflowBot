@@ -39,3 +39,9 @@ samples/atas/raw/*.csv
 
 # Versehentlich vom Kollegen committetes .NET SDK (nicht ins Repo)
 .dotnet/
+
+# Quant-Research-Artefakte (Versuchsregister, Paper-Einträge) - lokal, nicht versionieren
+artifacts/
+
+# Lokale Benchmark-Rohdaten (vom Nutzer bereitgestellt, keine Marktdaten ins Repo)
+data/benchmarks/*.csv
