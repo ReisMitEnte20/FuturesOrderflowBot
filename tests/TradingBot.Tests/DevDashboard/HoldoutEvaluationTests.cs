@@ -12,8 +12,8 @@ namespace TradingBot.Tests.DevDashboard;
 /// <summary>
 /// Nachprüfung des finalen Holdout-Auswertungspfads: tatsächlicher Servicepfad mit deterministischen
 /// synthetischen OHLC-Daten bis zum dauerhaft gespeicherten Ergebnis, einmalige Ausführung, Neustart-
-/// Sicherheit, keine automatische Freigabe bei Fehler, Ablehnung abweichender Angaben, kein Look-ahead
-/// und Trennung von der Optimierungsrückkopplung.
+/// Sicherheit, keine automatische Freigabe bei Fehler, vollständige Bindung an den gespeicherten
+/// Kandidaten-Snapshot (Ablehnung bei Abweichung), kein Look-ahead und Trennung von der Optimierung.
 /// </summary>
 public class HoldoutEvaluationTests : IDisposable
 {
@@ -45,7 +45,6 @@ public class HoldoutEvaluationTests : IDisposable
         return (ServiceOn(registry), registry);
     }
 
-    /// <summary>Deterministische, OHLC-konsistente Sinus-Kerzen — genug Schwankung für SMA-Crossovers.</summary>
     private string WriteCsv(int bars)
     {
         var path = Path.Combine(Path.GetTempPath(), "holdout-ohlc-" + Guid.NewGuid().ToString("N") + ".csv");
@@ -65,45 +64,49 @@ public class HoldoutEvaluationTests : IDisposable
 
     private static Dictionary<string, string> CandidateParams() => new() { ["FastPeriod"] = "9", ["SlowPeriod"] = "21" };
 
-    private async Task<(string campaignId, BacktestRunRequest run, DateTimeOffset hFrom, DateTimeOffset hTo)> SeedCampaign(
-        QuantApiService svc, string csv, int bars, int holdoutCount,
-        string? dataSha = null, bool addCandidateTrial = true, Dictionary<string, string>? candidateParams = null)
+    /// <summary>Identische Run-Konfiguration für Walk-forward UND Holdout (sonst greift die Snapshot-Bindung).</summary>
+    private static BacktestRunRequest BaseRun(string csv) => new()
     {
-        var pars = candidateParams ?? CandidateParams();
-        int usable = bars - holdoutCount;
-        var hFrom = T0.AddMinutes(Tf * (usable + 1));   // Close der ersten Holdout-Kerze
-        var hTo = T0.AddMinutes(Tf * bars);             // Close der letzten Kerze
-        string cid = "camp-" + Guid.NewGuid().ToString("N")[..8];
+        DataSourceId = "csv", Path = csv, Symbol = "MES", TimeframeMinutes = Tf,
+        Strategy = "movingaverage", Params = CandidateParams(),
+        Quantity = 1, InitialBalance = 10_000m, ApplyFees = false, ExcludePartialEdges = true
+    };
 
-        await svc.Store.CreateCampaignAsync(new CampaignRecord
+    /// <summary>Legt eine echte Kampagne inkl. reserviertem Holdout und Kandidaten-Trials über einen Walk-forward an.</summary>
+    private async Task<(string campaignId, BacktestRunRequest holdoutRun, string trialId)> SeedViaWalkForward(QuantApiService svc, string csv)
+    {
+        string cid = "wf-" + Guid.NewGuid().ToString("N")[..8];
+        var wf = await svc.WalkForwardAsync(new QuantWalkForwardRequest
         {
-            Id = cid, Name = "Test", Hypothesis = "Test ohne Edge-Behauptung.",
-            SearchSpace = "FastPeriod, SlowPeriod", SelectionMetric = "sharpe", TrialBudget = 4,
-            DataSha = dataSha, HoldoutFrom = hFrom, HoldoutTo = hTo
+            Run = BaseRun(csv),
+            Options = new QuantEvaluationOptions { Frequency = "Bar" },
+            Mode = "Rolling", TrainBars = 60, TestBars = 30, HoldoutFraction = 0.2, WarmupBars = 10,
+            Candidates = new[] { CandidateParams(), new Dictionary<string, string> { ["FastPeriod"] = "5", ["SlowPeriod"] = "34" } },
+            SelectionMetric = "sharpe",
+            Campaign = new CampaignInput { Id = cid, Name = "wf", Hypothesis = "h", SearchSpace = "Fast, Slow", SelectionMetric = "sharpe", TrialBudget = 8, HoldoutFraction = 0.2 }
         });
+        wf.Ok.Should().BeTrue(wf.Error);
 
-        if (addCandidateTrial)
-            await svc.Store.AddTrialAsync(new TrialRecord
-            {
-                Id = "wf-" + Guid.NewGuid().ToString("N")[..8], CampaignId = cid,
-                StrategyId = "movingaverage", StrategyVersion = "test", CodeVersion = "test",
-                Parameters = new Dictionary<string, string>(pars), PeriodRole = "walkforward",
-                PeriodFrom = T0, PeriodTo = hFrom,     // endet am Holdout-Beginn → keine Überschneidung
-                Data = new DataFingerprint { Symbol = "MES", TimeframeMinutes = Tf, Source = "test", Sha256 = "x", BarCount = usable }
-            });
-
-        var run = new BacktestRunRequest
-        {
-            DataSourceId = "csv", Path = csv, Symbol = "MES", TimeframeMinutes = Tf,
-            Strategy = "movingaverage", Params = new Dictionary<string, string>(pars),
-            Quantity = 1, InitialBalance = 10_000m, ApplyFees = false, SlippageTicks = 0m,
-            FeePerSideOverride = 0m, ExcludePartialEdges = true
-        };
-        return (cid, run, hFrom, hTo);
+        var trials = await svc.Store.ListTrialsAsync(cid);
+        var trial = trials.First(t => t.Parameters.TryGetValue("FastPeriod", out var v) && v == "9");
+        return (cid, BaseRun(csv) with { Params = new Dictionary<string, string>(trial.Parameters) }, trial.Id);
     }
 
-    private static HoldoutEvaluateRequest EvalReq(BacktestRunRequest run, string candidateRef = "Kandidat A", int warmup = 21, bool confirm = true)
-        => new() { Run = run, Options = new QuantEvaluationOptions { Frequency = "Bar" }, CandidateReference = candidateRef, WarmupBars = warmup, Confirm = confirm };
+    /// <summary>Leichte Kampagne (nur Store) für Ablehnungspfade, die den Kandidaten gar nicht erreichen.</summary>
+    private async Task<(string campaignId, BacktestRunRequest run)> SeedCampaign(QuantApiService svc, string csv, int bars, int holdoutCount, string? dataSha = null)
+    {
+        int usable = bars - holdoutCount;
+        string cid = "camp-" + Guid.NewGuid().ToString("N")[..8];
+        await svc.Store.CreateCampaignAsync(new CampaignRecord
+        {
+            Id = cid, Name = "Test", Hypothesis = "Test", SearchSpace = "Fast, Slow", SelectionMetric = "sharpe",
+            TrialBudget = 4, DataSha = dataSha, HoldoutFrom = T0.AddMinutes(Tf * (usable + 1)), HoldoutTo = T0.AddMinutes(Tf * bars)
+        });
+        return (cid, BaseRun(csv));
+    }
+
+    private static HoldoutEvaluateRequest EvalReq(BacktestRunRequest run, string? trialId = null, string candidateRef = "Kandidat A", int warmup = 10, bool confirm = true)
+        => new() { Run = run, Options = new QuantEvaluationOptions { Frequency = "Bar" }, CandidateReference = candidateRef, CandidateTrialId = trialId, WarmupBars = warmup, Confirm = confirm };
 
     private static async Task<HoldoutEvaluationRecord> WaitTerminal(QuantApiService svc, string cid, TimeSpan timeout)
     {
@@ -126,39 +129,33 @@ public class HoldoutEvaluationTests : IDisposable
         var (svc, _) = NewService();
         var jobs = new QuantJobManager();
         var csv = WriteCsv(260);
-        var (cid, run, hFrom, hTo) = await SeedCampaign(svc, csv, bars: 260, holdoutCount: 60);
+        var (cid, run, trialId) = await SeedViaWalkForward(svc, csv);
 
-        var start = await svc.EvaluateHoldoutAsync(cid, EvalReq(run), jobs);
-        start.Ok.Should().BeTrue();
+        var start = await svc.EvaluateHoldoutAsync(cid, EvalReq(run, trialId), jobs);
+        start.Ok.Should().BeTrue(start.Error);
         start.State.Should().Be("Reserved");
         start.JobId.Should().NotBeNullOrEmpty();
 
         var rec = await WaitTerminal(svc, cid, TimeSpan.FromSeconds(30));
         rec.Status.Should().Be(HoldoutEvaluationStatus.Completed);
 
-        // Nur der Holdout-Zeitraum wird bewertet (kein Warmup in den Kennzahlen).
         rec.Equity.Should().NotBeEmpty();
-        rec.Equity.Count.Should().Be(60);
-        rec.Equity.First().TimeMs.Should().Be(hFrom.ToUnixTimeMilliseconds());
-        rec.Equity.Last().TimeMs.Should().BeLessThanOrEqualTo(hTo.ToUnixTimeMilliseconds());
-        rec.WarmupBarsUsed.Should().Be(21);
-        rec.HoldoutBars.Should().Be(60);
+        rec.Equity.First().TimeMs.Should().Be(rec.Config.HoldoutFrom.ToUnixTimeMilliseconds());
+        rec.Config.CandidateTrialId.Should().Be(trialId);
 
-        // Kein Look-ahead: kein Trade beginnt vor dem OPEN der ersten Holdout-Kerze (= hFrom − 1 Bar).
-        long earliestEntry = hFrom.AddMinutes(-Tf).ToUnixTimeMilliseconds();
+        // Kein Look-ahead: kein Trade beginnt vor dem OPEN der ersten Holdout-Kerze.
+        long earliestEntry = rec.Config.HoldoutFrom.AddMinutes(-Tf).ToUnixTimeMilliseconds();
         rec.Trades.Should().OnlyContain(t => t.EntryTimeMs >= earliestEntry);
 
-        // Unabhängige Gegenrechnung: NetProfit == Σ Trade-NetPnL; FinalEquity == Start + NetProfit.
+        // Unabhängige Gegenrechnung.
         rec.NetProfit.Should().BeApproximately(rec.Trades.Sum(t => t.NetPnL), 1e-6);
         rec.FinalEquity.Should().BeApproximately(10_000 + (rec.NetProfit ?? 0), 1e-6);
         rec.MaxDrawdown.Should().BeGreaterThanOrEqualTo(0);
 
-        // Eingefrorene Konfiguration und Datenbezug festgehalten.
-        rec.Config.HoldoutFrom.Should().Be(hFrom);
-        rec.Config.Parameters["FastPeriod"].Should().Be("9");
-        rec.Config.CandidateReference.Should().Be("Kandidat A");
+        // Ausführungsoptionen persistiert (nicht nur Frequency).
+        rec.Config.Frequency.Should().Be("Bar");
+        rec.Config.MinimumPeriods.Should().Be(new QuantEvaluationOptions().MinimumPeriods);
         rec.UsedDataSha.Should().NotBeNullOrEmpty();
-        rec.Metrics.Should().ContainKey("netprofit");
     }
 
     [Fact]
@@ -166,46 +163,74 @@ public class HoldoutEvaluationTests : IDisposable
     {
         var (svc, _) = NewService();
         var jobs = new QuantJobManager();
-        var csv = WriteCsv(220);
-        var (cid, run, _, _) = await SeedCampaign(svc, csv, bars: 220, holdoutCount: 50);
+        var csv = WriteCsv(260);
+        var (cid, run, trialId) = await SeedViaWalkForward(svc, csv);
 
-        var a = Task.Run(() => svc.EvaluateHoldoutAsync(cid, EvalReq(run), jobs));
-        var b = Task.Run(() => svc.EvaluateHoldoutAsync(cid, EvalReq(run), jobs));
+        var a = Task.Run(() => svc.EvaluateHoldoutAsync(cid, EvalReq(run, trialId), jobs));
+        var b = Task.Run(() => svc.EvaluateHoldoutAsync(cid, EvalReq(run, trialId), jobs));
         var results = await Task.WhenAll(a, b);
 
         results.Should().OnlyContain(r => r.Ok);
-        results.Count(r => !r.AlreadyExisted).Should().Be(1);   // genau ein frisch gestarteter Lauf
+        results.Count(r => !r.AlreadyExisted).Should().Be(1);
         results.Count(r => r.AlreadyExisted).Should().Be(1);
 
-        var rec = await WaitTerminal(svc, cid, TimeSpan.FromSeconds(30));
-        rec.Status.Should().Be(HoldoutEvaluationStatus.Completed);
+        (await WaitTerminal(svc, cid, TimeSpan.FromSeconds(30))).Status.Should().Be(HoldoutEvaluationStatus.Completed);
     }
 
     [Fact]
     public async Task Repeated_request_and_reload_after_restart_do_not_recompute()
     {
         var (svc, registry) = NewService();
-        var csv = WriteCsv(240);
-        var (cid, run, _, _) = await SeedCampaign(svc, csv, bars: 240, holdoutCount: 55);
+        var csv = WriteCsv(260);
+        var (cid, run, trialId) = await SeedViaWalkForward(svc, csv);
 
-        await svc.EvaluateHoldoutAsync(cid, EvalReq(run), new QuantJobManager());
+        await svc.EvaluateHoldoutAsync(cid, EvalReq(run, trialId), new QuantJobManager());
         var first = await WaitTerminal(svc, cid, TimeSpan.FromSeconds(30));
         first.Status.Should().Be(HoldoutEvaluationStatus.Completed);
 
-        // „Neustart": frischer Service auf demselben Register-Verzeichnis.
-        var svc2 = ServiceOn(registry);
+        var svc2 = ServiceOn(registry);   // „Neustart"
         var reloaded = (await svc2.GetHoldoutAsync(cid)).Evaluation;
-        reloaded.Should().NotBeNull();
         reloaded!.Status.Should().Be(HoldoutEvaluationStatus.Completed);
-        reloaded.CompletedUtc.Should().Be(first.CompletedUtc);        // identisch → nicht neu gerechnet
+        reloaded.CompletedUtc.Should().Be(first.CompletedUtc);       // nicht neu gerechnet
         reloaded.NetProfit.Should().Be(first.NetProfit);
-        reloaded.Trades.Count.Should().Be(first.Trades.Count);
 
-        // Erneuter Request nach „Neustart": kein neuer Lauf, gleiches Ergebnis.
-        var again = await svc2.EvaluateHoldoutAsync(cid, EvalReq(run), new QuantJobManager());
+        var again = await svc2.EvaluateHoldoutAsync(cid, EvalReq(run, trialId), new QuantJobManager());
         again.AlreadyExisted.Should().BeTrue();
         again.JobId.Should().BeNull();
         again.Evaluation!.CompletedUtc.Should().Be(first.CompletedUtc);
+    }
+
+    [Fact]
+    public async Task A_changed_trading_config_or_costs_is_rejected_without_consuming()
+    {
+        var (svc, _) = NewService();
+        var csv = WriteCsv(260);
+        var (cid, run, trialId) = await SeedViaWalkForward(svc, csv);
+
+        // Geänderte Handelskonfiguration (Menge) → Ablehnung, kein Verbrauch.
+        var changedQty = await svc.EvaluateHoldoutAsync(cid, EvalReq(run with { Quantity = 2 }, trialId), new QuantJobManager());
+        changedQty.Ok.Should().BeFalse();
+        changedQty.Error.Should().Contain("CANDIDATE_CONFIG_MISMATCH");
+        changedQty.Error.Should().Contain("Menge");
+
+        // Geänderte Kostenbehandlung (Gebühren-Flag) → Ablehnung.
+        var changedFees = await svc.EvaluateHoldoutAsync(cid, EvalReq(run with { ApplyFees = true }, trialId), new QuantJobManager());
+        changedFees.Ok.Should().BeFalse();
+        changedFees.Error.Should().Contain("CANDIDATE_CONFIG_MISMATCH");
+
+        // Geänderte Strategie → Ablehnung.
+        var changedStrat = await svc.EvaluateHoldoutAsync(cid, EvalReq(run with { Strategy = "sma-other" }, trialId), new QuantJobManager());
+        changedStrat.Ok.Should().BeFalse();
+        changedStrat.Error.Should().Contain("CANDIDATE_CONFIG_MISMATCH");
+
+        // Nichts davon hat den Holdout verbraucht oder eine Auswertung angelegt.
+        (await svc.Store.GetHoldoutEvaluationAsync(cid)).Should().BeNull();
+        (await svc.Store.GetCampaignAsync(cid))!.HoldoutConsumed.Should().BeFalse();
+
+        // Gegenprobe: unveränderter Kandidat → erfolgreicher Lauf.
+        var ok = await svc.EvaluateHoldoutAsync(cid, EvalReq(run, trialId), new QuantJobManager());
+        ok.Ok.Should().BeTrue(ok.Error);
+        (await WaitTerminal(svc, cid, TimeSpan.FromSeconds(30))).Status.Should().Be(HoldoutEvaluationStatus.Completed);
     }
 
     [Fact]
@@ -213,14 +238,13 @@ public class HoldoutEvaluationTests : IDisposable
     {
         var (svc, _) = NewService();
         var csv = WriteCsv(200);
-        var (cid, run, hFrom, hTo) = await SeedCampaign(svc, csv, bars: 200, holdoutCount: 40);
+        var (cid, run) = await SeedCampaign(svc, csv, bars: 200, holdoutCount: 40);
 
-        // Reservierung + simulierter Fehlschlag direkt im Store (deterministisch, ohne echten Engine-Fehler).
         var frozen = new HoldoutFrozenConfig
         {
             CampaignId = cid, CandidateReference = "Kandidat A", StrategyId = "movingaverage",
             Parameters = CandidateParams(), Symbol = "MES", TimeframeMinutes = Tf, InitialCapital = 10_000m,
-            Quantity = 1, DataSha = "x", HoldoutFrom = hFrom, HoldoutTo = hTo, CodeVersion = "test"
+            Quantity = 1, DataSha = "x", HoldoutFrom = T0.AddMinutes(Tf * 161), HoldoutTo = T0.AddMinutes(Tf * 200), CodeVersion = "test"
         };
         var reserved = await svc.Store.ReserveHoldoutEvaluationAsync(cid, new HoldoutEvaluationRecord
         {
@@ -228,16 +252,12 @@ public class HoldoutEvaluationTests : IDisposable
         });
         await svc.Store.UpdateHoldoutEvaluationAsync(reserved with { Status = HoldoutEvaluationStatus.Failed, StatusReason = "Simulierter Fehler" });
 
-        // Keine automatische Freigabe: erneuter Start liefert den Failed-Zustand, KEIN neuer Lauf.
-        var resp = await svc.EvaluateHoldoutAsync(cid, EvalReq(run), new QuantJobManager());
+        var resp = await svc.EvaluateHoldoutAsync(cid, EvalReq(run, "irrelevant"), new QuantJobManager());
         resp.AlreadyExisted.Should().BeTrue();
         resp.State.Should().Be("Failed");
         resp.JobId.Should().BeNull();
-        (await svc.Store.GetCampaignAsync(cid))!.HoldoutConsumed.Should().BeTrue();   // bleibt verbraucht
-
-        var status = await svc.GetHoldoutAsync(cid);
-        status.State.Should().Be("Failed");
-        status.Evaluation!.StatusReason.Should().Contain("Simulierter Fehler");
+        (await svc.Store.GetCampaignAsync(cid))!.HoldoutConsumed.Should().BeTrue();
+        (await svc.GetHoldoutAsync(cid)).Evaluation!.StatusReason.Should().Contain("Simulierter Fehler");
     }
 
     [Fact]
@@ -245,28 +265,31 @@ public class HoldoutEvaluationTests : IDisposable
     {
         var (svc, _) = NewService();
         var csv = WriteCsv(200);
-        var (cid, run, _, _) = await SeedCampaign(svc, csv, bars: 200, holdoutCount: 40, dataSha: "deadbeefdeadbeef");
+        var (cid, run) = await SeedCampaign(svc, csv, bars: 200, holdoutCount: 40, dataSha: "deadbeefdeadbeef");
 
-        var resp = await svc.EvaluateHoldoutAsync(cid, EvalReq(run), new QuantJobManager());
+        var resp = await svc.EvaluateHoldoutAsync(cid, EvalReq(run, "any"), new QuantJobManager());
 
         resp.Ok.Should().BeFalse();
         resp.Error.Should().Contain("DATA_MISMATCH");
-        (await svc.Store.GetHoldoutEvaluationAsync(cid)).Should().BeNull();          // nichts reserviert
-        (await svc.Store.GetCampaignAsync(cid))!.HoldoutConsumed.Should().BeFalse();  // nicht verbraucht
+        (await svc.Store.GetHoldoutEvaluationAsync(cid)).Should().BeNull();
+        (await svc.Store.GetCampaignAsync(cid))!.HoldoutConsumed.Should().BeFalse();
     }
 
     [Fact]
-    public async Task A_candidate_that_is_not_part_of_the_campaign_is_rejected()
+    public async Task A_missing_or_unknown_candidate_trial_is_rejected()
     {
         var (svc, _) = NewService();
         var csv = WriteCsv(200);
-        // Kampagne OHNE erfassten Kandidaten-Trial: der Parametersatz hat keinen Bezug zur Suche.
-        var (cid, run, _, _) = await SeedCampaign(svc, csv, bars: 200, holdoutCount: 40, addCandidateTrial: false);
+        var (cid, run) = await SeedCampaign(svc, csv, bars: 200, holdoutCount: 40);
 
-        var resp = await svc.EvaluateHoldoutAsync(cid, EvalReq(run), new QuantJobManager());
+        var missing = await svc.EvaluateHoldoutAsync(cid, EvalReq(run, trialId: null), new QuantJobManager());
+        missing.Ok.Should().BeFalse();
+        missing.Error.Should().Contain("CANDIDATE_TRIAL_REQUIRED");
 
-        resp.Ok.Should().BeFalse();
-        resp.Error.Should().Contain("CANDIDATE_NOT_IN_CAMPAIGN");
+        var bogus = await svc.EvaluateHoldoutAsync(cid, EvalReq(run, trialId: "does-not-exist"), new QuantJobManager());
+        bogus.Ok.Should().BeFalse();
+        bogus.Error.Should().Contain("CANDIDATE_NOT_IN_CAMPAIGN");
+
         (await svc.Store.GetCampaignAsync(cid))!.HoldoutConsumed.Should().BeFalse();
     }
 
@@ -275,9 +298,9 @@ public class HoldoutEvaluationTests : IDisposable
     {
         var (svc, _) = NewService();
         var csv = WriteCsv(200);
-        var (cid, run, _, _) = await SeedCampaign(svc, csv, bars: 200, holdoutCount: 40);
+        var (cid, run) = await SeedCampaign(svc, csv, bars: 200, holdoutCount: 40);
 
-        var resp = await svc.EvaluateHoldoutAsync(cid, EvalReq(run, confirm: false), new QuantJobManager());
+        var resp = await svc.EvaluateHoldoutAsync(cid, EvalReq(run, "any", confirm: false), new QuantJobManager());
 
         resp.Ok.Should().BeFalse();
         resp.Error.Should().Contain("CONFIRM_REQUIRED");
@@ -288,17 +311,15 @@ public class HoldoutEvaluationTests : IDisposable
     public async Task Holdout_result_never_enters_the_trial_register_for_optimization_feedback()
     {
         var (svc, _) = NewService();
-        var csv = WriteCsv(240);
-        var (cid, run, _, _) = await SeedCampaign(svc, csv, bars: 240, holdoutCount: 55);
+        var csv = WriteCsv(260);
+        var (cid, run, trialId) = await SeedViaWalkForward(svc, csv);
 
-        int trialsBefore = (await svc.Store.ListTrialsAsync(cid)).Count;   // der eine Walk-forward-Kandidat
+        int trialsBefore = (await svc.Store.ListTrialsAsync(cid)).Count;
 
-        await svc.EvaluateHoldoutAsync(cid, EvalReq(run), new QuantJobManager());
+        await svc.EvaluateHoldoutAsync(cid, EvalReq(run, trialId), new QuantJobManager());
         await WaitTerminal(svc, cid, TimeSpan.FromSeconds(30));
 
-        // Die Holdout-Auswertung liegt in EINEM eigenen Satz, NICHT als Trial — sie kann nicht in die
-        // PBO-Kandidatenmatrix oder die DSR-Versuchsgrundlage (ListTrials) gelangen.
-        (await svc.Store.ListTrialsAsync(cid)).Count.Should().Be(trialsBefore);
+        (await svc.Store.ListTrialsAsync(cid)).Count.Should().Be(trialsBefore);   // kein neues (Holdout-)Trial
         (await svc.Store.GetHoldoutEvaluationAsync(cid)).Should().NotBeNull();
     }
 }

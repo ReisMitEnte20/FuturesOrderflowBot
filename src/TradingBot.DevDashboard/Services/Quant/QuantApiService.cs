@@ -340,6 +340,17 @@ public sealed class QuantApiService
                 Parameters = c.Parameters,
                 Data = fingerprint,
                 Costs = costs,
+                // Geprüfte Ausführungskonfiguration dauerhaft festhalten — die finale Holdout-Auswertung bindet
+                // sich später vollständig an diesen Snapshot (keine stille Ergänzung aus UI-Werten).
+                Execution = new ExecutionConfigSnapshot
+                {
+                    Quantity = request.Run.Quantity,
+                    InitialCapital = request.Run.InitialBalance,
+                    StopLossTicks = request.Run.StopLossTicks,
+                    TakeProfitTicks = request.Run.TakeProfitTicks,
+                    ApplyFees = request.Run.ApplyFees,
+                    TimeframeMinutes = ctx.TimeframeMinutes
+                },
                 CodeVersion = code,
                 Seed = 0,
                 PeriodFrom = ctx.Candles[0].OpenTime,
@@ -1210,41 +1221,66 @@ public sealed class QuantApiService
         if (holdoutStart < 0 || holdoutEnd < holdoutStart)
             return Reject("HOLDOUT_WINDOW_NOT_FOUND", "Der reservierte Holdout-Zeitraum liegt nicht in den geladenen Daten.");
 
-        // Der Kandidat muss zur Kampagne gehören (keine Auswahl anhand von Holdout-Ergebnissen).
-        var campaignTrials = await _store.ListTrialsAsync(campaignId, ct);
-        if (!string.IsNullOrWhiteSpace(request.CandidateTrialId))
-        {
-            var trial = campaignTrials.FirstOrDefault(t => string.Equals(t.Id, request.CandidateTrialId, StringComparison.Ordinal));
-            if (trial is null)
-                return Reject("CANDIDATE_NOT_IN_CAMPAIGN", $"Trial '{request.CandidateTrialId}' gehört nicht zur Kampagne '{campaignId}'.");
-            if (!SameParameters(trial.Parameters, request.Run.Params))
-                return Reject("CANDIDATE_CONFIG_MISMATCH", "Die Parameter weichen vom referenzierten Kampagnen-Trial ab.");
-        }
-        else if (!campaignTrials.Any(t => SameParameters(t.Parameters, request.Run.Params)))
-        {
-            return Reject("CANDIDATE_NOT_IN_CAMPAIGN",
-                "Der Kandidat (Parametersatz) wurde in dieser Kampagne nicht erfasst — kein nachweisbarer Bezug zur Suche.");
-        }
+        // Vollständige Bindung an einen dauerhaft gespeicherten Kandidaten-Snapshot: Strategie, Parameter,
+        // Ausführungskonfiguration und Kosten stammen aus dem referenzierten Trial. Abweichende Angaben aus dem
+        // Request werden VOR der Reservierung abgelehnt; fehlt der Ausführungs-Snapshot (Alt-Trial), wird der
+        // Kandidat abgelehnt, statt Angaben aus aktuellen UI-Werten still zu ergänzen.
+        if (string.IsNullOrWhiteSpace(request.CandidateTrialId))
+            return Reject("CANDIDATE_TRIAL_REQUIRED",
+                "Für die finale Holdout-Auswertung ist die Trial-Id des ausgewählten Kandidaten erforderlich (Bindung an den gespeicherten Snapshot).");
 
+        var campaignTrials = await _store.ListTrialsAsync(campaignId, ct);
+        var trial = campaignTrials.FirstOrDefault(t => string.Equals(t.Id, request.CandidateTrialId, StringComparison.Ordinal));
+        if (trial is null)
+            return Reject("CANDIDATE_NOT_IN_CAMPAIGN", $"Trial '{request.CandidateTrialId}' gehört nicht zur Kampagne '{campaignId}'.");
+        if (trial.Execution is null)
+            return Reject("CANDIDATE_SNAPSHOT_INCOMPLETE",
+                $"Trial '{trial.Id}' enthält keine gespeicherte Ausführungskonfiguration (Alt-Trial). Die Kampagne erneut laufen lassen, " +
+                "damit der Kandidat vollständig erfasst wird — es werden keine Angaben aus aktuellen UI-Werten ergänzt.");
+
+        var exec = trial.Execution;
+        var reqCosts = CostSnapshotFrom(ctx, request.Run);
+        var deviations = new List<string>();
+        if (!string.Equals(request.Run.Strategy, trial.StrategyId, StringComparison.OrdinalIgnoreCase)) deviations.Add("Strategie");
+        if (!SameParameters(trial.Parameters, request.Run.Params)) deviations.Add("Parameter");
+        if (request.Run.Quantity != exec.Quantity) deviations.Add("Menge");
+        if (request.Run.InitialBalance != exec.InitialCapital) deviations.Add("Startkapital");
+        if (request.Run.StopLossTicks != exec.StopLossTicks) deviations.Add("Stop-Loss");
+        if (request.Run.TakeProfitTicks != exec.TakeProfitTicks) deviations.Add("Take-Profit");
+        if (request.Run.ApplyFees != exec.ApplyFees) deviations.Add("Gebühren-Flag");
+        if (ctx.TimeframeMinutes != exec.TimeframeMinutes) deviations.Add("Timeframe");
+        if (!string.Equals(ctx.Instrument.Symbol, trial.Data.Symbol, StringComparison.OrdinalIgnoreCase)) deviations.Add("Symbol");
+        if (reqCosts.FeePerSide != trial.Costs.FeePerSide || reqCosts.SlippageTicks != trial.Costs.SlippageTicks) deviations.Add("Kosten");
+        if (deviations.Count > 0)
+            return Reject("CANDIDATE_CONFIG_MISMATCH",
+                "Abweichung(en) zum gespeicherten Kandidaten-Snapshot: " + string.Join(", ", deviations) +
+                ". Der Holdout wird nicht verbraucht — der Kandidat muss unverändert ausgewertet werden.");
+
+        // Konfiguration AUS DEM TRIAL-SNAPSHOT einfrieren (nicht aus dem Request); Auswertungsoptionen persistieren.
         var frozen = new HoldoutFrozenConfig
         {
             CampaignId = campaignId,
             CandidateReference = candidateRef,
-            CandidateTrialId = string.IsNullOrWhiteSpace(request.CandidateTrialId) ? null : request.CandidateTrialId,
-            StrategyId = request.Run.Strategy,
-            Parameters = new Dictionary<string, string>(request.Run.Params),
-            Symbol = ctx.Instrument.Symbol,
-            TimeframeMinutes = ctx.TimeframeMinutes,
-            InitialCapital = request.Run.InitialBalance,
-            Quantity = request.Run.Quantity,
-            StopLossTicks = request.Run.StopLossTicks,
-            TakeProfitTicks = request.Run.TakeProfitTicks,
-            Costs = CostSnapshotFrom(ctx, request.Run),
+            CandidateTrialId = trial.Id,
+            StrategyId = trial.StrategyId,
+            Parameters = new Dictionary<string, string>(trial.Parameters),
+            Symbol = trial.Data.Symbol,
+            TimeframeMinutes = exec.TimeframeMinutes,
+            InitialCapital = exec.InitialCapital,
+            Quantity = exec.Quantity,
+            StopLossTicks = exec.StopLossTicks,
+            TakeProfitTicks = exec.TakeProfitTicks,
+            Costs = trial.Costs,
             DataSha = fingerprint.Sha256,
             HoldoutFrom = campaign.HoldoutFrom.Value,
             HoldoutTo = campaign.HoldoutTo.Value,
             WarmupBars = Math.Max(0, request.WarmupBars),
             Frequency = request.Options.Frequency,
+            AnnualizationBasis = request.Options.AnnualizationBasis,
+            FixedPeriodsPerYear = request.Options.FixedPeriodsPerYear,
+            RiskFreeAnnualRate = request.Options.RiskFreeAnnualRate,
+            ExpectedShortfallAlpha = request.Options.ExpectedShortfallAlpha,
+            MinimumPeriods = request.Options.MinimumPeriods,
             CodeVersion = CodeVersion()
         };
 
@@ -1266,10 +1302,9 @@ public sealed class QuantApiService
             return now is not null ? Existing(refreshed, now) : Reject(ex.Code, ex.Message);
         }
 
-        var metricOptions = MetricOptions(request.Options);
         int hs = holdoutStart, he = holdoutEnd;
         string jobId = jobs.Start("holdout", async (p, jct) =>
-            (object)await RunHoldoutEvaluationAsync(record, ctx, hs, he, metricOptions, p, jct));
+            (object)await RunHoldoutEvaluationAsync(record, ctx, hs, he, p, jct));
 
         return new HoldoutEvaluationResponse
         {
@@ -1285,7 +1320,7 @@ public sealed class QuantApiService
     /// </summary>
     private async Task<HoldoutEvaluationRecord> RunHoldoutEvaluationAsync(
         HoldoutEvaluationRecord reserved, BacktestApiService.RunContext ctx, int holdoutStart, int holdoutEnd,
-        PerformanceMetricsOptions metricOptions, IProgress<double>? progress, CancellationToken ct)
+        IProgress<double>? progress, CancellationToken ct)
     {
         var cfg = reserved.Config;
         var startedUtc = DateTimeOffset.UtcNow;
@@ -1323,17 +1358,15 @@ public sealed class QuantApiService
             var notes = new List<string>();
             int localHoldoutStart = warmupCount;
 
-            var realizedBuild = ReturnSeriesBuilder.ToReturnSeries(curve with { Points = holdoutPoints, StartTime = null }, EquityBasis.Realized);
-            notes.AddRange(realizedBuild.Notes);
-
-            var metricsResult = PerformanceMetricsCalculator.Compute(realizedBuild.Series, metricOptions);
-            var metrics = metricsResult.Metrics.ToDictionary(m => m.Key, m => m.IsAvailable ? m.Value : (double?)null);
-
-            var equityLevels = holdoutPoints.Select(pt => (double)pt.RealizedEquity).ToList();
+            // Startkapital erhalten: Anker am OPEN der ersten Holdout-Kerze (Kapital == Startkapital, da der
+            // Warmup keine Trades ausführt). So misst die erste (ggf. aggregierte) Rendite gegen das Startkapital
+            // und der absolute Drawdown beginnt am Startkapital — nicht erst beim ersten Holdout-Punkt.
             double initial = (double)cfg.InitialCapital;
-            double finalEquity = equityLevels.Count > 0 ? equityLevels[^1] : initial;
-            double netProfit = finalEquity - initial;
-            double maxDd = MaxDrawdownAbs(equityLevels);
+            var anchored = curve with { Points = holdoutPoints, StartTime = ctx.Candles[holdoutStart].OpenTime };
+            var (series, maxDd, netProfit, finalEquity, truncated) = HoldoutMetrics.RealizedFromHoldout(anchored, initial);
+
+            var metricsResult = PerformanceMetricsCalculator.Compute(series, MetricOptionsFrom(cfg));
+            var metrics = metricsResult.Metrics.ToDictionary(m => m.Key, m => m.IsAvailable ? m.Value : (double?)null);
 
             var trades = new List<HoldoutTradeRecord>();
             int idx = 0;
@@ -1356,9 +1389,9 @@ public sealed class QuantApiService
             var quality = QuantDataQualityChecker.Check(holdoutCandles, cfg.Symbol, cfg.TimeframeMinutes);
             if (quality.Issues.Count > 0)
                 notes.Add("Datenqualität im Holdout: " + string.Join(", ", quality.Issues.Select(i => i.Code).Distinct()));
-            if (realizedBuild.Truncated)
+            if (truncated)
                 notes.Add("Kapital ≤ 0 im Holdout — die Reihe wurde abgebrochen; Kennzahlen gelten nur bis dahin.");
-            if (realizedBuild.Series.Count == 0)
+            if (series.Count == 0)
                 notes.Add("Zu wenige Holdout-Perioden für belastbare Kennzahlen.");
 
             metrics["netprofit"] = netProfit;
@@ -1407,16 +1440,16 @@ public sealed class QuantApiService
         return true;
     }
 
-    private static double MaxDrawdownAbs(IReadOnlyList<double> equity)
+    /// <summary>Baut die Kennzahlenoptionen aus der PERSISTIERTEN Holdout-Konfiguration (reproduzierbar/neustartfest).</summary>
+    private static PerformanceMetricsOptions MetricOptionsFrom(HoldoutFrozenConfig cfg) => new()
     {
-        double peak = double.NegativeInfinity, maxDd = 0;
-        foreach (var e in equity)
-        {
-            if (e > peak) peak = e;
-            if (peak > double.NegativeInfinity) maxDd = Math.Max(maxDd, peak - e);
-        }
-        return maxDd;
-    }
+        AnnualizationBasis = string.Equals(cfg.AnnualizationBasis, "Fixed", StringComparison.OrdinalIgnoreCase)
+            ? AnnualizationBasis.Fixed : AnnualizationBasis.Observed,
+        FixedPeriodsPerYear = cfg.FixedPeriodsPerYear,
+        RiskFreeAnnualRate = cfg.RiskFreeAnnualRate,
+        ExpectedShortfallAlpha = cfg.ExpectedShortfallAlpha,
+        MinimumPeriods = cfg.MinimumPeriods
+    };
 
     private static CostProfileSnapshot CostSnapshotFrom(BacktestApiService.RunContext ctx, BacktestRunRequest run) => new()
     {

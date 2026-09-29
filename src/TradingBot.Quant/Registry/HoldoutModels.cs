@@ -50,8 +50,18 @@ public sealed record HoldoutFrozenConfig
 
     /// <summary>Warmup-Bars VOR dem Holdout (nur frühere Daten; im Warmup keine Trades, keine Kennzahlen).</summary>
     public int WarmupBars { get; init; }
-    /// <summary>Renditefrequenz der Kennzahlen ("Bar", "Daily", ...).</summary>
+
+    // Ergebnisrelevante Auswertungsoptionen — vollständig persistiert, damit die Kennzahlen des gespeicherten
+    // Ergebnisses reproduzierbar und neustart-konsistent sind (nicht nur die Frequenz).
+    /// <summary>Renditefrequenz der Kennzahlen ("Bar", "Daily", "Weekly", "Monthly").</summary>
     public string Frequency { get; init; } = "Bar";
+    /// <summary>"Observed" oder "Fixed".</summary>
+    public string AnnualizationBasis { get; init; } = "Observed";
+    public double? FixedPeriodsPerYear { get; init; }
+    public double RiskFreeAnnualRate { get; init; }
+    public double ExpectedShortfallAlpha { get; init; } = 0.05;
+    public int MinimumPeriods { get; init; }
+
     public required string CodeVersion { get; init; }
 }
 

@@ -93,6 +93,22 @@ public sealed record DataFingerprint
     }
 }
 
+/// <summary>
+/// Abbild der tatsächlich geprüften Ausführungskonfiguration eines Versuchs. Wird beim Anlegen des
+/// Versuchs dauerhaft festgehalten, damit eine spätere finale Holdout-Auswertung exakt denselben
+/// Kandidaten (Menge, Kapital, SL/TP, Gebühren-Flag, Timeframe) verwenden und Abweichungen ablehnen kann,
+/// statt fehlende Angaben still aus aktuellen UI-Werten zu ergänzen.
+/// </summary>
+public sealed record ExecutionConfigSnapshot
+{
+    public int Quantity { get; init; }
+    public decimal InitialCapital { get; init; }
+    public int? StopLossTicks { get; init; }
+    public int? TakeProfitTicks { get; init; }
+    public bool ApplyFees { get; init; } = true;
+    public int TimeframeMinutes { get; init; }
+}
+
 /// <summary>Kostenprofil-Abbild eines Versuchs (damit „gleiche Kosten" überprüfbar bleibt).</summary>
 public sealed record CostProfileSnapshot
 {
@@ -167,6 +183,12 @@ public sealed record TrialRecord
     public IReadOnlyDictionary<string, string> Parameters { get; init; } = new Dictionary<string, string>();
     public required DataFingerprint Data { get; init; }
     public CostProfileSnapshot Costs { get; init; } = new();
+    /// <summary>
+    /// Geprüfte Ausführungskonfiguration (Menge, Kapital, SL/TP, Gebühren-Flag, Timeframe). Null bei
+    /// Alt-Versuchen, die vor der Einführung des Snapshots angelegt wurden — eine finale Holdout-Auswertung
+    /// lehnt solche Kandidaten ab, statt die Angaben aus UI-Werten zu ergänzen.
+    /// </summary>
+    public ExecutionConfigSnapshot? Execution { get; init; }
 
     /// <summary>Git-Commit oder anderer Codestand, mit dem der Versuch lief.</summary>
     public required string CodeVersion { get; init; }
