@@ -32,6 +32,10 @@ public sealed class QuantApiService
     private readonly string _benchmarkDir;
     private readonly string _registryDir;
 
+    /// <summary>Prozessweite Sperre um „gruppenübergreifende Wiederverwendungs-Prüfung + finale Reservierung",
+    /// damit parallele finale Starts (auch verschiedener Kampagnen/Gruppen auf denselben Daten) atomar bleiben.</summary>
+    private static readonly SemaphoreSlim _holdoutReserveGate = new(1, 1);
+
     public QuantApiService(BacktestApiService backtest, string repoRoot)
     {
         _backtest = backtest ?? throw new ArgumentNullException(nameof(backtest));
@@ -47,6 +51,36 @@ public sealed class QuantApiService
 
     public IExperimentStore Store => _store;
     public JsonPaperResearchStore Papers => _papers;
+    /// <summary>Wurzel des Versuchsregisters — der Research-Orchestrator legt seine Läufe daneben ab.</summary>
+    public string RegistryDir => _registryDir;
+
+    /// <summary>
+    /// Bestimmt den Entwicklungs-/Holdout-Split rein aus den geladenen Kerzen und der Holdout-Fraktion — identisch
+    /// zur Reservierung im <see cref="WalkForwardPlanner"/> (die letzten floor(total·fraction) Bars). Der Orchestrator
+    /// begrenzt damit ALLE Vorprüfungen strikt auf den Entwicklungsbereich (kein Holdout-Leakage).
+    /// </summary>
+    public async Task<HoldoutSplit> ComputeHoldoutSplitAsync(BacktestRunRequest run, double holdoutFraction, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+        var ctx = await _backtest.LoadContextAsync(run, ct);
+        int total = ctx.Candles.Count;
+        DateTimeOffset? dataFrom = total > 0 ? ctx.Candles[0].OpenTime : null;
+        DateTimeOffset? dataTo = total > 0 ? ctx.Candles[^1].CloseTime : null;
+        int holdoutBars = holdoutFraction is > 0 and < 1 ? (int)Math.Floor(total * holdoutFraction) : 0;
+        int usable = total - holdoutBars;
+        DateTimeOffset? devToUtc = null, devLoadToUtc = null, holdoutFrom = null, holdoutTo = null;
+        if (holdoutBars > 0 && usable > 0 && usable < total)
+        {
+            devToUtc = ctx.Candles[usable].OpenTime;      // erste Holdout-Kerze — Anzeigegrenze („Entwicklung bis / Holdout ab")
+            holdoutFrom = ctx.Candles[usable].OpenTime;
+            holdoutTo = ctx.Candles[^1].CloseTime;
+            // Lade-Obergrenze eine Tick-Einheit VOR dem Holdout-Start: schließt jeden Tick ab dem Holdout-Start
+            // sicher aus (Sierra-Lader filtert Ticks mit ts > ToUtc, also zeitstempel-inklusiv), lässt aber alle
+            // Entwicklungsbars [0..usable) unverändert. Siehe HoldoutSplit-Doku.
+            devLoadToUtc = devToUtc.Value.AddTicks(-1);
+        }
+        return new HoldoutSplit(total, holdoutBars, usable, dataFrom, dataTo, devToUtc, holdoutFrom, holdoutTo, devLoadToUtc);
+    }
 
     // =========================================================================================
     // Status
@@ -460,6 +494,7 @@ public sealed class QuantApiService
                 HoldoutToT = plan.Holdout?.ToTime.ToUnixTimeMilliseconds(),
                 HoldoutEvaluated = false,
                 OosT = run.OutOfSampleReturns.Timestamps.Select(t => t.ToUnixTimeMilliseconds()).ToList(),
+                OosStartT = run.OutOfSampleStartTimes.Select(t => t.ToUnixTimeMilliseconds()).ToList(),
                 OosEquity = run.OutOfSampleReturns.EquityLevels,
                 OosMetrics = oosMetrics.Metrics.Select(QuantMetricDto.From).ToList(),
                 CandidateSharpes = candidateSharpes,
@@ -511,7 +546,9 @@ public sealed class QuantApiService
                 Horizon = request.Horizon,
                 InitialCapital = (double)result.InitialBalance,
                 CapitalBarrier = request.CapitalBarrier,
-                TimeLimit = TimeSpan.FromMinutes(5)
+                TimeLimit = TimeSpan.FromMinutes(5),
+                // Fächerchart: Band aus allen Läufen, bis zu 120 Einzelpfade zur Darstellung aufbewahren.
+                RecordedPaths = 120
             };
 
             var notes = new List<string>();
@@ -574,8 +611,18 @@ public sealed class QuantApiService
                 ShareOfRunsBelowStart = mc.ShareOfRunsBelowStart,
                 ShareOfRunsBreachingBarrier = mc.ShareOfRunsBreachingBarrier,
                 CapitalBarrier = request.CapitalBarrier,
+                BandP5 = mc.BandP5,
+                BandMedian = mc.BandMedian,
+                BandP95 = mc.BandP95,
+                Paths = mc.SamplePaths,
+                InitialCapital = (double)result.InitialBalance,
+                DisplayedPaths = mc.SamplePaths.Count,
+                TotalPaths = mc.PathRunsComputed,
                 Assumptions = mc.Assumptions,
-                Notes = notes
+                Notes = mc.SamplePaths.Count > 0 && mc.SamplePaths.Count < mc.CompletedIterations
+                    ? notes.Append($"Darstellung auf {mc.SamplePaths.Count} von {mc.CompletedIterations} Kapitalpfaden begrenzt; " +
+                                   "Band (P5/Median/P95) und alle Kennzahlen stammen aus allen berechneten Läufen.").ToList()
+                    : notes
             };
         }
         catch (OperationCanceledException) { throw; }
@@ -700,11 +747,30 @@ public sealed class QuantApiService
             if (!wf.Ok)
                 return new QuantOverfittingResponse { Ok = false, Error = wf.Error, WalkForward = wf };
 
+            return await ComputeOverfittingFromWalkForwardAsync(
+                wf, request.WalkForward, request.Blocks, request.EstimateEffectiveTrials, ct);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            return new QuantOverfittingResponse { Ok = false, Error = ex.Message };
+        }
+    }
+
+    /// <summary>
+    /// Berechnet PBO/PSR/DSR aus einem BEREITS ausgeführten Walk-forward — ohne den Walk-forward erneut zu
+    /// starten, ohne Trials erneut zu registrieren und ohne Budget erneut zu verbrauchen. Der Research-
+    /// Orchestrator führt den Walk-forward genau einmal je Lauf aus und reicht sein Ergebnis hier hinein.
+    /// </summary>
+    public async Task<QuantOverfittingResponse> ComputeOverfittingFromWalkForwardAsync(
+        QuantWalkForwardResponse wf, QuantWalkForwardRequest wfRequest, int blocks, bool estimateEffectiveTrials,
+        CancellationToken ct = default)
+    {
             // Renditematrix aus den Out-of-Sample-Reihen ALLER Kandidaten.
-            var ctx = await _backtest.LoadContextAsync(request.WalkForward.Run, ct);
+            var ctx = await _backtest.LoadContextAsync(wfRequest.Run, ct);
             var candidateIds = wf.CandidateSharpes.Keys.ToList();
 
-            var rebuilt = await RebuildCandidateMatrixAsync(request.WalkForward, ctx, ct);
+            var rebuilt = await RebuildCandidateMatrixAsync(wfRequest, ctx, ct);
             var wfRun = rebuilt.Series;
             var notes = new List<string>(wf.Notes);
             notes.AddRange(rebuilt.Notes);
@@ -733,7 +799,7 @@ public sealed class QuantApiService
             for (int i = 0; i < rows; i++)
                 matrix.Add(ordered.Select(c => c.Value[i]).ToArray());
 
-            var pbo = CscvPbo.Compute(matrix, request.Blocks, ct: ct);
+            var pbo = CscvPbo.Compute(matrix, blocks, ct: ct);
 
             // --- PSR / DSR auf der ausgewählten Out-of-Sample-Reihe ---
             var selectedReturns = new List<double>();
@@ -767,7 +833,7 @@ public sealed class QuantApiService
 
             double? effective = null;
             string? rationale = null;
-            if (request.EstimateEffectiveTrials)
+            if (estimateEffectiveTrials)
             {
                 // Die Korrelationsheuristik braucht die Renditereihen der Versuche. Sie liegen nur für die
                 // Kandidaten des aktuellen Requests vor. Nur wenn die erfasste Versuchszahl exakt diesen
@@ -820,12 +886,6 @@ public sealed class QuantApiService
                 WalkForward = wf,
                 Notes = notes
             };
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex)
-        {
-            return new QuantOverfittingResponse { Ok = false, Error = ex.Message };
-        }
     }
 
     /// <summary>
@@ -1311,15 +1371,32 @@ public sealed class QuantApiService
             HoldoutBars = holdoutEnd - holdoutStart + 1, WarmupBarsUsed = Math.Min(frozen.WarmupBars, holdoutStart)
         };
 
+        // Gruppenübergreifende Wiederverwendung verhindern UND parallele Starts atomar halten: Prüfung + Reservierung
+        // laufen unter einer prozessweiten Sperre. Ein bereits (in einer ANDEREN Kampagne/Gruppe) reservierter oder
+        // ausgewerteter Holdout DESSELBEN Datenbestands mit überlappendem Zeitraum wird abgelehnt — neue IDs umgehen
+        // die Prüfung nicht (Identität = Daten-Fingerabdruck + Holdout-Zeitfenster, nicht Pfad/Gruppen-Id).
         HoldoutEvaluationRecord record;
-        try { record = await _store.ReserveHoldoutEvaluationAsync(campaignId, reserved, ct); }
-        catch (ExperimentRegistryException ex)
+        await _holdoutReserveGate.WaitAsync(ct);
+        try
         {
-            // Paralleler Request hat gewonnen? Vorhandenen Zustand zurückgeben, sonst den Fehler nennen.
-            var now = await _store.GetHoldoutEvaluationAsync(campaignId, ct);
-            var refreshed = await _store.GetCampaignAsync(campaignId, ct) ?? campaign;
-            return now is not null ? Existing(refreshed, now) : Reject(ex.Code, ex.Message);
+            var conflict = await FindConflictingHoldoutAsync(campaignId, fingerprint.Sha256,
+                campaign.HoldoutFrom.Value, campaign.HoldoutTo.Value, ct);
+            if (conflict is not null)
+                return Reject("HOLDOUT_REUSE",
+                    $"Derselbe finale Holdout (Daten-Fingerabdruck '{Short(fingerprint.Sha256)}', überlappender Zeitraum) " +
+                    $"wurde bereits in Kampagne '{conflict}' reserviert/ausgewertet. Eine erneute unabhängige finale Auswertung " +
+                    "über eine neue Kampagne/Gruppe ist gesperrt. Das bereits gespeicherte Ergebnis bleibt lesbar.");
+
+            try { record = await _store.ReserveHoldoutEvaluationAsync(campaignId, reserved, ct); }
+            catch (ExperimentRegistryException ex)
+            {
+                // Paralleler Request hat gewonnen? Vorhandenen Zustand zurückgeben, sonst den Fehler nennen.
+                var now = await _store.GetHoldoutEvaluationAsync(campaignId, ct);
+                var refreshed = await _store.GetCampaignAsync(campaignId, ct) ?? campaign;
+                return now is not null ? Existing(refreshed, now) : Reject(ex.Code, ex.Message);
+            }
         }
+        finally { _holdoutReserveGate.Release(); }
 
         int hs = holdoutStart, he = holdoutEnd;
         string jobId = jobs.Start("holdout", async (p, jct) =>
@@ -1330,6 +1407,32 @@ public sealed class QuantApiService
             Ok = true, CampaignId = campaignId, State = HoldoutEvaluationStatus.Reserved.ToString(), JobId = jobId,
             HoldoutFrom = campaign.HoldoutFrom, HoldoutTo = campaign.HoldoutTo, Evaluation = record
         };
+    }
+
+    /// <summary>
+    /// Sucht eine ANDERE Kampagne, deren finaler Holdout denselben Datenbestand betrifft (gleicher SHA-256-
+    /// Daten-Fingerabdruck) und deren Holdout-Zeitfenster mit dem angefragten ÜBERLAPPT und die bereits reserviert
+    /// (gespeicherte Auswertung vorhanden) oder verbraucht ist. Damit wird verhindert, dass derselbe Marktzeitraum
+    /// über eine neue Kampagne/Gruppe erneut als „unberührter" Holdout ausgewertet wird.
+    /// <para>Abgedeckter Schutzbereich (bewusst begrenzt): Nur im DIESEM persistenten Register bekannte
+    /// Reservierungen/Auswertungen werden erkannt — keine Aussage über unbekannte externe Experimente, und keine
+    /// Erkennung reiner „Offenlegung" außerhalb einer gespeicherten Holdout-Reservierung/-Auswertung. Ohne
+    /// Daten-Fingerabdruck (null) ist keine belastbare Identität möglich; dann wird nicht geblockt.</para>
+    /// </summary>
+    private async Task<string?> FindConflictingHoldoutAsync(
+        string selfCampaignId, string dataSha, DateTimeOffset from, DateTimeOffset to, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(dataSha)) return null;
+        foreach (var other in await _store.ListCampaignsAsync(ct))
+        {
+            if (string.Equals(other.Id, selfCampaignId, StringComparison.Ordinal)) continue;
+            if (!string.Equals(other.DataSha, dataSha, StringComparison.OrdinalIgnoreCase)) continue;
+            if (other.HoldoutFrom is not { } oFrom || other.HoldoutTo is not { } oTo) continue;
+            if (from > oTo || oFrom > to) continue;   // keine Zeitüberlappung
+            if (other.HoldoutConsumed) return other.Id;
+            if (await _store.GetHoldoutEvaluationAsync(other.Id, ct) is not null) return other.Id; // reserviert/ausgewertet
+        }
+        return null;
     }
 
     /// <summary>
@@ -1525,7 +1628,7 @@ public sealed class QuantApiService
         _ => ResamplingMethod.Permutation
     };
 
-    private static string CandidateId(IReadOnlyDictionary<string, string> p, int index)
+    internal static string CandidateId(IReadOnlyDictionary<string, string> p, int index)
     {
         if (p.Count == 0) return $"c{index}";
         return string.Join("_", p.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => $"{kv.Key}{kv.Value}"));
