@@ -50,3 +50,11 @@ b { font-weight: 500 }
   outline-offset: 2px;
   border-radius: 2px;
 }
+/* Marken-Schriftzug „FutureOrderFlowBot“ im Farbverlauf des Logos (Weiß → Mint → Grün). */
+.brand-wordmark {
+  background: linear-gradient(90deg, #f2fff8 0%, #b9f7d9 45%, #5ee9a6 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  text-shadow: 0 0 12px rgba(94, 233, 166, 0.25);
+}

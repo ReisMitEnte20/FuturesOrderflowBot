@@ -55,7 +55,7 @@ export function Topbar() {
   return (
     <header className="h-12 flex items-center justify-between px-4 border-b border-[var(--line)] bg-[var(--bg-2)]">
       <div className="flex items-center gap-4">
-        <span className="font-mono text-[var(--key)] font-bold text-sm tracking-wider">QANAT</span>
+        <img src="/logo-wordmark.png" alt="FutureOrderFlowBot" className="h-9 w-auto rounded" />
         <span className="text-[var(--fg-faint)] text-xs mono uppercase tracking-widest">
           Trading Dashboard
         </span>
