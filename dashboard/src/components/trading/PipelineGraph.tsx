@@ -9,11 +9,11 @@ interface TradePipelineGraphProps {
 }
 
 const NODE_COLORS: Record<string, string> = {
-  source: "#a2e65d",
-  indicator: "#7fc4b4",
-  signal: "#e8c069",
-  position: "#c2b6d8",
-  pnl: "#c1503f",
+  source: "#3cf0a0",
+  indicator: "#22b8f0",
+  signal: "#f0c35a",
+  position: "#9b8cff",
+  pnl: "#f0566a",
 };
 
 export function TradePipelineGraph({ nodes = [], edges = [], height = 250, className }: TradePipelineGraphProps) {
@@ -39,7 +39,7 @@ export function TradePipelineGraph({ nodes = [], edges = [], height = 250, class
           type: "lines",
           coordinateSystem: "none",
           data: [{ coords: [[positions[sIdx].x, positions[sIdx].y], [positions[tIdx].x, positions[tIdx].y]] }],
-          lineStyle: { color: "#2e2b28", width: 1 },
+          lineStyle: { color: "#1d3654", width: 1 },
         });
       }
     });
@@ -51,9 +51,9 @@ export function TradePipelineGraph({ nodes = [], edges = [], height = 250, class
         name: nodes[i]?.label || p.name,
         value: [p.x, p.y],
         itemStyle: {
-          color: NODE_COLORS[nodes[i]?.type] || "#a2e65d",
+          color: NODE_COLORS[nodes[i]?.type] || "#3cf0a0",
           shadowBlur: 8,
-          shadowColor: "rgba(162,230,93,0.4)",
+          shadowColor: "rgba(60,240,160,0.4)",
         },
       })),
       symbolSize: 36,
@@ -61,7 +61,7 @@ export function TradePipelineGraph({ nodes = [], edges = [], height = 250, class
         show: true,
         position: "bottom",
         formatter: (params: any) => params.name,
-        color: "#cbc6bc",
+        color: "#a9c3cf",
         fontSize: 10,
         fontFamily: "var(--mono)",
       },

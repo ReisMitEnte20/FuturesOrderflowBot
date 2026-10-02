@@ -29,7 +29,7 @@ interface Props {
   className?: string;
 }
 
-const COL = { key: "#a2e65d", red: "#c1503f", gold: "#e8c069", cyan: "#7fc4b4", line: "#232120", panel: "#161513", fg: "#f4f2ed", faint: "#8b857a" };
+const COL = { key: "#3cf0a0", red: "#f0566a", gold: "#f0c35a", cyan: "#22b8f0", line: "#14273f", panel: "#0a1a30", fg: "#eefcf6", faint: "#6b8399" };
 const SHORT_DOWN = "path://M2,2 L22,2 L12,20 Z"; // nach unten zeigendes Dreieck (Short-Entry)
 
 const fmtAxis = (ms: number) => new Date(ms).toISOString().slice(5, 16).replace("T", " ");
@@ -119,9 +119,9 @@ export function BacktestChart(props: Props) {
         },
         tooltip: {
           trigger: "axis",
-          axisPointer: { type: "cross", lineStyle: { color: "#3a3632" }, crossStyle: { color: "#3a3632" }, label: { backgroundColor: "#2e2b28" } },
+          axisPointer: { type: "cross", lineStyle: { color: "#2a4868" }, crossStyle: { color: "#2a4868" }, label: { backgroundColor: "#1d3654" } },
           backgroundColor: COL.panel,
-          borderColor: "#2e2b28",
+          borderColor: "#1d3654",
           textStyle: { color: COL.fg, fontSize: 11, fontFamily: "JetBrains Mono, monospace" },
           formatter: (ps: any[]) => {
             const p = ps.find((x) => x.seriesType === "candlestick") ?? ps[0];
@@ -140,7 +140,7 @@ export function BacktestChart(props: Props) {
         },
         dataZoom: [
           { type: "inside", startValue: start, endValue: end, filterMode: "filter" },
-          { type: "slider", startValue: start, endValue: end, height: 16, bottom: 12, filterMode: "filter", borderColor: COL.line, fillerColor: "rgba(162,230,93,0.10)", handleStyle: { color: COL.key }, textStyle: { color: COL.faint, fontSize: 9 }, labelFormatter: (v: number) => (candles[v] ? fmtAxis(candles[v].t) : "") },
+          { type: "slider", startValue: start, endValue: end, height: 16, bottom: 12, filterMode: "filter", borderColor: COL.line, fillerColor: "rgba(60,240,160,0.10)", handleStyle: { color: COL.key }, textStyle: { color: COL.faint, fontSize: 9 }, labelFormatter: (v: number) => (candles[v] ? fmtAxis(candles[v].t) : "") },
         ],
         series: [
           {
@@ -218,7 +218,7 @@ export function BacktestChart(props: Props) {
         {}, {}, {},
         {
           data: selData,
-          markArea: { silent: true, itemStyle: { color: "rgba(127,196,180,0.10)" }, data: [[{ xAxis: lo }, { xAxis: hi }]] },
+          markArea: { silent: true, itemStyle: { color: "rgba(34,184,240,0.10)" }, data: [[{ xAxis: lo }, { xAxis: hi }]] },
           markLine: {
             silent: true,
             symbol: "none",
@@ -248,7 +248,7 @@ export function BacktestChart(props: Props) {
         <div className={`absolute inset-0 flex items-center justify-center ${st.kind === "loading" && props.candles.length > 0 ? "bg-black/40" : ""}`}>
           <div className="max-w-md text-center px-4 py-3 rounded-lg border border-[var(--line)] bg-[var(--panel)] shadow-lg">
             {st.kind === "loading" && <div className="mx-auto mb-2 h-1 w-40 overflow-hidden rounded bg-[var(--bg-2)]"><div className="h-full w-1/3 animate-[bt-indet_1.1s_ease-in-out_infinite] bg-[var(--key)]" /></div>}
-            <p className={`text-xs mono ${st.kind === "error" ? "text-[var(--red)]" : "text-[var(--fg-dim,#c9c4ba)]"}`}>{st.text}</p>
+            <p className={`text-xs mono ${st.kind === "error" ? "text-[var(--red)]" : "text-[var(--fg-dim,#a9c3cf)]"}`}>{st.text}</p>
             {st.actionLabel && st.onAction && (
               <button onClick={st.onAction} className="mt-2 px-3 py-1 rounded bg-[var(--key)] text-black text-xs font-bold">{st.actionLabel}</button>
             )}

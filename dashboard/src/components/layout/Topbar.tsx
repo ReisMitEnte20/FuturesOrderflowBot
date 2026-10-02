@@ -53,7 +53,7 @@ export function Topbar() {
   };
 
   return (
-    <header className="h-12 flex items-center justify-between px-4 border-b border-[var(--line)] bg-[var(--bg-2)]">
+    <header className="h-12 flex items-center justify-between px-4 border-b border-[var(--line)] bg-[rgba(5,19,39,0.88)] backdrop-blur">
       <div className="flex items-center gap-4">
         <img src="/logo-wordmark.png" alt="FutureOrderFlowBot" className="h-9 w-auto rounded" />
         <span className="text-[var(--fg-faint)] text-xs mono uppercase tracking-widest">
@@ -93,7 +93,7 @@ function StatusIndicator({
 }) {
   const dotColor =
     status === "connected"
-      ? "bg-[var(--key)] shadow-[0_0_6px_#a2e65d88]"
+      ? "bg-[var(--key)] shadow-[0_0_6px_#3cf0a088]"
       : status === "connecting"
       ? "bg-[var(--gold)] animate-pulse"
       : status === "error"

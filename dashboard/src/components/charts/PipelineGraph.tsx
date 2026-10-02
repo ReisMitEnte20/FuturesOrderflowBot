@@ -9,19 +9,19 @@ interface PipelineGraphProps {
 }
 
 const NODE_COLORS: Record<string, string> = {
-  source: "#a2e65d",
-  indicator: "#7fc4b4",
-  signal: "#e8c069",
-  position: "#c2b6d8",
-  pnl: "#c1503f",
+  source: "#3cf0a0",
+  indicator: "#22b8f0",
+  signal: "#f0c35a",
+  position: "#9b8cff",
+  pnl: "#f0566a",
 };
 
 const STATUS_COLORS: Record<string, string> = {
-  ok: "#8fce6a",
-  running: "#a2e65d",
-  failed: "#c1503f",
-  queued: "#4a463f",
-  skipped: "#4a463f",
+  ok: "#2fd890",
+  running: "#3cf0a0",
+  failed: "#f0566a",
+  queued: "#34557a",
+  skipped: "#34557a",
 };
 
 export function PipelineGraph({ nodes, edges, height = 300, className }: PipelineGraphProps) {
@@ -51,16 +51,16 @@ export function PipelineGraph({ nodes, edges, height = 300, className }: Pipelin
             coords: [[positions[sourceIdx].x, positions[sourceIdx].y], [positions[targetIdx].x, positions[targetIdx].y]],
           },
         ],
-        lineStyle: { color: "#2e2b28", width: 1.5 },
+        lineStyle: { color: "#1d3654", width: 1.5 },
         label: { show: false },
       };
     }).filter(Boolean);
 
     const option = {
       tooltip: {
-        backgroundColor: "#161513",
-        borderColor: "#2e2b28",
-        textStyle: { color: "#f4f2ed", fontFamily: "var(--mono)" },
+        backgroundColor: "#0a1a30",
+        borderColor: "#1d3654",
+        textStyle: { color: "#eefcf6", fontFamily: "var(--mono)" },
       },
       series: [
         ...edgesOption.map((e) => ({
@@ -75,9 +75,9 @@ export function PipelineGraph({ nodes, edges, height = 300, className }: Pipelin
             name: nodes[i]?.label || p.name,
             value: [p.x, p.y],
             itemStyle: {
-              color: NODE_COLORS[nodes[i]?.type] || "#a2e65d",
+              color: NODE_COLORS[nodes[i]?.type] || "#3cf0a0",
               shadowBlur: 10,
-              shadowColor: (STATUS_COLORS[nodes[i]?.status] || "#a2e65d") + "88",
+              shadowColor: (STATUS_COLORS[nodes[i]?.status] || "#3cf0a0") + "88",
             },
           })),
           symbolSize: 36,
@@ -85,7 +85,7 @@ export function PipelineGraph({ nodes, edges, height = 300, className }: Pipelin
             show: true,
             position: "bottom",
             formatter: (params: any) => params.name,
-            color: "#cbc6bc",
+            color: "#a9c3cf",
             fontSize: 10,
             fontFamily: "var(--mono)",
           },

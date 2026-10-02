@@ -4,7 +4,7 @@ import type { EquityPoint } from "@/lib/backtestApi";
 
 interface Props { equity: EquityPoint[]; initialBalance: number; height?: number; className?: string; }
 
-const COL = { key: "#a2e65d", red: "#c1503f", line: "#232120", panel: "#161513", fg: "#f4f2ed", faint: "#8b857a" };
+const COL = { key: "#3cf0a0", red: "#f0566a", line: "#14273f", panel: "#0a1a30", fg: "#eefcf6", faint: "#6b8399" };
 
 export function EquityDrawdownChart({ equity, initialBalance, height = 220, className }: Props) {
   const ref = useRef<HTMLDivElement | null>(null);
@@ -30,14 +30,14 @@ export function EquityDrawdownChart({ equity, initialBalance, height = 220, clas
           { type: "value", scale: true, position: "right", splitLine: { lineStyle: { color: COL.line } }, axisLabel: { color: COL.faint, fontSize: 10 } },
           { type: "value", position: "left", max: 0, splitLine: { show: false }, axisLabel: { color: COL.faint, fontSize: 9 } },
         ],
-        tooltip: { trigger: "axis", backgroundColor: COL.panel, borderColor: "#2e2b28", textStyle: { color: COL.fg, fontSize: 11 } },
+        tooltip: { trigger: "axis", backgroundColor: COL.panel, borderColor: "#1d3654", textStyle: { color: COL.fg, fontSize: 11 } },
         series: [
           {
             name: "Equity", type: "line", data: eq, smooth: false, symbol: "none",
             lineStyle: { color: COL.key, width: 1.5 },
-            areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: "rgba(162,230,93,0.15)" }, { offset: 1, color: "rgba(162,230,93,0)" }]) },
+            areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: "rgba(60,240,160,0.15)" }, { offset: 1, color: "rgba(60,240,160,0)" }]) },
           },
-          { name: "Drawdown", type: "line", yAxisIndex: 1, data: dd, symbol: "none", lineStyle: { color: COL.red, width: 1, opacity: 0.7 }, areaStyle: { color: "rgba(193,80,63,0.12)" } },
+          { name: "Drawdown", type: "line", yAxisIndex: 1, data: dd, symbol: "none", lineStyle: { color: COL.red, width: 1, opacity: 0.7 }, areaStyle: { color: "rgba(240,86,106,0.12)" } },
         ],
       },
       { notMerge: true },

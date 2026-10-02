@@ -31,9 +31,9 @@ export function formatPnL(pnl: number): string {
 }
 
 export function getPnLColor(pnl: number): string {
-  if (pnl > 0) return "text-[#a2e65d]";
-  if (pnl < 0) return "text-[#c1503f]";
-  return "text-[#8b857a]";
+  if (pnl > 0) return "text-[#3cf0a0]";
+  if (pnl < 0) return "text-[#f0566a]";
+  return "text-[#6b8399]";
 }
 
 export function formatTimestamp(ts: string): string {
