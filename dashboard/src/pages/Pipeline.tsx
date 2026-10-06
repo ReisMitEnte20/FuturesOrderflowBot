@@ -11,11 +11,11 @@ export function Pipeline() {
   const edges = pipeline?.edges || [];
 
   const typeColors: Record<string, string> = {
-    source: "#a2e65d",
-    indicator: "#7fc4b4",
-    signal: "#e8c069",
-    position: "#c2b6d8",
-    pnl: "#c1503f",
+    source: "#3cf0a0",
+    indicator: "#22b8f0",
+    signal: "#f0c35a",
+    position: "#9b8cff",
+    pnl: "#f0566a",
   };
 
   const typeLabels: Record<string, string> = {
@@ -44,7 +44,7 @@ export function Pipeline() {
           <p className="text-xs font-mono text-[var(--fg-faint)] mb-4">Pipeline Graph</p>
           <div className="flex flex-wrap gap-3 items-center justify-center min-h-[300px]">
             {nodes.map((node) => (
-              <PipelineNode key={node.id} node={node} color={typeColors[node.type] || "#a2e65d"} label={typeLabels[node.type] || node.type} />
+              <PipelineNode key={node.id} node={node} color={typeColors[node.type] || "#3cf0a0"} label={typeLabels[node.type] || node.type} />
             ))}
           </div>
         </Card>
@@ -111,12 +111,12 @@ export function Pipeline() {
 
 function PipelineNode({ node, color, label }: { node: { id: string; label: string; type: string; status: string; rows?: number }; color: string; label: string }) {
   const statusColor = {
-    ok: "#8fce6a",
-    running: "#a2e65d",
-    failed: "#c1503f",
-    queued: "#4a463f",
-    skipped: "#4a463f",
-  }[node.status] || "#4a463f";
+    ok: "#2fd890",
+    running: "#3cf0a0",
+    failed: "#f0566a",
+    queued: "#34557a",
+    skipped: "#34557a",
+  }[node.status] || "#34557a";
 
   return (
     <div className="flex flex-col items-center gap-1 p-3 rounded border border-[var(--line)] bg-[var(--bg-2)] min-w-[100px]">

@@ -17,22 +17,22 @@ export function VolumeProfile({ data, height = 200, className }: VolumeProfilePr
       grid: { left: 50, right: 16, top: 16, bottom: 24, containLabel: true },
       xAxis: {
         type: "value",
-        axisLine: { lineStyle: { color: "#232120" } },
-        axisLabel: { color: "#8b857a", fontSize: 10, fontFamily: "var(--mono)" },
+        axisLine: { lineStyle: { color: "#14273f" } },
+        axisLabel: { color: "#6b8399", fontSize: 10, fontFamily: "var(--mono)" },
         splitLine: { show: false },
       },
       yAxis: {
         type: "category",
         data: data.map((d) => d.price.toFixed(2)),
-        axisLine: { lineStyle: { color: "#232120" } },
-        axisLabel: { color: "#8b857a", fontSize: 10, fontFamily: "var(--mono)" },
+        axisLine: { lineStyle: { color: "#14273f" } },
+        axisLabel: { color: "#6b8399", fontSize: 10, fontFamily: "var(--mono)" },
         splitLine: { show: false },
       },
       tooltip: {
         trigger: "axis",
-        backgroundColor: "#161513",
-        borderColor: "#2e2b28",
-        textStyle: { color: "#f4f2ed", fontFamily: "var(--mono)" },
+        backgroundColor: "#0a1a30",
+        borderColor: "#1d3654",
+        textStyle: { color: "#eefcf6", fontFamily: "var(--mono)" },
       },
       series: [
         {
@@ -41,8 +41,8 @@ export function VolumeProfile({ data, height = 200, className }: VolumeProfilePr
             value: [d.volume, d.price],
             itemStyle: {
               color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
-                { offset: 0, color: "rgba(162,230,93,0.6)" },
-                { offset: 1, color: "rgba(127,196,180,0.3)" },
+                { offset: 0, color: "rgba(60,240,160,0.6)" },
+                { offset: 1, color: "rgba(34,184,240,0.3)" },
               ]),
             },
           })),

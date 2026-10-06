@@ -23,20 +23,20 @@ export function EquityChart({ data, height = 250, className }: EquityChartProps)
       xAxis: {
         type: "category",
         data: times,
-        axisLine: { lineStyle: { color: "#232120" } },
-        axisLabel: { color: "#8b857a", fontSize: 10, fontFamily: "var(--mono)" },
+        axisLine: { lineStyle: { color: "#14273f" } },
+        axisLabel: { color: "#6b8399", fontSize: 10, fontFamily: "var(--mono)" },
         axisTick: { show: false },
       },
       yAxis: {
         type: "value",
-        splitLine: { lineStyle: { color: "#232120" } },
-        axisLabel: { color: "#8b857a", fontSize: 10, fontFamily: "var(--mono)" },
+        splitLine: { lineStyle: { color: "#14273f" } },
+        axisLabel: { color: "#6b8399", fontSize: 10, fontFamily: "var(--mono)" },
       },
       tooltip: {
         trigger: "axis",
-        backgroundColor: "#161513",
-        borderColor: "#2e2b28",
-        textStyle: { color: "#f4f2ed", fontFamily: "var(--mono)" },
+        backgroundColor: "#0a1a30",
+        borderColor: "#1d3654",
+        textStyle: { color: "#eefcf6", fontFamily: "var(--mono)" },
       },
       series: [
         {
@@ -44,11 +44,11 @@ export function EquityChart({ data, height = 250, className }: EquityChartProps)
           data: series,
           smooth: true,
           symbol: "none",
-          lineStyle: { color: "#a2e65d", width: 1.5 },
+          lineStyle: { color: "#3cf0a0", width: 1.5 },
           areaStyle: {
             color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-              { offset: 0, color: "rgba(162,230,93,0.15)" },
-              { offset: 1, color: "rgba(162,230,93,0)" },
+              { offset: 0, color: "rgba(60,240,160,0.15)" },
+              { offset: 1, color: "rgba(60,240,160,0)" },
             ]),
           },
         },

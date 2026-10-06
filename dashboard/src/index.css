@@ -3,30 +3,43 @@
 @tailwind utilities;
 
 :root {
-  --bg: #0a0a0a;
-  --bg-2: #100f0e;
-  --panel: #161513;
-  --panel-2: #1d1b19;
-  --panel-3: #232220;
-  --line: #232120;
-  --line-2: #2e2b28;
-  --fg: #f4f2ed;
-  --fg-dim: #cbc6bc;
-  --fg-faint: #8b857a;
-  --key: #a2e65d;
-  --gold: #e8c069;
-  --red: #c1503f;
-  --cyan: #7fc4b4;
-  --purple: #c2b6d8;
+  /* Palette aus dem FutureOrderFlowBot-Logo: Navy-Schwarz, Raster, Grün/Mint, Blau. */
+  --bg: #020d1e;
+  --bg-2: #051327;
+  --panel: #0a1a30;
+  --panel-2: #0e2139;
+  --panel-3: #132944;
+  --line: #14273f;
+  --line-2: #1d3654;
+  --fg: #eefcf6;
+  --fg-dim: #a9c3cf;
+  --fg-faint: #6b8399;
+  --key: #3cf0a0;
+  --mint: #9ff0d0;
+  --gold: #f0c35a;
+  --red: #f0566a;
+  --cyan: #22b8f0;
+  --purple: #9b8cff;
+  --glow-key: 0 0 18px rgba(60, 240, 160, 0.28);
+  --glow-cyan: 0 0 18px rgba(34, 184, 240, 0.25);
   --mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, monospace;
   --sans: ui-sans-serif, system-ui, -apple-system, sans-serif;
 }
 
 * { box-sizing: border-box; }
+/* Dunkle Formularelemente/Scrollbars in allen Browsern (Firefox ignoriert ::-webkit-scrollbar). */
+:root { color-scheme: dark; }
+* { scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
 html, body { height: 100% }
 body {
   margin: 0;
-  background: var(--bg);
+  /* Wie im Logo: leichtes Grün/Blau-Leuchten und feines Raster auf Navy. */
+  background:
+    radial-gradient(1200px 600px at 85% -10%, rgba(34, 184, 240, 0.10), transparent 60%),
+    radial-gradient(900px 500px at 10% 110%, rgba(60, 240, 160, 0.08), transparent 60%),
+    linear-gradient(rgba(29, 54, 84, 0.22) 1px, transparent 1px) 0 0 / 32px 32px,
+    linear-gradient(90deg, rgba(29, 54, 84, 0.22) 1px, transparent 1px) 0 0 / 32px 32px,
+    var(--bg);
   color: var(--fg);
   font: 13px/1.55 var(--sans);
   overflow: hidden;
@@ -37,7 +50,11 @@ b { font-weight: 500 }
 ::-webkit-scrollbar { width: 6px; height: 6px }
 ::-webkit-scrollbar-track { background: transparent }
 ::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 3px }
-::-webkit-scrollbar-thumb:hover { background: var(--fg-faint) }
+::-webkit-scrollbar-thumb:hover { background: var(--cyan) }
+
+/* Akzent-Leuchten wie im Logo, z. B. für Primär-Buttons und aktive Navigation. */
+.glow-key { box-shadow: var(--glow-key) }
+.glow-cyan { box-shadow: var(--glow-cyan) }
 
 /* Unbestimmter Ladebalken (Backtest-Chart: „Daten laden" / „Backtest läuft"). */
 @keyframes bt-indet {
@@ -49,4 +66,12 @@ b { font-weight: 500 }
   outline: 2px solid var(--key);
   outline-offset: 2px;
   border-radius: 2px;
+}
+/* Marken-Schriftzug „FutureOrderFlowBot“ im Farbverlauf des Logos (Weiß → Mint → Grün). */
+.brand-wordmark {
+  background: linear-gradient(90deg, #f2fff8 0%, #b9f7d9 45%, #5ee9a6 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  text-shadow: 0 0 12px rgba(94, 233, 166, 0.25);
 }

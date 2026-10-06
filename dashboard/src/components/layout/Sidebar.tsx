@@ -17,10 +17,12 @@ export function Sidebar() {
   const connectionStatus = useTradingStore((s) => s.connectionStatus);
 
   return (
-    <aside className="w-52 flex-shrink-0 border-r border-[var(--line)] bg-[var(--bg-2)] flex flex-col">
-      <div className="flex items-center gap-2 px-4 h-12 border-b border-[var(--line)]">
-        <span className="font-mono text-[var(--key)] font-bold text-sm tracking-wider">QANAT</span>
-        <span className="text-[var(--fg-faint)] text-xs">Trading</span>
+    <aside className="w-52 flex-shrink-0 border-r border-[var(--line)] bg-[rgba(5,19,39,0.88)] backdrop-blur flex flex-col">
+      <div className="flex items-center gap-2 px-3 h-12 border-b border-[var(--line)]">
+        <img src="/logo-icon.png" alt="" className="h-8 w-8 rounded-md flex-shrink-0" />
+        <span className="brand-wordmark font-bold text-[13px] leading-none tracking-tight whitespace-nowrap">
+          FutureOrderFlowBot
+        </span>
       </div>
 
       <nav className="flex-1 px-2 py-3 space-y-0.5 overflow-y-auto">
@@ -33,7 +35,7 @@ export function Sidebar() {
               className={cn(
                 "flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors",
                 isActive
-                  ? "bg-[var(--panel)] text-[var(--key)] font-medium"
+                  ? "bg-[var(--panel)] text-[var(--key)] font-medium shadow-[inset_2px_0_0_var(--key)]"
                   : "text-[var(--fg-dim)] hover:bg-[var(--panel)] hover:text-[var(--fg)]"
               )}
             >

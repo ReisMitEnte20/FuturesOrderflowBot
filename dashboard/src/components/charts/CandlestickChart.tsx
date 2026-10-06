@@ -7,8 +7,8 @@ interface CandlestickChartProps {
   className?: string;
 }
 
-const UP = "#a2e65d";
-const DOWN = "#c1503f";
+const UP = "#3cf0a0";
+const DOWN = "#f0566a";
 
 export function CandlestickChart({ data, height = 350, className }: CandlestickChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -33,7 +33,7 @@ export function CandlestickChart({ data, height = 350, className }: CandlestickC
     if (!chart) return;
 
     const hasVolume = data.length > 0 && data[0].volume !== undefined;
-    const axisLabel = { color: "#8b857a", fontSize: 10, fontFamily: "var(--mono)" };
+    const axisLabel = { color: "#6b8399", fontSize: 10, fontFamily: "var(--mono)" };
     const times = data.map((d) => d.timestamp);
 
     chart.setOption(
@@ -49,7 +49,7 @@ export function CandlestickChart({ data, height = 350, className }: CandlestickC
           type: "category",
           gridIndex: i,
           data: times,
-          axisLine: { lineStyle: { color: "#232120" } },
+          axisLine: { lineStyle: { color: "#14273f" } },
           axisLabel: i === 0 && hasVolume ? { show: false } : axisLabel,
           axisTick: { show: false },
         })),
@@ -58,15 +58,15 @@ export function CandlestickChart({ data, height = 350, className }: CandlestickC
           gridIndex: i,
           scale: true,
           splitNumber: i === 1 ? 2 : 5,
-          splitLine: { lineStyle: { color: "#232120" } },
+          splitLine: { lineStyle: { color: "#14273f" } },
           axisLabel,
         })),
         tooltip: {
           trigger: "axis",
           axisPointer: { type: "cross" },
-          backgroundColor: "#161513",
-          borderColor: "#2e2b28",
-          textStyle: { color: "#f4f2ed", fontFamily: "var(--mono)" },
+          backgroundColor: "#0a1a30",
+          borderColor: "#1d3654",
+          textStyle: { color: "#eefcf6", fontFamily: "var(--mono)" },
         },
         series: [
           {
@@ -85,7 +85,7 @@ export function CandlestickChart({ data, height = 350, className }: CandlestickC
                   yAxisIndex: 1,
                   data: data.map((d) => ({
                     value: d.volume,
-                    itemStyle: { color: d.close >= d.open ? "rgba(162,230,93,0.45)" : "rgba(193,80,63,0.45)" },
+                    itemStyle: { color: d.close >= d.open ? "rgba(60,240,160,0.45)" : "rgba(240,86,106,0.45)" },
                   })),
                 },
               ]

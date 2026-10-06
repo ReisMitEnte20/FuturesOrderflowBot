@@ -14,16 +14,16 @@ import {
 } from "@/lib/quantApi";
 
 const COL = {
-  key: "#a2e65d",
-  gold: "#e8c069",
-  red: "#c1503f",
-  cyan: "#7fc4b4",
-  purple: "#c2b6d8",
-  line: "#232120",
-  line2: "#2e2b28",
-  panel: "#161513",
-  fg: "#f4f2ed",
-  faint: "#8b857a",
+  key: "#3cf0a0",
+  gold: "#f0c35a",
+  red: "#f0566a",
+  cyan: "#22b8f0",
+  purple: "#9b8cff",
+  line: "#14273f",
+  line2: "#1d3654",
+  panel: "#0a1a30",
+  fg: "#eefcf6",
+  faint: "#6b8399",
 };
 
 const baseAxis = {
@@ -132,7 +132,7 @@ export function EquityDrawdownPanel({
             data: curve.map((p) => p.uwTotal),
             symbol: "none",
             lineStyle: { color: COL.red, width: 1 },
-            areaStyle: { color: "rgba(193,80,63,0.15)" },
+            areaStyle: { color: "rgba(240,86,106,0.15)" },
           },
         ],
       }
@@ -275,7 +275,7 @@ export function MonthlyReturnsTable({ monthly }: { monthly: QuantPeriodReturn[] 
                 const m = byKey.get(key);
                 if (!m) return <td key={i} className="px-2 py-1 text-right text-[var(--fg-faint)]">·</td>;
                 const intensity = Math.min(0.42, (Math.abs(m.return) / maxAbs) * 0.42);
-                const bg = m.return >= 0 ? `rgba(162,230,93,${intensity})` : `rgba(193,80,63,${intensity})`;
+                const bg = m.return >= 0 ? `rgba(60,240,160,${intensity})` : `rgba(240,86,106,${intensity})`;
                 return (
                   <td
                     key={i}
@@ -467,7 +467,7 @@ export function CostHeatmap({ block }: { block: QuantStressBlock }) {
                     </td>
                   );
                 const norm = max > min ? (cell.value - min) / (max - min) : 1;
-                const bg = cell.value >= 0 ? `rgba(162,230,93,${0.10 + norm * 0.32})` : `rgba(193,80,63,${0.10 + (1 - norm) * 0.32})`;
+                const bg = cell.value >= 0 ? `rgba(60,240,160,${0.10 + norm * 0.32})` : `rgba(240,86,106,${0.10 + (1 - norm) * 0.32})`;
                 return (
                   <td
                     key={s}

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/logo-banner.jpg" alt="FutureOrderFlowBot" width="100%" />
+</p>
+
 # FuturesOrderflowBot
 
 Modularer Futures-Orderflow-Trading-Bot (C# / .NET 8).

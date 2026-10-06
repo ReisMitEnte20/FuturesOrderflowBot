@@ -102,7 +102,10 @@ export function RithmicLoginModal({ open, onClose }: RithmicLoginModalProps) {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--line)]">
-          <h3 className="text-sm font-mono font-medium">Rithmic Login</h3>
+          <h3 className="text-sm font-mono font-medium flex items-center gap-2">
+            <img src="/logo-icon.png" alt="" className="h-6 w-6 rounded" />
+            Rithmic Login
+          </h3>
           <Button variant="default" size="sm" onClick={onClose}>
             <X className="h-4 w-4" />
           </Button>
