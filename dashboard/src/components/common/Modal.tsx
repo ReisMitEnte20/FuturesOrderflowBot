@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useCallback, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { Button } from "./Button";
 import { X } from "lucide-react";
 
@@ -47,8 +48,9 @@ interface ModalProps {
 export function Modal({ title, children, onClose }: ModalProps) {
   const { close } = useModal();
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose || close}>
+  // Per Portal in <body>, damit kein Vorfahr (backdrop-filter, transform) das Overlay einschränkt.
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 overflow-y-auto" onClick={onClose || close}>
       <div
         className="bg-[var(--panel)] border border-[var(--line)] rounded-lg w-[600px] max-w-[90vw]"
         onClick={(e) => e.stopPropagation()}
@@ -61,6 +63,7 @@ export function Modal({ title, children, onClose }: ModalProps) {
         </div>
         <div className="p-4">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

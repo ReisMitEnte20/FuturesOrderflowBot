@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { useTradingStore } from "@/stores/tradingStore";
 import { Button } from "@/components/common/Button";
 import { X } from "lucide-react";
@@ -95,8 +96,10 @@ export function RithmicLoginModal({ open, onClose }: RithmicLoginModalProps) {
     }
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={onClose}>
+  // Per Portal in <body>: Vorfahren mit backdrop-filter (z. B. die Topbar) würden sonst
+  // den Bezugsrahmen für position: fixed bilden und das Fenster abschneiden.
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 overflow-y-auto" onClick={onClose}>
       <div
         className="bg-[var(--panel)] border border-[var(--line)] rounded-lg w-[440px] max-w-[95vw]"
         onClick={(e) => e.stopPropagation()}
@@ -139,7 +142,7 @@ export function RithmicLoginModal({ open, onClose }: RithmicLoginModalProps) {
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-[1fr_1.4fr] gap-4">
             <div className="space-y-1.5">
               <label className="text-[10px] font-mono text-[var(--fg-faint)] uppercase tracking-wider">
                 System
@@ -190,6 +193,7 @@ export function RithmicLoginModal({ open, onClose }: RithmicLoginModalProps) {
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
