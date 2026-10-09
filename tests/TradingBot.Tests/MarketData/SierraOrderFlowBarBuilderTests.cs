@@ -321,4 +321,45 @@ public class SierraOrderFlowBarBuilderTests
         var act = () => SierraOrderFlowBarBuilder.StreamTicks(R(RangeTicks), "");
         act.Should().Throw<ArgumentException>().WithMessage("*Symbol*");
     }
+
+    // -------------------------------------------------------------------------------------------
+    // Holdout-Grenze (Befund A): Der Tick-Filter ist zeitstempel-INKLUSIVE (ts > toUtc -> überspringen).
+    // Ein Tick exakt auf dem Bucket-Start (= Holdout-Start) würde daher eine Kerze mit OpenTime == Grenze
+    // erzeugen. Die Entwicklungs-Ladegrenze (Holdout-Start − 1 Tick) muss diesen Bucket sicher ausschließen,
+    // ohne den vorherigen (Entwicklungs-)Bucket zu verändern.
+
+    // Bucket 23:00 (2 Ticks) + ein Tick EXAKT auf der Bucket-Grenze 23:01:00.
+    private const string BoundaryTicks = Header + "\n" +
+        "2025/12/28, 23:00:05, 100.00, 100.25, 100.00, 100.00, 5, 1, 0, 5\n" +
+        "2025/12/28, 23:00:30, 100.25, 100.50, 100.25, 100.25, 3, 1, 3, 0\n" +
+        "2025/12/28, 23:01:00, 100.50, 100.75, 100.50, 100.50, 2, 1, 0, 2\n";   // exakt auf der Grenze
+
+    [Fact]
+    public void ToUtc_is_timestamp_inclusive_a_tick_on_the_boundary_forms_a_bar_at_the_boundary()
+    {
+        var boundary = new DateTimeOffset(2025, 12, 28, 23, 1, 0, TimeSpan.Zero);
+        // toUtc == Grenze: der Grenz-Tick wird eingeschlossen -> ein zweiter Bucket mit OpenTime == Grenze.
+        var inclusive = new SierraOrderFlowBarBuilder()
+            .Build(R(BoundaryTicks), "MES", TimeSpan.FromMinutes(1), toUtc: boundary, buildFootprint: false);
+        inclusive.Bars.Should().HaveCount(2);
+        inclusive.Bars[^1].Bar.OpenTime.Should().Be(boundary); // <-- genau der unerwünschte Leak-Fall
+    }
+
+    [Fact]
+    public void DevLoadBound_one_tick_before_boundary_excludes_the_boundary_bucket_but_keeps_the_prior_bar()
+    {
+        var boundary = new DateTimeOffset(2025, 12, 28, 23, 1, 0, TimeSpan.Zero);
+        var devLoad = boundary.AddTicks(-1); // = HoldoutSplit.DevelopmentLoadToUtc
+
+        var dev = new SierraOrderFlowBarBuilder()
+            .Build(R(BoundaryTicks), "MES", TimeSpan.FromMinutes(1), toUtc: devLoad, buildFootprint: false);
+
+        // Nur der Entwicklungs-Bucket bleibt übrig; keine Kerze mit OpenTime >= Holdout-Start.
+        dev.Bars.Should().HaveCount(1);
+        dev.Bars[0].Bar.OpenTime.Should().Be(new DateTimeOffset(2025, 12, 28, 23, 0, 0, TimeSpan.Zero));
+        dev.Bars.Should().OnlyContain(b => b.Bar.OpenTime < boundary);
+        // Der Entwicklungs-Bucket selbst ist unverändert vollständig (beide Last-Ticks vor der Grenze).
+        dev.Bars[0].Bar.Close.Should().Be(100.25m);
+        dev.Bars[0].Bar.High.Should().Be(100.25m);  // OHLC aus Last-Preisen (100.00, 100.25)
+    }
 }

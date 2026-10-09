@@ -212,6 +212,10 @@ public sealed record QuantWalkForwardResponse
     public bool HoldoutEvaluated { get; init; }
 
     public IReadOnlyList<long> OosT { get; init; } = Array.Empty<long>();
+    /// <summary>Startanker (ms) jedes OOS-Punkts — die Untergrenze des von <see cref="OosT"/> abgeschlossenen
+    /// Renditeintervalls. An Fold-Anfängen der Fenster-/Warmup-Rand, sonst der vorherige Punkt. Ermöglicht einen
+    /// intervallgleichen (nicht nur endzeitpunktgleichen) Vergleich mehrerer Strategien. Leer bei Alt-Ergebnissen.</summary>
+    public IReadOnlyList<long> OosStartT { get; init; } = Array.Empty<long>();
     public IReadOnlyList<double> OosEquity { get; init; } = Array.Empty<double>();
     public IReadOnlyList<QuantMetricDto> OosMetrics { get; init; } = Array.Empty<QuantMetricDto>();
 
@@ -249,10 +253,18 @@ public sealed record QuantMonteCarloResponse
     public double? ShareOfRunsBreachingBarrier { get; init; }
     public double? CapitalBarrier { get; init; }
 
-    /// <summary>Simulationsband der Kapitalpfade (P5/Median/P95 je Schritt) — nur bei aktivierter Pfadaufzeichnung.</summary>
+    /// <summary>Simulationsband der Kapitalpfade (P5/Median/P95 je Schritt) — aus ALLEN Läufen. Index 0 = Startkapital.</summary>
     public IReadOnlyList<double> BandP5 { get; init; } = Array.Empty<double>();
     public IReadOnlyList<double> BandMedian { get; init; } = Array.Empty<double>();
     public IReadOnlyList<double> BandP95 { get; init; } = Array.Empty<double>();
+
+    /// <summary>Begrenzte Auswahl tatsächlich berechneter Kapitalpfade (Darstellung). Jeder Pfad: Horizont+1 Punkte, Start = Startkapital.</summary>
+    public IReadOnlyList<IReadOnlyList<double>> Paths { get; init; } = Array.Empty<IReadOnlyList<double>>();
+    public double InitialCapital { get; init; }
+    /// <summary>Zahl der dargestellten Pfade (Darstellungsgrenze).</summary>
+    public int DisplayedPaths { get; init; }
+    /// <summary>Zahl aller berechneten Läufe, aus denen Band und Kennzahlen stammen.</summary>
+    public int TotalPaths { get; init; }
 
     public IReadOnlyList<string> Assumptions { get; init; } = Array.Empty<string>();
     public IReadOnlyList<string> Notes { get; init; } = Array.Empty<string>();

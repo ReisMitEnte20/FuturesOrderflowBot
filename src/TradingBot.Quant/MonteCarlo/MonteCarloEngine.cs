@@ -36,6 +36,14 @@ public sealed record MonteCarloOptions
 
     /// <summary>Obergrenze der Rechenzeit; danach wird mit den bis dahin fertigen Läufen abgeschlossen.</summary>
     public TimeSpan? TimeLimit { get; init; }
+
+    /// <summary>
+    /// Anzahl vollständiger Kapitalpfade, die für die Darstellung (Fächerchart) aufbewahrt werden. 0 = keine
+    /// Pfad-/Bandaufzeichnung. Das Perzentilband (P5/Median/P95 je Schritt) wird — sofern &gt; 0 — aus ALLEN
+    /// berechneten Läufen gebildet; nur die AUFBEWAHRTEN Einzelpfade sind auf diese Zahl begrenzt (reine
+    /// Darstellungsgrenze). Kennzahlen stammen unverändert aus allen Läufen.
+    /// </summary>
+    public int RecordedPaths { get; init; }
 }
 
 /// <summary>Verteilungskennzahlen einer simulierten Größe.</summary>
@@ -93,6 +101,17 @@ public sealed record MonteCarloResult
     /// <summary>Für den Bericht verpflichtende Einordnung des Verfahrens.</summary>
     public required IReadOnlyList<string> Assumptions { get; init; }
     public IReadOnlyList<string> Notes { get; init; } = Array.Empty<string>();
+
+    // --- Darstellungsdaten für das Fächerchart (nur bei RecordedPaths > 0 befüllt) ---
+    /// <summary>Perzentilband der Kapitalpfade je Schritt (aus ALLEN Läufen), Index 0 = Startkapital.</summary>
+    public IReadOnlyList<double> BandP5 { get; init; } = Array.Empty<double>();
+    public IReadOnlyList<double> BandMedian { get; init; } = Array.Empty<double>();
+    public IReadOnlyList<double> BandP95 { get; init; } = Array.Empty<double>();
+    /// <summary>Eine begrenzte Auswahl tatsächlich berechneter Kapitalpfade (Darstellungsgrenze). Jeder Pfad
+    /// beginnt beim Startkapital (Index 0) und hat Horizont+1 Punkte.</summary>
+    public IReadOnlyList<IReadOnlyList<double>> SamplePaths { get; init; } = Array.Empty<IReadOnlyList<double>>();
+    /// <summary>Zahl der insgesamt berechneten Läufe, aus denen das Band gebildet wurde (= CompletedIterations).</summary>
+    public int PathRunsComputed { get; init; }
 }
 
 /// <summary>
@@ -142,6 +161,19 @@ public static class MonteCarloEngine
         int belowStart = 0, breaches = 0;
         bool stopped = false;
 
+        // Pfad-/Bandaufzeichnung für das Fächerchart (nur wenn angefordert). Das Band bildet sich aus ALLEN
+        // Läufen (per-Schritt-Werte), die aufbewahrten Einzelpfade sind auf RecordedPaths begrenzt.
+        bool record = options.RecordedPaths > 0;
+        int steps = horizon + 1;
+        List<double>[]? perStep = null;
+        List<double[]>? samplePaths = null;
+        if (record)
+        {
+            perStep = new List<double>[steps];
+            for (int s = 0; s < steps; s++) perStep[s] = new List<double>(options.Iterations);
+            samplePaths = new List<double[]>(Math.Min(options.RecordedPaths, options.Iterations));
+        }
+
         var sw = System.Diagnostics.Stopwatch.StartNew();
         int i = 0;
         for (; i < options.Iterations; i++)
@@ -157,7 +189,19 @@ public static class MonteCarloEngine
             var path = Resampling.BuildIndexPath(options.Method, n, rng, horizon, blockLength);
             var sample = Resampling.Apply(observations, path);
 
-            var (final, maxDd, streak, breached) = Simulate(sample, options);
+            double final, maxDd; int streak; bool breached;
+            if (record)
+            {
+                var full = SimulateFull(sample, options);
+                final = full.Final; maxDd = full.MaxDrawdown; streak = full.LosingStreak; breached = full.BreachedBarrier;
+                var eq = full.Equity;
+                for (int s = 0; s < steps && s < eq.Length; s++) perStep![s].Add(eq[s]);
+                if (samplePaths!.Count < options.RecordedPaths) samplePaths.Add(eq);
+            }
+            else
+            {
+                (final, maxDd, streak, breached) = Simulate(sample, options);
+            }
             finals.Add(final);
             dds.Add(maxDd);
             streaks.Add(streak);
@@ -169,6 +213,23 @@ public static class MonteCarloEngine
         progress?.Report(1.0);
 
         int done = finals.Count;
+
+        IReadOnlyList<double> bandP5 = Array.Empty<double>(), bandMedian = Array.Empty<double>(), bandP95 = Array.Empty<double>();
+        IReadOnlyList<IReadOnlyList<double>> paths = Array.Empty<IReadOnlyList<double>>();
+        if (record && done > 0)
+        {
+            var p5 = new double[steps]; var pm = new double[steps]; var p95 = new double[steps];
+            for (int s = 0; s < steps; s++)
+            {
+                var col = perStep![s];
+                p5[s] = Stats.Percentile(col, 0.05);
+                pm[s] = Stats.Percentile(col, 0.50);
+                p95[s] = Stats.Percentile(col, 0.95);
+            }
+            bandP5 = p5; bandMedian = pm; bandP95 = p95;
+            paths = samplePaths!.Select(p => (IReadOnlyList<double>)p).ToList();
+        }
+
         return new MonteCarloResult
         {
             Options = options,
@@ -183,7 +244,9 @@ public static class MonteCarloEngine
             ShareOfRunsBelowStart = done == 0 ? double.NaN : (double)belowStart / done,
             ShareOfRunsBreachingBarrier = options.CapitalBarrier is null || done == 0 ? null : (double)breaches / done,
             Assumptions = assumptions,
-            Notes = notes
+            Notes = notes,
+            BandP5 = bandP5, BandMedian = bandMedian, BandP95 = bandP95,
+            SamplePaths = paths, PathRunsComputed = done
         };
     }
 
@@ -284,6 +347,38 @@ public static class MonteCarloEngine
             if (options.CapitalBarrier is { } barrier && capital <= barrier) breached = true;
         }
         return (capital, maxDd, maxStreak, breached);
+    }
+
+    /// <summary>Wie <see cref="Simulate"/>, liefert zusätzlich den vollständigen Kapitalverlauf (Index 0 = Startkapital).</summary>
+    internal static (double Final, double MaxDrawdown, int LosingStreak, bool BreachedBarrier, double[] Equity) SimulateFull(
+        IReadOnlyList<double> sample, MonteCarloOptions options)
+    {
+        double capital = options.InitialCapital;
+        double peak = capital;
+        double maxDd = 0;
+        int streak = 0, maxStreak = 0;
+        bool breached = false;
+        var equity = new double[sample.Count + 1];
+        equity[0] = capital;
+
+        for (int i = 0; i < sample.Count; i++)
+        {
+            double v = sample[i];
+            capital = options.Accumulation == AccumulationMode.Additive ? capital + v : capital * (1.0 + v);
+
+            if (v < 0) { streak++; if (streak > maxStreak) maxStreak = streak; }
+            else streak = 0;
+
+            if (capital > peak) peak = capital;
+            if (peak > 0)
+            {
+                double dd = (peak - capital) / peak;
+                if (dd > maxDd) maxDd = dd;
+            }
+            if (options.CapitalBarrier is { } barrier && capital <= barrier) breached = true;
+            equity[i + 1] = capital;
+        }
+        return (capital, maxDd, maxStreak, breached, equity);
     }
 
     private static IReadOnlyList<string> BuildAssumptions(MonteCarloOptions o, int n, int horizon, int blockLength)
