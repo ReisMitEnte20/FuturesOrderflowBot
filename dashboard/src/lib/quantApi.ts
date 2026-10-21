@@ -106,7 +106,7 @@ export interface QuantWalkForwardResponse {
   selectionMetric: string; mode: string; totalBars: number;
   folds: QuantFold[];
   holdoutFromT: number | null; holdoutToT: number | null; holdoutEvaluated: boolean;
-  oosT: number[]; oosEquity: number[]; oosMetrics: QuantMetric[];
+  oosT: number[]; oosStartT?: number[]; oosEquity: number[]; oosMetrics: QuantMetric[];
   candidateSharpes: Record<string, number | null>;
   campaignId: string | null; trialsRecorded: number; notes: string[];
 }
@@ -123,6 +123,9 @@ export interface QuantMonteCarloResponse {
   blockLength: number; horizon: number; observations: number;
   finalCapital: QuantDistribution | null; maxDrawdown: QuantDistribution | null; losingStreak: QuantDistribution | null;
   shareOfRunsBelowStart: number; shareOfRunsBreachingBarrier: number | null; capitalBarrier: number | null;
+  // Fächerchart: Band aus allen Läufen (Index 0 = Startkapital) + begrenzte Auswahl echter Pfade.
+  bandP5: number[]; bandMedian: number[]; bandP95: number[];
+  paths: number[][]; initialCapital: number; displayedPaths: number; totalPaths: number;
   assumptions: string[]; notes: string[];
 }
 
@@ -241,6 +244,141 @@ export interface HoldoutEvaluateRequest {
   warmupBars: number; confirm: boolean;
 }
 
+// --- Research-Lauf (eine Ablaufsteuerung koordiniert alle Prüfungen) ---
+
+export type ResearchStepStatus =
+  | "Pending" | "Running" | "Completed" | "NotComputable" | "Failed" | "Cancelled" | "Skipped";
+
+export interface ResearchStepState {
+  key: string; label: string; status: ResearchStepStatus;
+  reason?: string | null; dataBasis?: string | null;
+  startedUtc?: string | null; completedUtc?: string | null;
+}
+
+export interface ResearchStartRequest {
+  run: RunRequest;
+  options: QuantEvaluationOptions;
+  campaign: CampaignInput;
+  candidates: Record<string, string>[];
+  selectionMetric: string;
+  mode: string; trainBars: number; testBars: number; stepBars?: number | null;
+  labelSpanBars: number; embargoBars: number; warmupBars: number; holdoutFraction: number;
+  monteCarloSource: string; monteCarloMethod: string; monteCarloIterations: number;
+  seed: number; blockLength?: number | null; capitalBarrier?: number | null;
+  robustnessMetric: string;
+  overfittingBlocks: number; estimateEffectiveTrials: boolean;
+  benchmarkId?: string | null; strategyIsFullyFunded: boolean;
+  isDemo: boolean;
+}
+
+export interface ResearchHoldoutProposal {
+  candidateTrialId?: string | null; candidateReference?: string | null;
+  parameters: Record<string, string>; reason: string;
+  holdoutFrom?: string | null; holdoutTo?: string | null; warmupBars: number;
+  available: boolean; unavailableReason?: string | null;
+  existing?: HoldoutEvaluationResponse | null;
+}
+
+export interface ResearchRunRecord {
+  runId: string; campaignId?: string | null; config: ResearchStartRequest;
+  dataSha?: string | null; isDemo: boolean; createdUtc: string; completedUtc?: string | null;
+  status: ResearchStepStatus; statusReason?: string | null; jobId?: string | null;
+  // Herkunft/Datenbereiche (Befund B) + Leakage-Schutz (Befund A)
+  dataFrom?: string | null; dataTo?: string | null;
+  developmentToUtc?: string | null; holdoutFrom?: string | null; holdoutTo?: string | null;
+  totalBars: number; developmentBars: number; holdoutBars: number;
+  devRun?: RunRequest | null;
+  steps: ResearchStepState[];
+  analysis: QuantAnalyzeResponse | null;
+  walkForward: QuantWalkForwardResponse | null;
+  robustness: QuantRobustnessResponse | null;
+  monteCarlo: QuantMonteCarloResponse | null;
+  overfitting: QuantOverfittingResponse | null;
+  holdoutProposal: ResearchHoldoutProposal | null;
+  notes: string[];
+  // Mehrstrategie-Vergleich: Zuordnung zu Gruppe/Familie
+  campaignGroupId?: string | null; groupKey?: string | null;
+  familyKey?: string | null; familyName?: string | null;
+}
+
+export interface ResearchRunResponse {
+  ok: boolean; error?: string | null; alreadyRunning: boolean;
+  jobId?: string | null; run: ResearchRunRecord | null;
+}
+
+// --- Mehrstrategie-Vergleich (eine Kampagne, mehrere Strategie-Familien) ---
+
+export interface ResearchFamilyInput {
+  key: string; strategyId: string; name?: string | null;
+  candidates: Record<string, string>[];
+}
+
+export interface ResearchCampaignStartRequest {
+  run: RunRequest; options: QuantEvaluationOptions; campaign: CampaignInput;
+  families: ResearchFamilyInput[];
+  selectionMetric: string;
+  mode: string; trainBars: number; testBars: number; stepBars?: number | null;
+  labelSpanBars: number; embargoBars: number; warmupBars: number; holdoutFraction: number;
+  monteCarloSource: string; monteCarloMethod: string; monteCarloIterations: number;
+  seed: number; blockLength?: number | null; capitalBarrier?: number | null;
+  robustnessMetric: string; overfittingBlocks: number; estimateEffectiveTrials: boolean;
+  benchmarkId?: string | null; strategyIsFullyFunded: boolean; isDemo: boolean;
+}
+
+export interface ComparisonFamilyRow {
+  familyKey: string; familyName: string; strategyId: string;
+  runId?: string | null; status: ResearchStepStatus;
+  candidates: number; selectedCandidate?: string | null;
+  oosObservations: number;
+  oosReturn?: number | null; oosSharpe?: number | null; oosMaxDrawdown?: number | null;
+  mcMedianFinal?: number | null; mcP5Final?: number | null; mcP95Final?: number | null;
+  mcShareBelowStart?: number | null; mcMedianMaxDrawdown?: number | null; mcMedianLosingStreak?: number | null;
+  pbo?: number | null; psr?: number | null; dsr?: number | null;
+  sharedOosEquity?: number[] | null;
+}
+
+export interface ComparisonDifference {
+  left: string; right: string;
+  deltaMedianFinal: number; deltaP5Final: number; deltaP95Final: number;
+  shareLeftBeatsRight: number; shareTie: number;
+}
+
+export interface ResearchComparison {
+  available: boolean; unavailableReason?: string | null;
+  commonObservations: number; fromT?: number | null; toT?: number | null;
+  frequency: string; sufficient: boolean; minObservations: number;
+  insufficientReason?: string | null; excludedIntervalMismatch: number;
+  axisT: number[]; initialCapital: number;
+  method: string; iterations: number; seed: number; blockLength: number;
+  families: ComparisonFamilyRow[]; differences: ComparisonDifference[];
+  assumptions: string[]; notes: string[];
+}
+
+export interface ResearchGroupHoldout {
+  groupId: string; reserved: boolean; consumed: boolean;
+  selectedFamilyKey?: string | null; selectedCampaignId?: string | null;
+  candidateTrialId?: string | null; candidateReference?: string | null;
+  evaluationReference?: string | null; reservedUtc?: string | null; consumedUtc?: string | null;
+}
+
+export interface ResearchCampaignResponse {
+  ok: boolean; error?: string | null; alreadyRunning: boolean;
+  groupId?: string | null;
+  families: ResearchRunRecord[];
+  comparison?: ResearchComparison | null;
+  holdout?: ResearchGroupHoldout | null;
+}
+
+export interface ResearchGroupHoldoutResponse {
+  ok: boolean; error?: string | null; groupId?: string | null;
+  holdout?: ResearchGroupHoldout | null;
+  evaluation?: HoldoutEvaluationResponse | null;
+}
+
+export interface ResearchCampaignSummary {
+  groupId: string; name: string; createdUtc: string; families: number; status: ResearchStepStatus;
+}
+
 async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: "POST",
@@ -288,6 +426,26 @@ export const quantApi = {
     get<HoldoutEvaluationResponse>(`/campaigns/${encodeURIComponent(campaignId)}/holdout`, signal),
   evaluateHoldout: (campaignId: string, req: HoldoutEvaluateRequest, signal?: AbortSignal) =>
     post<HoldoutEvaluationResponse>(`/campaigns/${encodeURIComponent(campaignId)}/holdout/evaluate`, req, signal),
+
+  // Research-Ablaufsteuerung
+  startResearch: (req: ResearchStartRequest, signal?: AbortSignal) =>
+    post<ResearchRunResponse>("/research/start", req, signal),
+  research: (runId: string, signal?: AbortSignal) =>
+    get<ResearchRunResponse>(`/research/${encodeURIComponent(runId)}`, signal),
+  researchList: (campaignId?: string | null, signal?: AbortSignal) =>
+    get<ResearchRunRecord[]>(`/research${campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : ""}`, signal),
+  cancelResearch: (runId: string) => post<{ cancelled: boolean }>(`/research/${encodeURIComponent(runId)}/cancel`, {}),
+
+  // Mehrstrategie-Vergleich
+  startCampaign: (req: ResearchCampaignStartRequest, signal?: AbortSignal) =>
+    post<ResearchCampaignResponse>("/research/campaign/start", req, signal),
+  campaign: (groupId: string, signal?: AbortSignal) =>
+    get<ResearchCampaignResponse>(`/research/campaign/${encodeURIComponent(groupId)}`, signal),
+  campaignList: (signal?: AbortSignal) =>
+    get<ResearchCampaignSummary[]>("/research/campaign", signal),
+  evaluateGroupHoldout: (groupId: string, familyKey: string, request: HoldoutEvaluateRequest, signal?: AbortSignal) =>
+    post<ResearchGroupHoldoutResponse>(`/research/campaign/${encodeURIComponent(groupId)}/holdout/evaluate`,
+      { familyKey, request }, signal),
 };
 
 /**

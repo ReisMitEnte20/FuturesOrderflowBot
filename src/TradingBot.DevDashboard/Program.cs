@@ -28,6 +28,13 @@ builder.Services.AddSingleton(backtestApi); // OHLC-BACKTEST (Simulation-only, k
 // auf den Ergebnissen der OHLC-Engine. Keine Broker-/Marktdaten-Calls, keine Orders.
 builder.Services.AddSingleton(new QuantApiService(backtestApi, repoRoot));
 builder.Services.AddSingleton<QuantJobManager>();
+// RESEARCH-ORCHESTRIERUNG — kettet die vorhandenen Quant-Schritte zu EINEM Lauf; Ergebnisse werden dauerhaft
+// unter artifacts/quant/registry/research abgelegt. Kein automatischer Holdout-Verbrauch, keine Broker-Calls.
+builder.Services.AddSingleton(sp => new ResearchRunStore(sp.GetRequiredService<QuantApiService>().RegistryDir));
+builder.Services.AddSingleton(sp => new ResearchOrchestrator(
+    sp.GetRequiredService<QuantApiService>(),
+    sp.GetRequiredService<QuantJobManager>(),
+    sp.GetRequiredService<ResearchRunStore>()));
 
 // JSON: Enums als Strings (z. B. ExitReason) für das React-Frontend.
 builder.Services.ConfigureHttpJsonOptions(o =>
@@ -189,8 +196,18 @@ quant.MapGet("/trials/{id}", async (string id, QuantApiService s, CancellationTo
 // erzeugt keinen weiteren Lauf.
 quant.MapGet("/campaigns/{id}/holdout", async (string id, QuantApiService s, CancellationToken ct) =>
     Results.Ok(await s.GetHoldoutAsync(id, ct)));
-quant.MapPost("/campaigns/{id}/holdout/evaluate", async (string id, HoldoutEvaluateRequest body, QuantApiService s, QuantJobManager jobs, CancellationToken ct) =>
+quant.MapPost("/campaigns/{id}/holdout/evaluate", async (string id, HoldoutEvaluateRequest body, QuantApiService s, ResearchOrchestrator orch, QuantJobManager jobs, CancellationToken ct) =>
 {
+    // Gehört die Kampagne zu einer Vergleichs-Gruppe, darf ihr finaler Holdout NUR über die Gruppensperre laufen —
+    // der Familien-/Direkt-Endpunkt kann den Gruppenschutz nicht umgehen.
+    if (await orch.IsGroupGovernedCampaignAsync(id, ct))
+        return Results.BadRequest(new HoldoutEvaluationResponse
+        {
+            Ok = false, CampaignId = id, State = "Rejected",
+            Error = "Register [GROUP_GOVERNED]: Diese Kampagne gehört zu einer Vergleichs-Gruppe. Der finale Holdout wird " +
+                    "ausschließlich über POST /api/quant/research/campaign/{groupId}/holdout/evaluate (mit familyKey) ausgewertet — " +
+                    "ein Holdout je Gruppe, kein Umgehen über den Familien-Endpunkt."
+        });
     var res = await s.EvaluateHoldoutAsync(id, body, jobs, ct);
     return res.Ok ? Results.Ok(res) : Results.BadRequest(res);
 });
@@ -203,6 +220,46 @@ quant.MapPost("/campaigns/{id}/holdout/consume", (string id) =>
         Error = "Register [HOLDOUT_CONSUME_DISABLED]: Der finale Holdout wird ausschließlich über " +
                 "POST /api/quant/campaigns/{id}/holdout/evaluate ausgewertet und dabei einmalig verbraucht."
     }));
+
+// RESEARCH-LAUF — EINE Ablaufsteuerung koordiniert alle passenden Prüfungen automatisch (Daten/Backtest/
+// Benchmark → Walk-forward → Robustheit → Monte Carlo → Overfitting → Holdout-Vorbereitung). Run-Id + Status
+// + Teilergebnisse werden dauerhaft gespeichert; ein zweiter/paralleler Start liefert den laufenden Lauf zurück.
+// Der finale Holdout wird NICHT automatisch verbraucht (separate Bestätigung über /holdout/evaluate).
+quant.MapPost("/research/start", async (ResearchStartRequest body, ResearchOrchestrator orch, CancellationToken ct) =>
+{
+    var res = await orch.StartAsync(body, ct);
+    return res.Ok ? Results.Ok(res) : Results.BadRequest(res);
+});
+quant.MapGet("/research", async (string? campaignId, ResearchOrchestrator orch, CancellationToken ct) =>
+    Results.Ok(await orch.ListAsync(campaignId, ct)));
+quant.MapGet("/research/{id}", async (string id, ResearchOrchestrator orch, CancellationToken ct) =>
+{
+    var res = await orch.GetAsync(id, ct);
+    return res.Ok ? Results.Ok(res) : Results.NotFound(res);
+});
+quant.MapPost("/research/{id}/cancel", (string id, ResearchOrchestrator orch) =>
+    Results.Ok(new { cancelled = orch.Cancel(id) }));
+
+// Mehrstrategie-Vergleich: EINE Kampagne, mehrere Familien; jede Familie durchläuft die Einzel-Pipeline.
+quant.MapPost("/research/campaign/start", async (ResearchCampaignStartRequest body, ResearchOrchestrator orch, CancellationToken ct) =>
+{
+    var res = await orch.StartCampaignAsync(body, ct);
+    return res.Ok ? Results.Ok(res) : Results.BadRequest(res);
+});
+quant.MapGet("/research/campaign", async (ResearchOrchestrator orch, CancellationToken ct) =>
+    Results.Ok(await orch.ListCampaignsAsync(ct)));
+quant.MapGet("/research/campaign/{groupId}", async (string groupId, ResearchOrchestrator orch, CancellationToken ct) =>
+{
+    var res = await orch.GetCampaignAsync(groupId, ct);
+    return res.Ok ? Results.Ok(res) : Results.NotFound(res);
+});
+// Finale Holdout-Auswertung EINER Familie über die GRUPPENSPERRE (ein gemeinsamer Holdout je Gruppe, kein
+// Kandidatenwechsel, höchstens eine Reservierung — auch bei parallelen Starts).
+quant.MapPost("/research/campaign/{groupId}/holdout/evaluate", async (string groupId, ResearchGroupHoldoutEvaluateRequest body, ResearchOrchestrator orch, QuantJobManager jobs, CancellationToken ct) =>
+{
+    var res = await orch.EvaluateGroupHoldoutAsync(groupId, body.FamilyKey, body.Request, jobs, ct);
+    return res.Ok ? Results.Ok(res) : Results.BadRequest(res);
+});
 
 // Paper-Research-Einträge (Quelle, Hypothese, Regeln, dokumentierte Abweichungen).
 quant.MapGet("/papers", async (QuantApiService s, CancellationToken ct) => Results.Ok(await s.ListPapersAsync(ct)));

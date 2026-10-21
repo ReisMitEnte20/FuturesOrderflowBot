@@ -57,6 +57,13 @@ public sealed record WalkForwardRunResult
     public ReturnSeries OutOfSampleReturns { get; init; } = ReturnSeries.Empty;
 
     /// <summary>
+    /// Startanker jeder OOS-Rendite (untere Intervallgrenze): am Fold-Anfang der Testfensterstart, sonst der
+    /// vorherige OOS-Endzeitpunkt. Gleiche Länge/Reihenfolge wie <see cref="OutOfSampleReturns"/>. Ermöglicht einen
+    /// intervallgleichen (nicht nur endzeitpunktgleichen) Vergleich mehrerer Strategien.
+    /// </summary>
+    public IReadOnlyList<DateTimeOffset> OutOfSampleStartTimes { get; init; } = Array.Empty<DateTimeOffset>();
+
+    /// <summary>
     /// Kandidaten-Renditematrix für die spätere PBO-Analyse: je Kandidat die verkettete
     /// Renditereihe über ALLE Testfenster (gleiche Länge, gleiche Zeitachse).
     /// </summary>
@@ -90,6 +97,7 @@ public static class WalkForwardRunner
         var foldResults = new List<WalkForwardFoldResult>();
         var notes = new List<string>(plan.Notes);
         var oosTimes = new List<DateTimeOffset>();
+        var oosStarts = new List<DateTimeOffset>();
         var oosReturns = new List<double>();
         var oosLevels = new List<double>();
         var perCandidate = candidates.ToDictionary(c => c.Id, _ => new List<double>());
@@ -138,6 +146,9 @@ public static class WalkForwardRunner
                 if (te.Returns is not null)
                     for (int i = 0; i < te.Returns.Count; i++)
                     {
+                        // Startanker: am Fold-Anfang der Testfensterstart (explizite Intervall-Untergrenze über den
+                        // Fold-Wechsel hinweg), sonst der vorherige OOS-Endzeitpunkt DIESES Folds.
+                        oosStarts.Add(i == 0 ? fold.Test.FromTime : te.Returns.Timestamps[i - 1]);
                         oosTimes.Add(te.Returns.Timestamps[i]);
                         oosReturns.Add(te.Returns.Returns[i]);
                         equity *= 1.0 + te.Returns.Returns[i];
@@ -183,6 +194,7 @@ public static class WalkForwardRunner
             SelectionMetric = selectionMetric,
             Direction = direction,
             OutOfSampleReturns = oos,
+            OutOfSampleStartTimes = oosStarts,
             CandidateTestReturns = perCandidate.ToDictionary(k => k.Key, v => (IReadOnlyList<double>)v.Value),
             Notes = notes
         };

@@ -123,6 +123,11 @@ public sealed class BacktestApiService
             {
                 new StrategyParamDef("FastPeriod", "Schneller SMA (Bars)", "int", "9"),
                 new StrategyParamDef("SlowPeriod", "Langsamer SMA (Bars)", "int", "21"),
+            }),
+        new StrategyDef("donchian", "Donchian-Ausbruch (Referenz)",
+            "Deterministischer OHLC-Kanalausbruch — ausdrücklich REFERENZ für den Mehrstrategie-Vergleich, keine Edge-Behauptung.", true, new[]
+            {
+                new StrategyParamDef("Channel", "Kanal-Länge (Bars)", "int", "20"),
             })
     };
 
@@ -335,6 +340,7 @@ public sealed class BacktestApiService
         var strategy = req.Strategy.ToLowerInvariant() switch
         {
             "movingaverage" or "ma" or "sma" => (IStrategy)new MovingAverageDummyStrategy(),
+            "donchian" or "breakout" => new DonchianBreakoutStrategy(),
             _ => new MovingAverageDummyStrategy()
         };
         strategy.Initialize(new StrategyExecutionContext
