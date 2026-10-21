@@ -1025,11 +1025,20 @@ function ComparisonView({ campaign, focusRunId, running, onFocus }: {
 
       {cmp?.available && (
         <>
-          <Section title="Gemeinsame Out-of-Sample-Kapitalkurven" basis={`Startkapital ${fmtMoney(cmp.initialCapital)} · gemeinsame Zeitachse (${cmp.commonObservations} Punkte)`}>
+          <Section title="Gemeinsame Out-of-Sample-Kapitalkurven & Drawdown" basis={`Startkapital ${fmtMoney(cmp.initialCapital)} · gemeinsame Zeitachse (${cmp.commonObservations} Punkte)`}>
             <SharedEquityChart cmp={cmp} />
+            <div className="mt-4 border-t border-[var(--line)] pt-3">
+              <SharedDrawdownChart cmp={cmp} />
+            </div>
           </Section>
 
           <Section title="Gepaarte Differenzen (identische Bootstrap-Pfade)">
+            {!cmp.sufficient && (
+              <div className="mb-2 rounded-md border border-[var(--gold)] bg-[color-mix(in_srgb,var(--gold)_10%,transparent)] p-2 text-[11px] font-medium text-[var(--gold)]">
+                Nicht belastbar – zu wenige gemeinsame OOS-Perioden (nur {cmp.commonObservations}; Konvention ≥ {cmp.minObservations}).
+                Keine Wahrscheinlichkeit zukünftiger Überlegenheit, kein Sieger.
+              </div>
+            )}
             <div className="overflow-x-auto">
               <table className="w-full text-[11px] mono">
                 <thead>
@@ -1049,8 +1058,8 @@ function ComparisonView({ campaign, focusRunId, running, onFocus }: {
                       <td className={cn("py-1 px-2 text-right", !cmp.sufficient ? "text-[var(--fg-dim)]" : d.deltaMedianFinal >= 0 ? "text-[var(--key)]" : "text-[var(--red)]")}>{fmtMoney(d.deltaMedianFinal)}</td>
                       <td className="py-1 px-2 text-right text-[var(--fg-dim)]">{fmtMoney(d.deltaP5Final)}</td>
                       <td className="py-1 px-2 text-right text-[var(--fg-dim)]">{fmtMoney(d.deltaP95Final)}</td>
-                      <td className="py-1 px-2 text-right text-[var(--fg)]">{formatPercent(d.shareLeftBeatsRight)}</td>
-                      <td className="py-1 px-2 text-right text-[var(--fg-faint)]">{formatPercent(d.shareTie)}</td>
+                      <td className="py-1 px-2 text-right">{cmp.sufficient ? <span className="text-[var(--fg)]">{formatPercent(d.shareLeftBeatsRight)}</span> : <span className="text-[var(--fg-faint)]">n. b.</span>}</td>
+                      <td className="py-1 px-2 text-right text-[var(--fg-faint)]">{cmp.sufficient ? formatPercent(d.shareTie) : "n. b."}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1061,8 +1070,19 @@ function ComparisonView({ campaign, focusRunId, running, onFocus }: {
               INTERVALLGLEICHE Renditen (gleicher Start und gleiches Ende). „Links &gt; Rechts" ist eine Auszählung unter dem
               Resampling, keine Wahrscheinlichkeit künftigen Erfolgs. Identische Eingangsreihen ergeben Differenz 0; die
               Kandidatenreihenfolge ändert das Ergebnis nicht.
-              {!cmp.sufficient && <> <b className="text-[var(--gold)]">Bei dieser kleinen Stichprobe ist „Links &gt; Rechts" nicht belastbar — kein Sieger.</b></>}
             </p>
+            {!cmp.sufficient && (
+              <details className="mt-2 text-[10px] text-[var(--fg-faint)]">
+                <summary className="cursor-pointer select-none">Roh-Bootstrap-Demo-Werte anzeigen (keine Wahrscheinlichkeit)</summary>
+                <div className="mt-1 space-y-0.5">
+                  {cmp.differences.map((d, i) => (
+                    <div key={i}>
+                      {d.left} &gt; {d.right}: {formatPercent(d.shareLeftBeatsRight)} — reiner Resampling-Demo-Wert über {cmp.commonObservations} gemeinsame Perioden, <b>KEINE Wahrscheinlichkeit zukünftiger Überlegenheit</b>.
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
           </Section>
 
           <Section title="Methode & Grenzen">
@@ -1107,6 +1127,54 @@ function SharedEquityChart({ cmp }: { cmp: ResearchComparison }) {
         Verkettete Netto-OOS-Kapitalkurven auf der gemeinsamen Zeitachse, normiert auf das gemeinsame Startkapital.
       </div>
       <div ref={ref} className="h-[260px] w-full" />
+    </div>
+  );
+}
+
+// Gemeinsamer OOS-Drawdown: DIESELBEN Vergleichsperioden wie die Equity-Kurve, identische Drawdown-Definition je
+// Reihe ((Kapital − laufendes Hoch) / laufendes Hoch). Rein aus der ausgerichteten Equity abgeleitet — keine
+// erfundenen/fehlenden Werte; Familien ohne gemeinsame Reihe werden nicht gezeichnet (nicht null-gefüllt).
+function SharedDrawdownChart({ cmp }: { cmp: ResearchComparison }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!ref.current) return;
+    const chart = echarts.init(ref.current);
+    const series = cmp.families
+      .filter((f) => f.sharedOosEquity && f.sharedOosEquity.length > 0)
+      .map((f, i) => {
+        const eq = f.sharedOosEquity ?? [];
+        let peak = eq.length ? eq[0] : 0;
+        const dd = eq.map((e, k) => {
+          if (e > peak) peak = e;
+          const d = peak > 0 ? (e - peak) / peak : 0;
+          return [k, d * 100];
+        });
+        return {
+          type: "line" as const, name: f.familyName, showSymbol: false,
+          areaStyle: { opacity: 0.08 },
+          lineStyle: { color: FAMILY_COLORS[i % FAMILY_COLORS.length], width: 1.5 },
+          itemStyle: { color: FAMILY_COLORS[i % FAMILY_COLORS.length] },
+          data: dd,
+        };
+      });
+    chart.setOption({
+      animation: false, grid: { top: 28, right: 16, bottom: 28, left: 64 },
+      legend: { top: 0, textStyle: { color: "#8a857c", fontSize: 10 } },
+      tooltip: { trigger: "axis", valueFormatter: (v: number) => `${Number(v).toFixed(2)} %` },
+      xAxis: { type: "value", name: "OOS-Beobachtung", nameTextStyle: { color: "#8a857c", fontSize: 9 }, axisLine: { lineStyle: { color: "#232120" } }, axisLabel: { color: "#8a857c", fontSize: 10 } },
+      yAxis: { type: "value", max: 0, name: "Drawdown %", nameTextStyle: { color: "#8a857c", fontSize: 9 }, splitLine: { lineStyle: { color: "#232120" } }, axisLabel: { color: "#8a857c", fontSize: 10 } },
+      series,
+    });
+    const ro = new ResizeObserver(() => chart.resize());
+    ro.observe(ref.current);
+    return () => { ro.disconnect(); chart.dispose(); };
+  }, [cmp]);
+  return (
+    <div>
+      <div className="text-[11px] text-[var(--fg-dim)] mb-1">
+        Gemeinsamer Out-of-Sample-Drawdown (Unterwasser) auf DENSELBEN Vergleichsperioden; Definition je Reihe: (Kapital − laufendes Hoch) / laufendes Hoch.
+      </div>
+      <div ref={ref} className="h-[200px] w-full" />
     </div>
   );
 }
