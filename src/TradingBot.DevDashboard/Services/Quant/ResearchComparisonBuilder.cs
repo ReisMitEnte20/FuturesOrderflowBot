@@ -51,6 +51,25 @@ public static class ResearchComparisonBuilder
         var keys = eligible.Select(r => r.FamilyKey ?? r.RunId).ToList();
         var oos = keys.Select((k, i) => ReconstructOosIntervals(eligible[i].WalkForward!)).ToList();
 
+        // KORREKTUR (Tagesauswertung): Bei Frequency="Daily" werden Fold-Teilintervalle, die AM SELBEN UTC-Kalendertag
+        // ENDEN, zu EINER Tagesrendite multiplikativ verkettet — (1+r1)(1+r2)-1, nicht addiert. Sonst zählte eine an
+        // einer Fold-Grenze geteilte Kalenderzeile doppelt (zwei „Daily"-Punkte für denselben Tag), und
+        // Stichprobenzählung, Blocklänge und gepaarter Bootstrap bezögen sich auf Fold-Fragmente statt auf Tage.
+        // Fehlende Tage/Lücken werden NICHT aufgefüllt. Für "Bar"/"Weekly"/"Monthly" bleibt die Reihe unverändert.
+        bool aggregateDaily = string.Equals(frequency, "Daily", StringComparison.OrdinalIgnoreCase);
+        if (aggregateDaily)
+        {
+            for (int i = 0; i < oos.Count; i++)
+            {
+                int before = oos[i].Count;
+                oos[i] = AggregateToDailyUtc(oos[i]);
+                if (oos[i].Count != before)
+                    notes.Add($"Familie {DisplayName(eligible[i])}: {before} OOS-Fold-Teilintervalle zu {oos[i].Count} " +
+                              "UTC-Tagesrenditen zusammengefasst (gleiche Kalendertage multiplikativ verkettet; keine " +
+                              "Teilrenditen addiert, keine Nullrenditen/Lücken erfunden).");
+            }
+        }
+
         // Endzeitpunkte, die in ALLEN Familien vorkommen.
         HashSet<long>? commonEnds = null;
         foreach (var s in oos)
@@ -135,10 +154,10 @@ public static class ResearchComparisonBuilder
                 Status = run.Status,
                 Candidates = run.Config.Candidates.Count,
                 SelectedCandidate = MostSelected(wf) ?? run.HoldoutProposal?.CandidateReference,
-                OosObservations = wf.OosT.Count,
+                OosObservations = oos[i].Count,
                 OosReturn = wf.OosEquity.Count > 0 ? wf.OosEquity[^1] - 1.0 : (double?)null,
-                OosSharpe = MetricValue(wf, "sharpe"),
-                OosMaxDrawdown = MetricValue(wf, "max_drawdown"),
+                OosSharpe = aggregateDaily ? DailySharpe(alignedByKey[i].ret, axisT) : MetricValue(wf, "sharpe"),
+                OosMaxDrawdown = aggregateDaily ? DailyMaxDrawdown(alignedByKey[i].ret) : MetricValue(wf, "max_drawdown"),
                 McMedianFinal = mc?.FinalCapital.Median,
                 McP5Final = mc?.FinalCapital.P5,
                 McP95Final = mc?.FinalCapital.P95,
@@ -165,6 +184,12 @@ public static class ResearchComparisonBuilder
 
         notes.Add("Verglichen werden die AUSWAHL-VERFAHREN der Familien auf identischen Fenstern (Auswahl nur im Training, Auswertung im Test), nicht die beste Parameterwahl auf allen Testdaten.");
         notes.Add("Benchmark: im gemeinsamen gepaarten Bootstrap (noch) nicht enthalten — je Familie separat im Detail ausgewiesen.");
+        if (aggregateDaily)
+            notes.Add("OOS-Rendite, Sharpe, Drawdown (Tages-MaxDD), Stichprobenzählung und der gepaarte Bootstrap beziehen " +
+                      "sich auf die UTC-TAGESreihe (ein Punkt je Kalendertag). PBO beruht auf der Kandidaten-Fragmentmatrix " +
+                      "(keine Tageszeitstempel je Kandidat); PSR/DSR auf der OOS-Reihe des gewählten Kandidaten. Für vor der " +
+                      "Tageskorrektur gespeicherte Läufe (wie diesem) sind PBO/PSR/DSR Fragmentbasis — nicht als " +
+                      "Tageskennzahlen lesen, nicht neu gerechnet.");
 
         string? insufficientReason = sufficient ? null :
             $"Nur {common} intervallgleiche gemeinsame OOS-{(frequency == "Bar" ? "Bar-" : frequency + "-")}Perioden (Konvention: mindestens {minObs}). " +
@@ -230,6 +255,45 @@ public static class ResearchComparisonBuilder
         }
         return map;
     }
+
+    /// <summary>
+    /// Fasst OOS-Fold-Teilintervalle zu EINER Rendite je UTC-Kalendertag zusammen: der UTC-Tag des ENDzeitpunkts
+    /// bestimmt die Zeile; Renditen desselben Tages werden multiplikativ verkettet ((1+r1)(1+r2)-1), NICHT addiert.
+    /// Der Startanker eines Tages ist der FRÜHESTE Start, der Endzeitpunkt der SPÄTESTE. Fehlende Tage/Lücken werden
+    /// NICHT aufgefüllt (keine erfundenen Nullrenditen). Endkapital/Gesamtrendite bleiben erhalten (reine Verkettung).
+    /// </summary>
+    internal static Dictionary<long, (long? StartT, double Return)> AggregateToDailyUtc(
+        IReadOnlyDictionary<long, (long? StartT, double Return)> intervals)
+    {
+        var ordered = intervals.OrderBy(k => k.Key).ToList();
+        var (ends, starts, rets) = OosDailyMerge.ByUtcDay(
+            ordered.Select(k => k.Key).ToList(),
+            ordered.Select(k => k.Value.StartT).ToList(),
+            ordered.Select(k => k.Value.Return).ToList());
+        var result = new Dictionary<long, (long? StartT, double Return)>(ends.Count);
+        for (int i = 0; i < ends.Count; i++)
+            result[ends[i]] = (starts[i], rets[i]);
+        return result;
+    }
+
+    /// <summary>Sharpe auf der Tagesreihe, methodengleich zum Engine: (Mittel/Std) × √(Perioden/Jahr), Perioden/Jahr aus
+    /// der beobachteten Dichte (n / Kalenderspanne in Jahren), risikofrei = 0. Null bei n&lt;2, Std=0 oder Spanne=0.</summary>
+    private static double? DailySharpe(IReadOnlyList<double> returns, IReadOnlyList<long> endTimes)
+    {
+        int n = returns.Count;
+        if (n < 2 || endTimes.Count != n) return null;
+        double mean = returns.Average();
+        double sd = Math.Sqrt(returns.Sum(x => (x - mean) * (x - mean)) / (n - 1));
+        if (sd <= 0) return null;
+        double years = (endTimes[^1] - endTimes[0]) / 1000.0 / 86_400.0 / 365.25;
+        if (years <= 0) return null;
+        return mean / sd * Math.Sqrt(n / years);
+    }
+
+    /// <summary>Tages-MaxDD (positiver Bruchteil) aus den verketteten Tagesrenditen. Hinweis: eine feiner aufgelöste
+    /// (Fold-Fragment-)MaxDD kann GRÖSSER sein, wenn ein Intraday-Tief am Kalendertagsschluss nicht mehr sichtbar ist.</summary>
+    private static double? DailyMaxDrawdown(IReadOnlyList<double> returns)
+        => OosDailyMerge.MaxDrawdownFraction(returns);
 
     private static IReadOnlyList<double> NormalizedEquity(IReadOnlyList<double> returns, double initial)
     {

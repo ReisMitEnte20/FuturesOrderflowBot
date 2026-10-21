@@ -465,7 +465,46 @@ public sealed class QuantApiService
             var finalizeNotes = new List<string>();
             int recorded = await FinalizeTrialsAsync(campaign.Id, trialByCandidate, request, candidates, run, finalizeNotes, ct);
 
-            var oosMetrics = PerformanceMetricsCalculator.Compute(run.OutOfSampleReturns, evalOptions);
+            // KORREKTUR (gemeinsamer Daily-Auswertungspfad): Bei Daily-Frequenz werden OOS-Punkte, die am SELBEN
+            // UTC-Kalendertag ENDEN (Fold-Grenzen-Teilintervalle), zu EINER Tagesrendite verkettet — damit Übersicht
+            // UND Detail/Metriken dieselbe Tagesdefinition nutzen. Training/Test-Auswahl und Strategieausführung
+            // bleiben unverändert; nur die OOS-REPORTING-Reihe wird aggregiert (keine Teilrenditen addiert, keine
+            // Nullrenditen/Lücken erfunden). PBO/PSR/DSR laufen weiter auf der Kandidaten-Fragmentmatrix (keine
+            // Zeitstempel je Kandidat) und sind daher Fragmentbasis — unten entsprechend gekennzeichnet.
+            var oosSeries = run.OutOfSampleReturns;
+            var oosStartTimes = run.OutOfSampleStartTimes;
+            var wfNotes = new List<string>(run.Notes);
+            if (frequency == ReturnFrequency.Daily && oosSeries.Returns.Count > 0)
+            {
+                var (dEnds, dStarts, dRets) = OosDailyMerge.ByUtcDay(
+                    oosSeries.Timestamps.Select(t => t.ToUnixTimeMilliseconds()).ToList(),
+                    oosStartTimes.Select(t => (long?)t.ToUnixTimeMilliseconds()).ToList(),
+                    oosSeries.Returns);
+                if (dEnds.Count != oosSeries.Returns.Count)
+                {
+                    double fragMdd = OosDailyMerge.MaxDrawdownFraction(oosSeries.Returns);
+                    double dayMdd = OosDailyMerge.MaxDrawdownFraction(dRets);
+                    var dEq = new List<double>(dRets.Count);
+                    double c = 1.0;
+                    foreach (var rr in dRets) { c *= 1.0 + rr; dEq.Add(c); }
+                    oosSeries = new ReturnSeries
+                    {
+                        Name = oosSeries.Name,
+                        Timestamps = dEnds.Select(DateTimeOffset.FromUnixTimeMilliseconds).ToList(),
+                        Returns = dRets,
+                        EquityLevels = dEq,
+                        InitialCapital = oosSeries.InitialCapital,
+                        Basis = oosSeries.Basis,
+                        Frequency = ReturnFrequency.Daily
+                    };
+                    oosStartTimes = dStarts.Select(s => DateTimeOffset.FromUnixTimeMilliseconds(s ?? 0)).ToList();
+                    wfNotes.Add($"OOS-Reihe auf UTC-Tage zusammengefasst: {run.OutOfSampleReturns.Returns.Count} " +
+                                $"Fold-Teilintervalle → {dEnds.Count} Tagesrenditen (gleiche Kalendertage multiplikativ " +
+                                "verkettet; keine Teilrenditen addiert, keine Nullrenditen/Lücken erfunden). " +
+                                $"Tages-MaxDD = {dayMdd:P2}; feiner aufgelöster (Fold-Fragment-)MaxDD = {fragMdd:P2}.");
+                }
+            }
+            var oosMetrics = PerformanceMetricsCalculator.Compute(oosSeries, evalOptions);
 
             var candidateSharpes = new Dictionary<string, double?>();
             foreach (var c in candidates)
@@ -493,14 +532,14 @@ public sealed class QuantApiService
                 HoldoutFromT = plan.Holdout?.FromTime.ToUnixTimeMilliseconds(),
                 HoldoutToT = plan.Holdout?.ToTime.ToUnixTimeMilliseconds(),
                 HoldoutEvaluated = false,
-                OosT = run.OutOfSampleReturns.Timestamps.Select(t => t.ToUnixTimeMilliseconds()).ToList(),
-                OosStartT = run.OutOfSampleStartTimes.Select(t => t.ToUnixTimeMilliseconds()).ToList(),
-                OosEquity = run.OutOfSampleReturns.EquityLevels,
+                OosT = oosSeries.Timestamps.Select(t => t.ToUnixTimeMilliseconds()).ToList(),
+                OosStartT = oosStartTimes.Select(t => t.ToUnixTimeMilliseconds()).ToList(),
+                OosEquity = oosSeries.EquityLevels,
                 OosMetrics = oosMetrics.Metrics.Select(QuantMetricDto.From).ToList(),
                 CandidateSharpes = candidateSharpes,
                 CampaignId = campaign.Id,
                 TrialsRecorded = recorded,
-                Notes = run.Notes.Concat(finalizeNotes).ToList()
+                Notes = wfNotes.Concat(finalizeNotes).ToList()
             };
         }
         catch (OperationCanceledException) { throw; }
@@ -774,6 +813,10 @@ public sealed class QuantApiService
             var wfRun = rebuilt.Series;
             var notes = new List<string>(wf.Notes);
             notes.AddRange(rebuilt.Notes);
+            notes.Add("Basis-Hinweis (Overfitting): PBO wird auf der Fold-Fragment-Kandidatenmatrix gerechnet (pro " +
+                      "Kandidat liegen keine UTC-Tageszeitstempel vor, daher KEINE Tagesaggregation); PSR/DSR auf der " +
+                      "ausgewerteten OOS-Reihe des gewählten Kandidaten. Für vor der Tageskorrektur gespeicherte Läufe " +
+                      "sind alle drei auf Fold-Fragment-Basis zu lesen (nicht als UTC-Tageskennzahlen, nicht neu gerechnet).");
 
             QuantOverfittingResponse WithoutPbo(string reason) => new()
             {
