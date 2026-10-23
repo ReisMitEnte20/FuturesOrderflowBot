@@ -79,6 +79,22 @@ public sealed record WalkForwardOptions
 
     /// <summary>Anteil der Daten am Ende, der als finaler Holdout reserviert und nicht aufgeteilt wird.</summary>
     public double HoldoutFraction { get; init; }
+
+    /// <summary>
+    /// SESSION-AUSGERICHTETE Aufteilung (für Session-Strategien wie ORB): sortierte Bar-Indizes, an denen eine
+    /// Session BEGINNT — ausschließlich aus Zeitstempeln + Session-Kalender bestimmt, NIEMALS aus Trades/Ergebnissen.
+    /// Ist dies gesetzt, legt der Planer Fold-Grenzen NUR auf diese Session-Anfänge und misst Train/Test in GANZEN
+    /// Sessions (<see cref="TrainSessions"/>/<see cref="TestSessions"/>). Jeder Abschnitt beginnt an einem Session-Start
+    /// und enthält vollständige Sessions (inkl. Session-Schluss). Purging/Embargo/Warmup bleiben wie im Bar-Modus
+    /// wirksam; OOS-Abschnitte sind disjunkt. Null ⇒ normaler bar-basierter Modus.
+    /// </summary>
+    public IReadOnlyList<int>? SessionStarts { get; init; }
+
+    /// <summary>Anzahl GANZER Sessions je Trainingsabschnitt (nur session-ausgerichtet).</summary>
+    public int TrainSessions { get; init; }
+
+    /// <summary>Anzahl GANZER Sessions je Testabschnitt (nur session-ausgerichtet).</summary>
+    public int TestSessions { get; init; }
 }
 
 /// <summary>Vollständiger Aufteilungsplan inklusive Holdout und der dokumentierten Regeln.</summary>

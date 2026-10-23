@@ -139,6 +139,8 @@ public sealed class QuantApiService
             progress?.Report(0.25);
             var strategy = _backtest.CreateStrategy(request.Run, ctx.Instrument);
             var result = _backtest.RunEngine(ctx, strategy, ConfigFrom(request.Run));
+            if (result.IncompleteSessionCloses > 0)
+                return new QuantAnalyzeResponse { Ok = false, Error = IncompleteSessionError("Basisanalyse", result.IncompleteSessionCloses) };
 
             var spec = new QuantContractSpec(ctx.Instrument.TickSize, ctx.Instrument.PointValue, ctx.Instrument.Currency);
             var frequency = ParseFrequency(request.Options.Frequency);
@@ -307,6 +309,12 @@ public sealed class QuantApiService
                 return new QuantWalkForwardResponse { Ok = false, Error = "Keine gültigen OHLC-Bars im gewählten Zeitraum." };
 
             var barTimes = ctx.Candles.Select(c => c.CloseTime).ToList();
+            // Session-ausgerichtete Aufteilung (z. B. ORB): Fold-Grenzen aus Session-Anfängen (09:30 ET, reguläre Tage),
+            // bestimmt NUR aus Zeitstempeln + Session-Kalender — niemals aus Trades/Ergebnissen.
+            IReadOnlyList<int>? sessionStarts = request.SessionAligned
+                ? TradingBot.Application.Strategies.UsEquitySessionCalendar.OrbSessionStartIndices(
+                    ctx.Candles.Select(c => c.OpenTime).ToList())
+                : null;
             var plan = WalkForwardPlanner.Plan(barTimes, new WalkForwardOptions
             {
                 Mode = string.Equals(request.Mode, "Anchored", StringComparison.OrdinalIgnoreCase)
@@ -318,7 +326,10 @@ public sealed class QuantApiService
                 LabelSpanBars = request.LabelSpanBars,
                 EmbargoBars = request.EmbargoBars,
                 WarmupBars = request.WarmupBars,
-                HoldoutFraction = request.HoldoutFraction
+                HoldoutFraction = request.HoldoutFraction,
+                SessionStarts = sessionStarts,
+                TrainSessions = request.TrainSessions,
+                TestSessions = request.TestSessions
             });
 
             if (plan.IsEmpty)
@@ -422,6 +433,16 @@ public sealed class QuantApiService
                         // Ausgewiesener Warmup wird durchgesetzt: in den ersten Bars jedes Abschnitts keine Ausführung.
                         if (request.WarmupBars > 0) strat = new WarmupGuardStrategy(strat, request.WarmupBars);
                         var res = _backtest.RunEngine(ctx, strat, ConfigFrom(request.Run), candlesOverride: slice);
+                        // Unvollständige Session(en) (fehlender Session-Schluss / Datenende vor Session-Ende bei offener
+                        // Position = tatsächliche Über-das-Session-Ende-Exposure): der Abschnitt ist nicht belastbar und
+                        // wird VERWORFEN. So geht der Kandidat nicht in Auswahl, Vergleich, Monte Carlo oder
+                        // Overfitting ein. Diagnose-Trades bleiben im Backtest-Ergebnis, zählen aber nicht als
+                        // reguläres Ergebnis.
+                        if (res.IncompleteSessionCloses > 0)
+                            return Task.FromResult(SegmentOutcome.Failed(
+                                $"Unvollständige Session(en) ({res.IncompleteSessionCloses}): Position trug tatsächliche " +
+                                "Über-das-Session-Ende-Exposure (fehlender Schluss-Bar oder Datenende vor Session-Ende) — " +
+                                "Abschnitt nicht belastbar, Kandidat ungültig (kein Eingang in Auswahl/Vergleich/MC/Overfitting)."));
                         trades += res.Trades.Count;
                         net += res.Statistics.NetProfit;
                         var curve = ReturnSeriesBuilder.BuildEquityCurve(res, spec, frequency);
@@ -565,6 +586,8 @@ public sealed class QuantApiService
 
             var strategy = _backtest.CreateStrategy(request.Run, ctx.Instrument);
             var result = _backtest.RunEngine(ctx, strategy, ConfigFrom(request.Run));
+            if (result.IncompleteSessionCloses > 0)
+                return new QuantMonteCarloResponse { Ok = false, Error = IncompleteSessionError("Monte Carlo", result.IncompleteSessionCloses) };
             var spec = new QuantContractSpec(ctx.Instrument.TickSize, ctx.Instrument.PointValue, ctx.Instrument.Currency);
             var frequency = ParseFrequency(request.Options.Frequency);
             var curve = ReturnSeriesBuilder.BuildEquityCurve(result, spec, frequency);
@@ -712,6 +735,8 @@ public sealed class QuantApiService
                     if (s.ExecutionDelayBars > 0) strat = new DelayedSignalStrategy(strat, s.ExecutionDelayBars);
 
                     var res = _backtest.RunEngine(ctx, strat, ConfigFrom(runReq) with { SlippageTicksOverride = null }, feeOverride: fee);
+                    if (res.IncompleteSessionCloses > 0)
+                        return (null, res.Trades.Count, IncompleteSessionError("Robustheits-Szenario", res.IncompleteSessionCloses));
                     var curve = ReturnSeriesBuilder.BuildEquityCurve(res, spec, frequency);
                     var series = ReturnSeriesBuilder.ToReturnSeries(curve, EquityBasis.Total).Series;
                     if (series.Count < 2) return (null, res.Trades.Count, "Zu wenige Perioden für eine Kennzahl.");
@@ -957,6 +982,12 @@ public sealed class QuantApiService
         var spec = new QuantContractSpec(ctx.Instrument.TickSize, ctx.Instrument.PointValue, ctx.Instrument.Currency);
         var frequency = ParseFrequency(request.Options.Frequency);
         var barTimes = ctx.Candles.Select(c => c.CloseTime).ToList();
+        // Dieselbe session-ausgerichtete Aufteilung wie der Walk-forward, damit die PBO-Kandidatenmatrix dieselben
+        // Fold-Grenzen nutzt (sonst würden Overfitting-Folds von den WF-Folds abweichen).
+        IReadOnlyList<int>? sessionStarts = request.SessionAligned
+            ? TradingBot.Application.Strategies.UsEquitySessionCalendar.OrbSessionStartIndices(
+                ctx.Candles.Select(c => c.OpenTime).ToList())
+            : null;
         var plan = WalkForwardPlanner.Plan(barTimes, new WalkForwardOptions
         {
             Mode = string.Equals(request.Mode, "Anchored", StringComparison.OrdinalIgnoreCase)
@@ -968,7 +999,10 @@ public sealed class QuantApiService
             LabelSpanBars = request.LabelSpanBars,
             EmbargoBars = request.EmbargoBars,
             WarmupBars = request.WarmupBars,
-            HoldoutFraction = request.HoldoutFraction
+            HoldoutFraction = request.HoldoutFraction,
+            SessionStarts = sessionStarts,
+            TrainSessions = request.TrainSessions,
+            TestSessions = request.TestSessions
         });
 
         var ids = new List<string>();
@@ -995,6 +1029,12 @@ public sealed class QuantApiService
                     IStrategy strat = _backtest.CreateStrategy(request.Run with { Params = new Dictionary<string, string>(request.Candidates[i]) }, ctx.Instrument);
                     if (request.WarmupBars > 0) strat = new WarmupGuardStrategy(strat, request.WarmupBars);
                     var res = _backtest.RunEngine(ctx, strat, ConfigFrom(request.Run), candlesOverride: slice);
+                    if (res.IncompleteSessionCloses > 0)
+                    {
+                        errors.Add($"Kandidat '{ids[i]}' in Fold {foldIndex}: unvollständige Session(en) ({res.IncompleteSessionCloses}) — nicht belastbar, aus der PBO-Matrix ausgeschlossen.");
+                        perCandidate.Add(new CandidateFoldSeries(ids[i], Array.Empty<DateTimeOffset>(), Array.Empty<double>(), Truncated: false));
+                        continue;
+                    }
                     var curve = ReturnSeriesBuilder.BuildEquityCurve(res, spec, frequency);
                     // Das Truncated-Flag aus ToReturnSeries wird ERHALTEN und ausgewertet: es ist der einzige
                     // Abbruch-Nachweis, wenn alle Kandidaten eines Folds zum gleichen Zeitpunkt abbrechen.
@@ -1633,6 +1673,12 @@ public sealed class QuantApiService
     // =========================================================================================
     // Hilfsfunktionen
     // =========================================================================================
+
+    /// <summary>Einheitlicher Ablehnungsgrund für Auswertungen auf unvollständigen Sessions (z. B. ORB ohne gültigen
+    /// Session-Schluss). Nutzt die vorhandenen Fehler-/Ungültigkeitsmechanismen der jeweiligen Auswertung.</summary>
+    private static string IncompleteSessionError(string context, int count)
+        => $"Unvollständige Session(en) ({count}): Position trug tatsächliche Über-das-Session-Ende-Exposure " +
+           $"(fehlender Schluss-Bar oder Datenende vor Session-Ende) — {context} nicht belastbar.";
 
     private static OhlcBacktestConfig ConfigFrom(BacktestRunRequest req) => new()
     {

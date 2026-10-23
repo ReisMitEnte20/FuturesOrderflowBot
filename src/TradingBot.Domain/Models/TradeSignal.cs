@@ -27,6 +27,31 @@ public sealed record TradeSignal
     public int? SuggestedStopLossTicks { get; init; }
     public int? SuggestedTakeProfitTicks { get; init; }
 
+    /// <summary>
+    /// Optionaler ABSOLUTER Stop-Loss-Preis (statt Ticks) — für Strategien, die den Stop an ein Kursniveau binden
+    /// (z. B. das Gegenextrem der Opening-Range). Nur ein Vorschlag; der OHLC-Backtest nutzt ihn für dynamische
+    /// Stop-/Zielpreise und leitet R aus dem TATSÄCHLICHEN Entry-Fill ab. Fehlt er, gelten die Tick-Vorgaben.
+    /// </summary>
+    public decimal? SuggestedStopLossPrice { get; init; }
+
+    /// <summary>Optionales Ziel als R-Vielfaches (Ziel = Entry ± R·|Entry − StopPreis|, R aus dem echten Fill).
+    /// Nur zusammen mit <see cref="SuggestedStopLossPrice"/> wirksam.</summary>
+    public decimal? SuggestedTakeProfitRMultiple { get; init; }
+
+    /// <summary>Zeitgesteuerter Exit: offene Position am SCHLUSS DIESES Bars glattstellen (z. B. Session-Ende).
+    /// Kein Fill am nächsten Bar/Handelstag. Richtung wird dann ignoriert.</summary>
+    public bool FlattenAtClose { get; init; }
+
+    /// <summary>Erwartete OPEN-Zeit des Ausführungs-Bars. Ist sie gesetzt und der nächste Bar hat eine ANDERE
+    /// Open-Zeit (z. B. fehlende Folgekerze/Lücke), wird der Entry VERWORFEN statt später/am nächsten Tag gefüllt.</summary>
+    public DateTimeOffset? EntryBarOpenTime { get; init; }
+
+    /// <summary>Spätester Zeitpunkt, zu dem die eröffnete Position glattgestellt sein MUSS (z. B. Session-Ende, UTC).
+    /// Läuft ein Bar nach diesem Zeitpunkt, obwohl die Position noch offen ist (fehlender Session-Schluss-Bar), wird
+    /// der Lauf als unvollständig gekennzeichnet und die Position am ersten Bar danach geschlossen (kein stiller
+    /// Übernacht-Lauf, kein erfundener Schlusskurs).</summary>
+    public DateTimeOffset? FlattenDeadline { get; init; }
+
     /// <summary>Kurzbegründung des Signals (z. B. "Liquidity Sweep + Absorption + Delta-Reversal").</summary>
     public string Reason { get; init; } = string.Empty;
 

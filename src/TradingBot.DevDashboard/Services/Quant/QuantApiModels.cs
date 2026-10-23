@@ -58,6 +58,13 @@ public sealed record QuantWalkForwardRequest
     public int WarmupBars { get; init; }
     public double HoldoutFraction { get; init; } = 0.2;
 
+    /// <summary>Session-ausgerichtete Aufteilung für Session-Strategien (ORB): Fold-Grenzen liegen auf Session-Anfängen
+    /// (09:30 ET, reguläre Handelstage) statt auf festen Bar-Anzahlen. <see cref="TrainSessions"/>/<see cref="TestSessions"/>
+    /// zählen GANZE Sessions. Session-Anfänge werden aus den Zeitstempeln + Session-Kalender bestimmt.</summary>
+    public bool SessionAligned { get; init; }
+    public int TrainSessions { get; init; }
+    public int TestSessions { get; init; }
+
     /// <summary>Kandidaten-Parametersätze. Die Auswahl je Fenster erfolgt ausschließlich im Training.</summary>
     public IReadOnlyList<Dictionary<string, string>> Candidates { get; init; } = Array.Empty<Dictionary<string, string>>();
 
