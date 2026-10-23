@@ -128,7 +128,12 @@ public sealed class BacktestApiService
             "Deterministischer OHLC-Kanalausbruch — ausdrücklich REFERENZ für den Mehrstrategie-Vergleich, keine Edge-Behauptung.", true, new[]
             {
                 new StrategyParamDef("Channel", "Kanal-Länge (Bars)", "int", "20"),
-            })
+            }),
+        new StrategyDef("orb", "Opening-Range-Breakout (Paper-Baseline)",
+            "FESTE ORB-Baseline (Zarattini & Aziz 2023) auf MES: erste 5-Min-Kerze ab 09:30 ET, Richtung aus " +
+            "Close vs. Open (Doji = kein Trade), Einstieg am Folgebar-Open, Stop am Gegenextrem, Ziel 10R bzw. " +
+            "Session-Ende 16:00 ET, 1 Kontrakt. Keine Varianten; Paper-Renditen werden NICHT auf MES übertragen.",
+            true, Array.Empty<StrategyParamDef>())
     };
 
     public async Task<IReadOnlyList<InstrumentDef>> GetInstrumentsAsync(CancellationToken ct = default)
@@ -341,6 +346,7 @@ public sealed class BacktestApiService
         {
             "movingaverage" or "ma" or "sma" => (IStrategy)new MovingAverageDummyStrategy(),
             "donchian" or "breakout" => new DonchianBreakoutStrategy(),
+            "orb" or "openingrange" => new OpeningRangeBreakoutStrategy(),
             _ => new MovingAverageDummyStrategy()
         };
         strategy.Initialize(new StrategyExecutionContext

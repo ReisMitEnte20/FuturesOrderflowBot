@@ -35,6 +35,7 @@ import {
 import { HeadlineStat, MetricList, NoteBlock, Unavailable } from "@/components/research/MetricList";
 import { EquityDrawdownChart } from "@/components/backtest/EquityDrawdownChart";
 import { BacktestChart } from "@/components/backtest/BacktestChart";
+import { ResearchWorkspace } from "@/components/research/ResearchWorkspace";
 import {
   CostHeatmap,
   DistributionChart,
@@ -64,6 +65,7 @@ interface ResearchConfig {
   // Mehrstrategie-Vergleich: aktive Strategie-Familien
   familySma: boolean;
   familyDonchian: boolean;
+  familyOrb: boolean;
   quantity: number;
   initialBalance: number;
   stopLossTicks: string;
@@ -110,6 +112,7 @@ const DEFAULT_CONFIG: ResearchConfig = {
   channelList: "15, 20, 30",
   familySma: true,
   familyDonchian: true,
+  familyOrb: false,
   quantity: 1,
   initialBalance: 10_000,
   stopLossTicks: "",
@@ -263,8 +266,12 @@ export function Research() {
       const c = buildDonchianCandidates(cfg.channelList);
       if (c.length) list.push({ key: "donchian", strategyId: "donchian", name: "Donchian-Ausbruch (Referenz)", candidates: c });
     }
+    if (cfg.familyOrb) {
+      // FESTE Baseline: genau EIN Kandidat ohne Parameter (keine Variantenoptimierung).
+      list.push({ key: "orb", strategyId: "orb", name: "Opening-Range-Breakout (Paper-Baseline)", candidates: [{}] });
+    }
     return list;
-  }, [cfg.familySma, cfg.familyDonchian, cfg.fastList, cfg.slowList, cfg.channelList]);
+  }, [cfg.familySma, cfg.familyDonchian, cfg.familyOrb, cfg.fastList, cfg.slowList, cfg.channelList]);
 
   const buildCampaignRequest = useCallback((demo: boolean): ResearchCampaignStartRequest => ({
     run: runRequest(), options: evalOpts,
@@ -406,6 +413,9 @@ export function Research() {
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {error && <div className="rounded-lg border border-[var(--red)] bg-[var(--panel)] p-3 text-xs text-[var(--red)]">{error}</div>}
 
+        {/* Orderflow-Arbeitsfläche auf AUFGENOMMENEN ATAS-Daten (technischer Test; Reuse ECharts-Komponenten) */}
+        <ResearchWorkspace />
+
         {/* Konfiguration — bearbeitbarer Entwurf für einen NEUEN Lauf (ändert kein geladenes Ergebnis) */}
         <Panel>
           <div className="flex items-center gap-2 mb-2">
@@ -451,6 +461,16 @@ export function Research() {
                   <Field label="Kanal-Längen (Bars)"><Input value={cfg.channelList} onChange={(v) => set("channelList", v)} /></Field>
                 </div>
                 <div className="mt-1 text-[10px] text-[var(--fg-faint)]">{buildDonchianCandidates(cfg.channelList).length} Kandidaten</div>
+              </div>
+              <div className={cn("rounded-md border p-2", cfg.familyOrb ? "border-[var(--key)]" : "border-[var(--line)]")}>
+                <label className="flex items-center gap-2 text-xs font-medium text-[var(--fg)]">
+                  <input type="checkbox" checked={cfg.familyOrb} onChange={(e) => set("familyOrb", e.target.checked)} />
+                  Opening-Range-Breakout <span className="text-[10px] font-normal text-[var(--fg-faint)]">Paper-Baseline (Zarattini &amp; Aziz) · feste Regeln · keine Edge-Behauptung</span>
+                </label>
+                <div className="mt-1 text-[10px] text-[var(--fg-faint)]">
+                  Feste Baseline: 1 Kandidat, keine Parameter. Erste 5-Min-Kerze ab 09:30 ET, Ziel 10R, Session-Exit 16:00 ET, 1 MES-Kontrakt.
+                </div>
+                <div className="mt-1 text-[10px] text-[var(--red)]">Quellzeitzone unbestätigt · vor echtem Lauf klären.</div>
               </div>
             </div>
           </div>

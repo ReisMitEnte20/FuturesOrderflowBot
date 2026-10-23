@@ -129,36 +129,66 @@ public sealed class OhlcBacktestEngine
         decimal realized = 0m;
         decimal totalSlippageDollars = 0m;
         int signals = 0;
+        int invalidStopSkips = 0;        // Entries, verworfen wegen ungültiger Stop-Lage (z. B. Gap durch den Stop)
+        int missedEntrySkips = 0;        // Entries, verworfen weil der erwartete Ausführungs-Bar fehlte
+        int incompleteSessionCloses = 0; // Sessions ohne Schluss-Bar bei offener Position (fehlende Ausführungsgrundlage)
 
         // offene Position
         PositionSide side = PositionSide.Flat;
         decimal entryPrice = 0m, sl = 0m, tp = 0m;
         DateTimeOffset entryTime = default;
         int entryBar = -1;
+        DateTimeOffset? flattenDeadline = null;   // spätester Glattstellungszeitpunkt der offenen Position (Session-Ende)
 
-        SignalDirection? pending = null;   // Signal aus dem Schluss des Vorgänger-Bars
+        // Pending-Signal aus dem Schluss des Vorgänger-Bars (Richtung + optional dynamischer Stop/R, erwartete
+        // Entry-Open-Zeit und Flatten-Deadline).
+        (SignalDirection Dir, decimal? SlPrice, decimal? RMult, DateTimeOffset? EntryOpen, DateTimeOffset? FlattenDeadline)? pending = null;
 
         for (int i = start; i <= end; i++)
         {
             var bar = candles[i];
 
+            // (A0) Fehlender Session-Schluss: läuft ein Bar NACH der Flatten-Deadline der offenen Position, ohne dass
+            //      ein Session-Schluss (FlattenAtClose) stattfand, fehlte der Schluss-Bar. Die Position lief bis hierhin
+            //      TATSÄCHLICH über das Session-Ende hinaus (reale Übernacht-/Nach-Session-Exposure). Sie wird als
+            //      VERSPÄTETER NOTAUSSTIEG am ersten verfügbaren Bar geschlossen (Market, reale Open-Preise) und der
+            //      Lauf als unvollständig/nicht belastbar gekennzeichnet — keine erfundenen Schlusskurse, kein
+            //      rückwirkender Exit auf das Session-Ende. Dies ist KEIN sauberer Session-Exit.
+            if (side != PositionSide.Flat && flattenDeadline is DateTimeOffset dl && bar.OpenTime > dl)
+            {
+                incompleteSessionCloses++;
+                decimal exitPx0 = side == PositionSide.Long ? bar.Open - slip : bar.Open + slip;
+                CloseExit(exitPx0, i, OhlcExitReason.SessionClose, bar.OpenTime, ambiguous: false, market: true,
+                    note: "Session-Schluss-Bar fehlte — verspäteter Notausstieg nach tatsächlicher Übernacht-/Nach-Session-" +
+                          "Exposure; Session unvollständig/nicht belastbar.");
+            }
+
             // (A) Pending-Signal am OPEN dieses Bars ausführen (kein Look-ahead). Diese am Vorabend
             //     erzeugte Anweisung hat Vorrang vor den intrabar geprüften Schutzorders (Schritt B):
             //     ein Gegensignal schließt die bestehende Position zum OPEN und dreht sie.
-            if (pending is SignalDirection dir)
+            if (pending is { } p)
             {
-                var wantSide = dir == SignalDirection.Long ? PositionSide.Long : PositionSide.Short;
-                if (side == PositionSide.Flat)
+                // Fehlender Entry-Bar: ist eine erwartete Ausführungs-Open-Zeit gesetzt und dieser Bar hat eine ANDERE
+                // Open-Zeit (Folgekerze fehlte/Lücke), wird der Entry VERWORFEN — keine spätere/Folgetags-Füllung.
+                if (p.EntryOpen is DateTimeOffset eo && bar.OpenTime != eo)
                 {
-                    OpenPosition(bar, wantSide, i);
+                    missedEntrySkips++;
                 }
-                else if (side != wantSide)
+                else
                 {
-                    // Gegensignal: bestehende Position zum Open schließen (Market), dann flippen.
-                    CloseAtMarket(bar.Open, i, OhlcExitReason.OppositeSignal, bar.OpenTime);
-                    OpenPosition(bar, wantSide, i);
+                    var wantSide = p.Dir == SignalDirection.Long ? PositionSide.Long : PositionSide.Short;
+                    if (side == PositionSide.Flat)
+                    {
+                        OpenPosition(bar, wantSide, i, p.SlPrice, p.RMult, p.FlattenDeadline);
+                    }
+                    else if (side != wantSide)
+                    {
+                        // Gegensignal: bestehende Position zum Open schließen (Market), dann flippen.
+                        CloseAtMarket(bar.Open, i, OhlcExitReason.OppositeSignal, bar.OpenTime);
+                        OpenPosition(bar, wantSide, i, p.SlPrice, p.RMult, p.FlattenDeadline);
+                    }
+                    // gleiche Richtung -> ignorieren (bereits investiert)
                 }
-                // gleiche Richtung -> ignorieren (bereits investiert)
                 pending = null;
             }
 
@@ -172,13 +202,24 @@ public sealed class OhlcBacktestEngine
                 }
             }
 
-            // (C) Strategie sieht den vollständigen Bar; Signal wirkt erst am nächsten Bar-Open.
+            // (C) Strategie sieht den vollständigen Bar; Signal wirkt erst am nächsten Bar-Open —
+            //     AUSSER einem zeitgesteuerten Exit (FlattenAtClose), der die offene Position noch am SCHLUSS
+            //     DIESES Bars glattstellt (Session-Ende; kein Fill am nächsten Bar/Handelstag).
             var candle = ToStrategyCandle(bar);
             var sig = strategy.OnCandle(candle);
-            if (sig is not null && sig.Direction is SignalDirection.Long or SignalDirection.Short)
+            if (sig is not null)
             {
-                signals++;
-                pending = sig.Direction;
+                if (sig.FlattenAtClose && side != PositionSide.Flat)
+                {
+                    decimal exitPx = side == PositionSide.Long ? bar.Close - slip : bar.Close + slip;
+                    CloseExit(exitPx, i, OhlcExitReason.SessionClose, bar.CloseTime, ambiguous: false, market: true);
+                }
+                else if (sig.Direction is SignalDirection.Long or SignalDirection.Short)
+                {
+                    signals++;
+                    pending = (sig.Direction, sig.SuggestedStopLossPrice, sig.SuggestedTakeProfitRMultiple,
+                        sig.EntryBarOpenTime, sig.FlattenDeadline);
+                }
             }
 
             // Mark-to-Market der zum Bar-Schluss offenen Position (nur Anzeige, nicht in Equity).
@@ -196,12 +237,19 @@ public sealed class OhlcBacktestEngine
             });
         }
 
-        // Offene Position am Ende zum letzten Schlusskurs schließen (Market).
+        // Offene Position am Ende zum letzten Schlusskurs schließen (Market). Ist dabei eine Flatten-Deadline
+        // (Session-Ende) gesetzt und noch nicht erreicht, endeten die Daten MITTEN in einer Session mit offener
+        // Position → unvollständige Session (nicht belastbar), damit die Auswertung sie verwerfen kann.
         if (side != PositionSide.Flat)
         {
             var last = candles[end];
+            bool sessionIncomplete = flattenDeadline.HasValue;
+            if (sessionIncomplete) incompleteSessionCloses++;
             decimal exitPx = side == PositionSide.Long ? last.Close - slip : last.Close + slip;
-            CloseExit(exitPx, end, OhlcExitReason.EndOfData, last.CloseTime, ambiguous: false, market: true);
+            CloseExit(exitPx, end, OhlcExitReason.EndOfData, last.CloseTime, ambiguous: false, market: true,
+                note: sessionIncomplete
+                    ? "Datenende vor Session-Ende bei offener Position — unvollständige Session (nicht belastbar)."
+                    : null);
             if (equity.Count > 0)
                 equity[^1] = equity[^1] with { RealizedNetPnL = realized, Equity = config.InitialBalance + realized, OpenPnL = 0m };
         }
@@ -215,7 +263,13 @@ public sealed class OhlcBacktestEngine
             Statistics = stats,
             Trades = trades,
             Equity = equity,
+            Message = incompleteSessionCloses > 0
+                ? $"{incompleteSessionCloses} Session(s) ohne Schluss-Bar bei offener Position — Lauf nicht vollständig belastbar."
+                : null,
             SignalsGenerated = signals,
+            InvalidStopSkips = invalidStopSkips,
+            MissedEntrySkips = missedEntrySkips,
+            IncompleteSessionCloses = incompleteSessionCloses,
             AmbiguousTrades = trades.Count(t => t.Ambiguous),
             Data = dataInfo,
             StrategyName = strategy.Name,
@@ -229,17 +283,43 @@ public sealed class OhlcBacktestEngine
         };
 
         // ---- lokale Helfer ----
-        void OpenPosition(Candle bar, PositionSide s, int barIdx)
+        // Öffnet eine Position am OPEN (Market, adverse Slippage). Mit dynamischem Stop-Preis wird R aus dem
+        // TATSÄCHLICHEN Fill bestimmt (nicht aus einer Schätzung) und das Ziel als R-Vielfaches gesetzt; SL/TP werden
+        // auf die Tick-Größe gerundet. Liegt der Stop nach einem Gap NICHT auf der Verlustseite des Fills, wird der
+        // Trade NICHT eröffnet (keine ungültige/negative Risikogröße). Ohne dynamischen Stop gelten die Tick-Vorgaben.
+        bool OpenPosition(Candle bar, PositionSide s, int barIdx, decimal? slPriceSuggest, decimal? rMultSuggest,
+            DateTimeOffset? deadline = null)
         {
+            decimal fill = s == PositionSide.Long ? bar.Open + slip : bar.Open - slip;
+            decimal newSl, newTp;
+            if (slPriceSuggest is decimal slPx)
+            {
+                decimal stopPrice = RoundToTick(slPx, tickSize);
+                bool valid = s == PositionSide.Long ? stopPrice < fill : stopPrice > fill;
+                decimal r = Math.Abs(fill - stopPrice);
+                if (!valid || r <= 0m) { invalidStopSkips++; return false; }
+                decimal rMult = rMultSuggest is decimal rm && rm > 0m ? rm : 1m;
+                newSl = stopPrice;
+                newTp = s == PositionSide.Long
+                    ? RoundToTick(fill + rMult * r, tickSize)
+                    : RoundToTick(fill - rMult * r, tickSize);
+            }
+            else
+            {
+                decimal slDist = slTicks * tickSize, tpDist = tpTicks * tickSize;
+                newSl = s == PositionSide.Long ? fill - slDist : fill + slDist;
+                newTp = s == PositionSide.Long ? fill + tpDist : fill - tpDist;
+            }
+
             side = s;
             entryTime = bar.OpenTime;
             entryBar = barIdx;
-            // Market-Entry am Open mit adverser Slippage.
-            entryPrice = s == PositionSide.Long ? bar.Open + slip : bar.Open - slip;
+            entryPrice = fill;
             totalSlippageDollars += slipTicks * tickValue * qty;
-            decimal slDist = slTicks * tickSize, tpDist = tpTicks * tickSize;
-            if (s == PositionSide.Long) { sl = entryPrice - slDist; tp = entryPrice + tpDist; }
-            else { sl = entryPrice + slDist; tp = entryPrice - tpDist; }
+            sl = newSl;
+            tp = newTp;
+            flattenDeadline = deadline;
+            return true;
         }
 
         void CloseAtMarket(decimal open, int barIdx, OhlcExitReason reason, DateTimeOffset time)
@@ -248,7 +328,7 @@ public sealed class OhlcBacktestEngine
             CloseExit(exitPx, barIdx, reason, time, ambiguous: false, market: true);
         }
 
-        void CloseExit(decimal exitPx, int barIdx, OhlcExitReason reason, DateTimeOffset time, bool ambiguous, bool market)
+        void CloseExit(decimal exitPx, int barIdx, OhlcExitReason reason, DateTimeOffset time, bool ambiguous, bool market, string? note = null)
         {
             decimal dirSign = side == PositionSide.Long ? 1m : -1m;
             decimal gross = (exitPx - entryPrice) * dirSign * pointValue * qty;
@@ -273,12 +353,17 @@ public sealed class OhlcBacktestEngine
                 ExitReason = reason,
                 StopLossPrice = sl,
                 TakeProfitPrice = tp,
-                Ambiguous = ambiguous
+                Ambiguous = ambiguous,
+                Note = note
             });
             realized += net;
             side = PositionSide.Flat;
+            flattenDeadline = null;
         }
     }
+
+    private static decimal RoundToTick(decimal price, decimal tickSize)
+        => tickSize <= 0m ? price : Math.Round(price / tickSize, MidpointRounding.AwayFromZero) * tickSize;
 
     private static decimal PerSideFee(FeeProfile f) =>
         f.CommissionPerSide + f.ExchangeFeePerSide + f.ClearingFeePerSide

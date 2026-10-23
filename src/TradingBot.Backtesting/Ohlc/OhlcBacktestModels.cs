@@ -131,6 +131,20 @@ public sealed record OhlcBacktestResult
     public IReadOnlyList<OhlcEquityPoint> Equity { get; init; } = Array.Empty<OhlcEquityPoint>();
 
     public int SignalsGenerated { get; init; }
+
+    /// <summary>Entries, die wegen ungültiger Stop-Lage (z. B. Gap durch den dynamischen Stop) NICHT eröffnet wurden.</summary>
+    public int InvalidStopSkips { get; init; }
+
+    /// <summary>Entries, die verworfen wurden, weil der erwartete Ausführungs-Bar fehlte (keine spätere/Folgetags-Füllung).</summary>
+    public int MissedEntrySkips { get; init; }
+
+    /// <summary>Unvollständige Sessions: der Session-Schluss-Bar fehlte bzw. die Daten endeten vor dem Session-Ende,
+    /// während eine Position offen war. &gt; 0 ⇒ der Lauf ist NICHT belastbar auswertbar. Die betroffene Position
+    /// trug dabei TATSÄCHLICHE Über-das-Session-Ende-/Übernacht-Exposure und wurde als verspäteter Notausstieg am
+    /// ersten verfügbaren Bar bzw. am Datenende geschlossen (kein erfundener Schlusskurs) — kein sauberer Session-Exit.
+    /// Auswertungen (Auswahl/Vergleich/Monte Carlo/Overfitting) müssen solche Läufe verwerfen.</summary>
+    public int IncompleteSessionCloses { get; init; }
+
     public int AmbiguousTrades { get; init; }
 
     public required OhlcDataInfo Data { get; init; }
