@@ -49,3 +49,5 @@ data/benchmarks/*.csv
 # Abgeleitete Marktdaten der Trade-Vorschau / Orderflow-Arbeitsflaeche (aus Aufnahme generiert, lokal - nicht versionieren)
 dashboard/public/trade-preview.json
 dashboard/public/research-workspace.json
+dashboard/public/orderflow-run.json
+dashboard/public/orderflow-runs/

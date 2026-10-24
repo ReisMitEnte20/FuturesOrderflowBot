@@ -1,0 +1,15 @@
+{
+  "note": "PERMISSIVES Research-/Replay-Profil fuer technische Funktionslaeufe. KEINE Funded-/Prop-Regeln. Session- und Verlustgrenzen sind bewusst deaktiviert/hochgesetzt, damit das reine Strategieverhalten auf einem kurzen Replay-Abschnitt beobachtbar ist (die Aufnahme liegt ausserhalb der RTH-Session). maxContracts=1 ist eine STRENGERE Harte-Obergrenze (Backstop zum SinglePositionGate: garantiert max. 1 Kontrakt selbst wenn der signalbasierte Gate-Zustand z. B. nach einer abgelehnten Order vom tatsaechlichen Engine-Zustand abweicht). Im Normalfall nie ausgeloest, da der Gate Add-Orders gar nicht erst erzeugt. Fuer echte Risikoregeln funded-default.example.json verwenden.",
+  "maxDailyLoss": 100000000.00,
+  "maxLossPerTrade": 100000000.00,
+  "maxTradesPerDay": 100000000,
+  "maxContracts": 1,
+  "maxOpenPositions": 1,
+  "maxOrdersPerMinute": 100000000,
+  "maxConsecutiveLosses": 100000000,
+  "enforceSession": false,
+  "profitLockEnabled": false,
+  "profitLockThreshold": null,
+  "trailingDrawdownEnabled": false,
+  "trailingDrawdownAmount": null
+}

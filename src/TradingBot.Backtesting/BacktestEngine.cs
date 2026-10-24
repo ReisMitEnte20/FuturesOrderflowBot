@@ -121,6 +121,7 @@ public sealed class BacktestEngine : IBacktestEngine
         cancelled = cancelled || cancellationToken.IsCancellationRequested;
 
         var stats = BacktestStatisticsCalculator.Compute(positions.Trades, adapter.TotalSlippageCost);
+        var finalPos = positions.GetPosition(request.Symbol);
 
         return new BacktestResult
         {
@@ -133,6 +134,10 @@ public sealed class BacktestEngine : IBacktestEngine
             OrdersRejectedByRisk = riskRejected,
             OrdersRejectedByBroker = brokerRejected,
             OrdersUnfilledAtEnd = adapter.PendingCount,
+            FinalPositionSide = finalPos?.Side ?? Domain.Enums.PositionSide.Flat,
+            FinalPositionQuantity = finalPos?.Quantity ?? 0,
+            FinalPositionAvgPrice = finalPos?.AverageEntryPrice ?? 0m,
+            FinalPositionUnrealizedGross = finalPos?.UnrealizedGrossPnL ?? 0m,
             FinalFeedState = feedHealth.State
         };
     }

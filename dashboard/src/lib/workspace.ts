@@ -11,12 +11,36 @@ export interface WsTrade {
   entryPrice: number; exitPrice: number; exitReason: string; stopLossPrice: number; takeProfitPrice: number;
   ambiguous: boolean; netPnL: number; entryTimeMs: number; exitTimeMs: number; entryTime: string; exitTime: string;
 }
-export interface WsStrategy { name: string; usesOrderflow: boolean; netPnL: number; fees: number; finalEquity: number; trades: WsTrade[]; }
+export interface WsStrategy {
+  name: string; usesOrderflow: boolean; netPnL: number; fees: number; finalEquity: number; trades: WsTrade[];
+  // Optional (nur im echten Orderflow-Lauf): Laufende-Diagnostik.
+  status?: string; openPositionSide?: string; openPositionQty?: number; openPositionAvgPrice?: number;
+  openPositionUnrealizedGross?: number; signalsGenerated?: number; ordersSubmitted?: number;
+  ordersRejectedByRisk?: number; ordersRejectedByBroker?: number; ordersUnfilledAtEnd?: number;
+  // Vollstaendiges Endergebnis (realisiert / unrealisiert / Gebuehren / End-Equity getrennt):
+  realizedNetPnL?: number; realizedFees?: number; openPositionEntryFees?: number; totalFeesPaid?: number;
+  unrealizedGrossAtLastTick?: number; lastTickPrice?: number; endEquityRealized?: number; endEquityMarkToMarket?: number;
+}
+
+/** Eintrag der read-only Lauf-Liste (dashboard/public/orderflow-runs/index.json). */
+export interface WsRunIndexStrategy { name: string; trades: number; status?: string; realizedNetPnL: number; endEquityMarkToMarket: number; openPositionSide: string; }
+export interface WsRunIndexEntry {
+  id: string; generatedUtc: string; instrument: string; dataSource: string;
+  ticks: number; fullBars: number; status: string; ok: boolean; legacy?: boolean; loadable?: boolean; note?: string;
+  strategies: WsRunIndexStrategy[];
+}
+export interface WsProvenance {
+  dataFilePath: string; dataSha256: string; ticks: number; fullBars: number; remainderTicks: number;
+  ticksPerBar: number; deltaThreshold: number; startingBalance: number;
+  capabilities: string; executionModel: string; divergencesFromHarness: string[]; caveats: string[];
+  settingsUsed?: Record<string, string>;
+}
 export interface WorkspaceData {
   meta: { instrument: string; dataSource: string; marketStartMs: number; marketEndMs: number; ticksPerBar: number; pointValue: number; tickSizeNote: string; feePerSide: number; slippageTicks: number; generatedUtc: string; };
   availability: Record<string, string>;
   quality: { priceGranularity: string; drops: number; aggressor: string; footprintSource: string; domNote: string; };
   candles: WsCandle[]; footprint: WsFpLevel[][]; tape: WsTapeRow[]; strategies: WsStrategy[];
+  provenance?: WsProvenance;
 }
 
 export const isAvailable = (s: string | undefined) => !!s && !/nicht verfuegbar|nicht verfügbar/i.test(s);

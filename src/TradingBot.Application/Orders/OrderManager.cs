@@ -65,6 +65,24 @@ public sealed class OrderManager : IOrderManager, IDisposable
     {
         ArgumentNullException.ThrowIfNull(signal);
 
+        // Flat-Signal = aktuelle Position GLATTSTELLEN (risiko-reduzierend); es wird KEINE Gegenposition
+        // eroeffnet. Ohne offene Position ist Flat ein No-op (kein Fehler, kein Abbruch). Das synthetische
+        // Schliess-Signal laeuft danach als regulaerer Close (Gegenrichtung, Menge = offene Menge) durch
+        // Klassifizierung + Risk-Freigabe. So kann eine Strategie ueber Flat schliessen, ohne dass der
+        // RiskManager (der ROHE Flat-Signale als Order-Absicht ablehnt) den Lauf abbricht. Keine Lockerung
+        // von Risikogrenzen: Flatten/Close ist stets risiko-reduzierend.
+        if (signal.Direction == SignalDirection.Flat)
+        {
+            var open = _positionManager.GetPosition(signal.Symbol);
+            if (open is null || open.Side == PositionSide.Flat || open.Quantity == 0)
+                return null; // nichts zu schliessen
+            signal = signal with
+            {
+                Direction = open.Side == PositionSide.Long ? SignalDirection.Short : SignalDirection.Long,
+                SuggestedQuantity = open.Quantity
+            };
+        }
+
         int suggested = signal.SuggestedQuantity is int q && q > 0 ? q : 1;
         string key = BuildIdempotencyKey(signal);
 

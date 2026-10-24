@@ -97,7 +97,7 @@ public sealed class BacktestStrategyRunner : IStrategyBacktestRunner
         // der rohe Ticks zu OrderFlowBars bündelt und an die innere Strategie delegiert.
         if (strategy is IOrderFlowStrategy)
         {
-            strategy = new OrderFlowBarAggregatorStrategy(strategy, ticksPerBar: 100);
+            strategy = new OrderFlowBarAggregatorStrategy(strategy, ticksPerBar: inputs.OrderFlowTicksPerBar);
         }
 
         strategy.Initialize(new StrategyExecutionContext
@@ -129,7 +129,20 @@ public sealed class BacktestStrategyRunner : IStrategyBacktestRunner
             Statistics = result.Statistics,
             Trades = result.Trades,
             Metrics = ResearchMetricSet.FromBacktest(
-                result.Statistics, inputs.DataQualityOk, inputs.CapabilitiesSufficient)
+                result.Statistics, inputs.DataQualityOk, inputs.CapabilitiesSufficient),
+            Diagnostics = new StrategyRunDiagnostics
+            {
+                Status = result.Status.ToString(),
+                FinalPositionSide = result.FinalPositionSide,
+                FinalPositionQuantity = result.FinalPositionQuantity,
+                FinalPositionAvgPrice = result.FinalPositionAvgPrice,
+                FinalPositionUnrealizedGross = result.FinalPositionUnrealizedGross,
+                SignalsGenerated = result.SignalsGenerated,
+                OrdersSubmitted = result.OrdersSubmitted,
+                OrdersRejectedByRisk = result.OrdersRejectedByRisk,
+                OrdersRejectedByBroker = result.OrdersRejectedByBroker,
+                OrdersUnfilledAtEnd = result.OrdersUnfilledAtEnd
+            }
         };
     }
 }
