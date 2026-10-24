@@ -1,3 +1,4 @@
+using TradingBot.Domain.Enums;
 using TradingBot.Domain.Models;
 
 namespace TradingBot.Backtesting;
@@ -17,6 +18,12 @@ public sealed record BacktestResult
     public int OrdersRejectedByRisk { get; init; }
     public int OrdersRejectedByBroker { get; init; }
     public int OrdersUnfilledAtEnd { get; init; }
+
+    // ---- Offene Position am Datenende (die Engine stellt NICHT zwangsweise glatt) ----
+    public PositionSide FinalPositionSide { get; init; } = PositionSide.Flat;
+    public int FinalPositionQuantity { get; init; }
+    public decimal FinalPositionAvgPrice { get; init; }
+    public decimal FinalPositionUnrealizedGross { get; init; }
 
     /// <summary>Feed-Zustand am Ende (informativ, aus dem FeedHealthMonitor).</summary>
     public MarketDataConnectionState FinalFeedState { get; init; } = MarketDataConnectionState.Unknown;

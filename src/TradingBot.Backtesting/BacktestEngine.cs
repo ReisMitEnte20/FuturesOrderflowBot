@@ -44,6 +44,11 @@ public sealed class BacktestEngine : IBacktestEngine
         var innerPm = new PositionManager(feeCalc, pnlCalc);
         var positions = new RecordingPositionManager(innerPm);
 
+        // Opt-in: Strategien/Wrapper, die ihren tatsaechlichen Positionszustand abfragen wollen, erhalten hier
+        // die Referenz; sie nutzen sie ausschliesslich lesend (GetPosition). Strategien ohne den Hook bleiben unveraendert.
+        if (request.Strategy is IPositionManagerAware positionAware)
+            positionAware.UsePositionManager(positions);
+
         var dailyState = new BacktestDailyStateProvider(request.Risk.MaxDailyLoss);
         positions.TradeClosed = dailyState.ApplyTrade;
 
@@ -121,6 +126,7 @@ public sealed class BacktestEngine : IBacktestEngine
         cancelled = cancelled || cancellationToken.IsCancellationRequested;
 
         var stats = BacktestStatisticsCalculator.Compute(positions.Trades, adapter.TotalSlippageCost);
+        var finalPos = positions.GetPosition(request.Symbol);
 
         return new BacktestResult
         {
@@ -133,6 +139,10 @@ public sealed class BacktestEngine : IBacktestEngine
             OrdersRejectedByRisk = riskRejected,
             OrdersRejectedByBroker = brokerRejected,
             OrdersUnfilledAtEnd = adapter.PendingCount,
+            FinalPositionSide = finalPos?.Side ?? Domain.Enums.PositionSide.Flat,
+            FinalPositionQuantity = finalPos?.Quantity ?? 0,
+            FinalPositionAvgPrice = finalPos?.AverageEntryPrice ?? 0m,
+            FinalPositionUnrealizedGross = finalPos?.UnrealizedGrossPnL ?? 0m,
             FinalFeedState = feedHealth.State
         };
     }

@@ -4,7 +4,7 @@ import { CandleProfileChart, type Bubble } from "@/components/research/CandlePro
 import { FlowPanels } from "@/components/research/FlowPanels";
 import type { ChartTrade } from "@/lib/replay";
 import {
-  type WorkspaceData, type WsTrade, cvdSeries, vwapSeries, volumeProfile, barPriceOccupancy, tradeBubbles, buildSnapshot, isAvailable,
+  type WorkspaceData, type WsTrade, type WsRunIndexEntry, cvdSeries, vwapSeries, volumeProfile, barPriceOccupancy, tradeBubbles, buildSnapshot, isAvailable,
 } from "@/lib/workspace";
 
 const KEY = "#3cf0a0", RED = "#f0566a";
@@ -25,14 +25,51 @@ export function ResearchWorkspace() {
   const [stratIdx, setStratIdx] = useState(1);
   const [selected, setSelected] = useState<number | null>(null);
   const [focusKey, setFocusKey] = useState(0);
+  const [src, setSrc] = useState<string>("");
+  const [runs, setRuns] = useState<WsRunIndexEntry[]>([]);
+  const [runId, setRunId] = useState<string>("");
   const [lay, setLay] = useState<Layout>(() => { try { return { ...DEFAULT, ...JSON.parse(localStorage.getItem(LS) || "{}"), modules: { ...DEFAULT.modules, ...(JSON.parse(localStorage.getItem(LS) || "{}").modules || {}) }, ind: { ...DEFAULT.ind, ...(JSON.parse(localStorage.getItem(LS) || "{}").ind || {}) } }; } catch { return DEFAULT; } });
   useEffect(() => { try { localStorage.setItem(LS, JSON.stringify(lay)); } catch { } }, [lay]);
 
+  const applyData = (data: WorkspaceData, source: string) => {
+    const of = data.strategies.findIndex((s) => s.usesOrderflow);
+    setD(data); setStratIdx(of >= 0 ? of : 0); setSelected(0); setFocusKey((k) => k + 1); setSrc(source); setErr(null);
+  };
+  const loadRun = async (id: string) => {
+    try {
+      const r = await fetch(`/orderflow-runs/${id}.json`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      applyData((await r.json()) as WorkspaceData, `orderflow-runs/${id}.json`); setRunId(id);
+    } catch (e) { setErr(`Lauf ${id} nicht ladbar: ${String(e)}`); }
+  };
+
   useEffect(() => {
     let ok = true;
-    fetch("/research-workspace.json").then((r) => (r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`)))
-      .then((data: WorkspaceData) => { if (!ok) return; const of = data.strategies.findIndex((s) => s.usesOrderflow); setD(data); setStratIdx(of >= 0 ? of : 0); setSelected(0); setFocusKey((k) => k + 1); })
-      .catch((e) => ok && setErr(String(e)));
+    (async () => {
+      // 1) read-only Lauf-Index bevorzugen (Auswahl mehrerer gespeicherter Laeufe).
+      try {
+        const ri = await fetch("/orderflow-runs/index.json");
+        if (ri.ok) {
+          const list = (await ri.json()) as WsRunIndexEntry[];
+          if (!ok) return;
+          if (Array.isArray(list) && list.length > 0) {
+            setRuns(list);
+            await loadRun((list.find((x) => x.loadable !== false) ?? list[0]).id);
+            return;
+          }
+        }
+      } catch { /* kein Index -> Fallback */ }
+      // 2) Fallback: fester Zwischenstand (orderflow-run.json) bzw. Demo.
+      for (const url of ["/orderflow-run.json", "/research-workspace.json"]) {
+        try {
+          const r = await fetch(url);
+          if (!r.ok) continue;
+          if (!ok) return;
+          applyData((await r.json()) as WorkspaceData, url.replace("/", "")); return;
+        } catch { /* naechste Quelle versuchen */ }
+      }
+      if (ok) setErr("kein Lauf geladen (orderflow-runs/index.json, orderflow-run.json, research-workspace.json fehlen)");
+    })();
     return () => { ok = false; };
   }, []);
 
@@ -73,7 +110,7 @@ export function ResearchWorkspace() {
     a.download = `analysis-snapshot${pit ? "-at-entry" : ""}-${strat?.name}-trade${(selected ?? 0) + 1}.json`; a.click(); URL.revokeObjectURL(a.href);
   }
 
-  if (err) return <Box><p className="text-xs text-[var(--red)] mono">research-workspace.json nicht geladen: {err} (Harness erzeugt dashboard/public/research-workspace.json)</p></Box>;
+  if (err) return <Box><p className="text-xs text-[var(--red)] mono">Orderflow-Lauf nicht geladen: {err}. Erzeuge ihn lokal mit <b>dotnet run --project src/TradingBot.OrderflowRun</b> (schreibt dashboard/public/orderflow-run.json).</p></Box>;
   if (!d || !strat) return <Box><p className="text-xs text-[var(--fg-faint)]">Lade Orderflow-Arbeitsfläche…</p></Box>;
 
   const tgl = (grp: "modules" | "ind", k: string) => setLay((p) => ({ ...p, [grp]: { ...p[grp], [k]: !p[grp][k] } }));
@@ -85,6 +122,11 @@ export function ResearchWorkspace() {
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm font-medium text-[var(--fg)]">Orderflow-Arbeitsfläche · {d.meta.instrument}</span>
         <span className="text-[10px] px-1.5 py-0.5 rounded bg-[rgba(240,195,90,.14)] text-[var(--gold,#f0c35a)] border border-[rgba(240,195,90,.4)]">TECHNISCHER TEST · keine Profitabilitätsaussage</span>
+        {runs.length > 0 && (
+          <select value={runId} onChange={(e) => loadRun(e.target.value)} title="Gespeicherte Orderflow-Läufe" className="h-[26px] bg-[var(--panel-2,#13202e)] text-[var(--fg)] border border-[var(--line-2)] rounded text-[11px] px-1 max-w-[300px]">
+            {runs.map((r) => <option key={r.id} value={r.id} disabled={r.loadable === false}>{(r.generatedUtc || r.id).slice(0, 19).replace("T", " ")} · {r.instrument} · {r.ok ? "ok" : "⚠ " + r.status}{r.loadable === false ? " (nicht ladbar)" : ""}</option>)}
+          </select>
+        )}
         <div className="flex items-center gap-1">
           {d.strategies.map((s, i) => <Btn key={s.name} on={i === stratIdx} onClick={() => { setStratIdx(i); setSelected(0); setFocusKey((k) => k + 1); }}>{s.name}{s.usesOrderflow ? "·OF" : ""}</Btn>)}
         </div>
@@ -124,6 +166,9 @@ export function ResearchWorkspace() {
         <b>Datenstatus:</b> {Object.entries(d.availability).map(([k, v]) => <span key={k} className="mr-2">{k}: <span style={{ color: isAvailable(v) ? KEY : RED }}>{v}</span></span>)}
         <br /><b>Qualität:</b> {d.quality.priceGranularity} · Drops {d.quality.drops} · {d.quality.aggressor} · {d.quality.footprintSource}
         <br /><b>Anker:</b> VWAP & CVD ab Bar 0 (Aufnahmestart {new Date(d.meta.marketStartMs).toISOString().slice(11, 19)} UTC) · Volume-Profile-Bereich Bars {range[0]}–{range[1]} · Bars/Preis-Einheit 1 Bar = {d.meta.ticksPerBar} Ticks (keine Zeit) · Bubbles ≥ {lay.bubbleMinVol} Kontrakte
+        {d.provenance && <><br /><b>Lauf:</b> Quelle {src.replace("/", "") || "—"} · {d.provenance.ticks} Ticks → {d.provenance.fullBars} Bars (+{d.provenance.remainderTicks} Rest) · {d.provenance.ticksPerBar} t/Bar · SHA {d.provenance.dataSha256.slice(0, 10)} · {d.provenance.capabilities}</>}
+        {strat?.status && <><br /><b>{strat.name}:</b> {strat.status} · Signale {strat.signalsGenerated} · Orders {strat.ordersSubmitted} (Risk-abgelehnt {strat.ordersRejectedByRisk}) · Pending@Ende {strat.ordersUnfilledAtEnd} · offene Position@Ende <span style={{ color: strat.openPositionSide === "Flat" ? "var(--fg-faint)" : strat.openPositionSide === "Long" ? KEY : RED }}>{strat.openPositionSide} {strat.openPositionQty || 0}{strat.openPositionQty ? ` @ ${strat.openPositionAvgPrice?.toFixed(2)}` : ""}</span></>}
+        {strat?.endEquityMarkToMarket !== undefined && <><br /><b>Ergebnis {strat.name}:</b> real. Netto {eur(strat.realizedNetPnL ?? 0)} · unreal.@letzter Tick {eur(strat.unrealizedGrossAtLastTick ?? 0)} · Fees ges. {eur(strat.totalFeesPaid ?? 0)} (offene Eintritts-Fee {eur(strat.openPositionEntryFees ?? 0)}, keine Exit-Fee) · End-Equity real {eur(strat.endEquityRealized ?? 0)} / MtM {eur(strat.endEquityMarkToMarket ?? 0)}</>}
       </div>
 
       {/* Obere Panel-Reihe */}
