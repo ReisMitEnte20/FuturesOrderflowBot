@@ -7,50 +7,85 @@ using Xunit;
 
 namespace TradingBot.Tests.Orderflow;
 
-/// <summary>Belegt das SinglePositionGate: gleiche Richtung halten (kein Add), Flat schliesst,
-/// Gegenrichtung = Close-dann-Reopen (dokumentierte Engine-Semantik). Regeln der inneren Strategie unveraendert.</summary>
+/// <summary>
+/// Belegt, dass SinglePositionGate gegen den TATSAECHLICHEN Positionszustand entscheidet (nicht gegen ein
+/// Signalmodell): gleiche Richtung halten (kein Add), Flat schliesst nur bei offener Position, Gegenrichtung
+/// durchreichen. Regeln der inneren Strategie unveraendert.
+/// </summary>
 public class SinglePositionGateStrategyTests
 {
-    /// <summary>Innere Stub-Strategie, die vorgegebene Richtungen (oder null = kein Signal) liefert.</summary>
-    private sealed class QueuedStrategy : IStrategy
+    /// <summary>Steuerbare, read-only Positionsquelle fuer den Gate.</summary>
+    private sealed class FakePositionManager : IPositionManager
     {
-        private readonly Queue<SignalDirection?> _q;
-        public QueuedStrategy(params SignalDirection?[] seq) => _q = new Queue<SignalDirection?>(seq);
-        public string Name => "Stub";
-        public TradeSignal? OnOrderFlowBar(OrderFlowBar b)
-        {
-            var d = _q.Count > 0 ? _q.Dequeue() : null;
-            return d is null ? null : new TradeSignal { StrategyName = Name, Symbol = b.Symbol, Direction = d.Value, SuggestedQuantity = 1 };
-        }
+        public PositionSide Side { get; set; } = PositionSide.Flat;
+        public int Quantity { get; set; }
+        public Position? GetPosition(string symbol) => new() { AccountId = "t", Symbol = symbol, Side = Side, Quantity = Quantity };
+        public IReadOnlyCollection<Position> OpenPositions => System.Array.Empty<Position>();
+        public Position ApplyFill(FillEvent fill, InstrumentProfile instrument, FeeProfile feeProfile) => throw new System.NotSupportedException();
+        public Position MarkToMarket(string symbol, decimal lastPrice, InstrumentProfile instrument) => throw new System.NotSupportedException();
+        public bool Reconcile(string symbol, Position? brokerPosition) => true;
+    }
+
+    private sealed class FixedInner : IStrategy
+    {
+        private readonly SignalDirection _dir;
+        public FixedInner(SignalDirection dir) => _dir = dir;
+        public string Name => "Fixed";
+        public TradeSignal? OnOrderFlowBar(OrderFlowBar b) => new() { StrategyName = Name, Symbol = b.Symbol, Direction = _dir, SuggestedQuantity = 1 };
     }
 
     private static OrderFlowBar Bar() => new() { Symbol = "NQ", Open = 100, High = 100, Low = 100, Close = 100 };
 
-    private static List<SignalDirection?> Run(params SignalDirection?[] seq)
+    private static SignalDirection? Decide(SignalDirection inner, PositionSide actual, int qty = 1)
     {
-        var gate = new SinglePositionGateStrategy(new QueuedStrategy(seq));
-        var outp = new List<SignalDirection?>();
-        for (int i = 0; i < seq.Length; i++) outp.Add(gate.OnOrderFlowBar(Bar())?.Direction);
-        return outp;
+        var pm = new FakePositionManager { Side = actual, Quantity = actual == PositionSide.Flat ? 0 : qty };
+        var gate = new SinglePositionGateStrategy(new FixedInner(inner));
+        gate.UsePositionManager(pm);
+        return gate.OnOrderFlowBar(Bar())?.Direction;
     }
 
-    [Fact]
-    public void Same_direction_is_held_no_add()
-        => Run(SignalDirection.Long, SignalDirection.Long, SignalDirection.Long)
-           .Should().Equal(SignalDirection.Long, null, null);
+    [Theory]
+    [InlineData((int)PositionSide.Flat)]
+    [InlineData((int)PositionSide.Short)]
+    public void Long_is_forwarded_unless_already_long(int actual)
+        => Decide(SignalDirection.Long, (PositionSide)actual).Should().Be(SignalDirection.Long);
 
     [Fact]
-    public void Flat_closes_only_when_a_position_is_open()
-        => Run(SignalDirection.Long, SignalDirection.Flat, SignalDirection.Flat)
-           .Should().Equal(SignalDirection.Long, SignalDirection.Flat, null);
+    public void Long_is_suppressed_when_already_long_no_add()
+        => Decide(SignalDirection.Long, PositionSide.Long).Should().BeNull();
+
+    [Theory]
+    [InlineData((int)PositionSide.Flat)]
+    [InlineData((int)PositionSide.Long)]
+    public void Short_is_forwarded_unless_already_short(int actual)
+        => Decide(SignalDirection.Short, (PositionSide)actual).Should().Be(SignalDirection.Short);
 
     [Fact]
-    public void Opposite_direction_closes_then_reopens_over_two_signals()
-        => Run(SignalDirection.Long, SignalDirection.Short, SignalDirection.Short)
-           .Should().Equal(SignalDirection.Long, SignalDirection.Short, SignalDirection.Short);
+    public void Short_is_suppressed_when_already_short_no_add()
+        => Decide(SignalDirection.Short, PositionSide.Short).Should().BeNull();
+
+    [Theory]
+    [InlineData((int)PositionSide.Long)]
+    [InlineData((int)PositionSide.Short)]
+    public void Flat_closes_only_when_a_position_is_actually_open(int actual)
+        => Decide(SignalDirection.Flat, (PositionSide)actual).Should().Be(SignalDirection.Flat);
 
     [Fact]
-    public void Null_inner_signal_is_passed_through_as_hold()
-        => Run(SignalDirection.Long, null, SignalDirection.Long)
-           .Should().Equal(SignalDirection.Long, null, null); // Doji haelt; danach schon long -> kein Add
+    public void Flat_is_suppressed_when_actually_flat()
+        => Decide(SignalDirection.Flat, PositionSide.Flat).Should().BeNull();
+
+    [Fact]
+    public void Null_inner_signal_stays_null_regardless_of_position()
+    {
+        var pm = new FakePositionManager { Side = PositionSide.Long, Quantity = 1 };
+        var gate = new SinglePositionGateStrategy(new FixedInnerNull());
+        gate.UsePositionManager(pm);
+        gate.OnOrderFlowBar(Bar()).Should().BeNull();
+    }
+
+    private sealed class FixedInnerNull : IStrategy
+    {
+        public string Name => "Null";
+        public TradeSignal? OnOrderFlowBar(OrderFlowBar b) => null;
+    }
 }

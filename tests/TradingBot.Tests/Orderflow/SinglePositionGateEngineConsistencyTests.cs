@@ -88,12 +88,42 @@ public class SinglePositionGateEngineConsistencyTests
     }
 
     [Fact]
-    public async Task Unfilled_order_at_end_never_over_positions()
+    public async Task Rejected_first_long_does_not_suppress_a_later_valid_long()
     {
-        // Signal auf der LETZTEN Bar -> Order bleibt ungefuellt (kein Folge-Tick). Keine Ueberposition.
-        var r = await Run(Gated(SignalDirection.Long, SignalDirection.Long), ticks: 4); // 2 Bars (tpb=2), 2. Signal fuellt nicht
+        // Regression 1: Erste Long-Order wird vom Broker abgelehnt -> KEINE Phantomposition (Gate liest die
+        // tatsaechliche, flache Position). Das spaetere gueltige Long MUSS oeffnen.
+        int seen = 0;
+        var r = await Run(Gated(SignalDirection.Long, SignalDirection.Long, SignalDirection.Long),
+            ticks: 8, reject: _ => seen++ == 0);
         r.Status.Should().Be(BacktestRunStatus.Completed);
-        r.FinalPositionQuantity.Should().BeLessThanOrEqualTo(1);
+        r.OrdersRejectedByBroker.Should().Be(1);
+        r.FinalPositionSide.Should().Be(PositionSide.Long, "das spaetere Long darf nicht wegen einer Phantomposition unterdrueckt werden");
+        r.FinalPositionQuantity.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task First_entry_signal_on_the_very_last_tick_stays_pending_and_engine_flat()
+    {
+        // Regression 2: Erstes (einziges) Entry-Signal entsteht auf der LETZTEN Bar/dem letzten Tick.
+        // Die Order bleibt tatsaechlich pending; die Engine bleibt Flat. Pending explizit geprueft.
+        var r = await Run(Gated(null, null, SignalDirection.Long), ticks: 6); // 3 Bars (tpb=2), 3. Bar = letzter Tick
+        r.Status.Should().Be(BacktestRunStatus.Completed);
+        r.SignalsGenerated.Should().Be(1, "nur die letzte Bar liefert ein Signal");
+        r.OrdersUnfilledAtEnd.Should().BeGreaterThan(0, "die Order am letzten Tick kann nicht mehr fuellen (pending)");
+        r.FinalPositionSide.Should().Be(PositionSide.Flat);
+        r.FinalPositionQuantity.Should().Be(0, "ohne Fill keine Position");
+    }
+
+    [Fact]
+    public async Task Pending_or_rejected_entry_never_produces_a_double_entry()
+    {
+        // Regression 3: Eine angenommene, aber (durch Ablehnung) nicht gefuellte Order fuehrt zu keiner
+        // Doppelposition. Trotz mehrerer gleichgerichteter Signale bleibt die Position <= 1 Kontrakt.
+        int seen = 0;
+        var r = await Run(Gated(SignalDirection.Long, SignalDirection.Long, SignalDirection.Long, SignalDirection.Long),
+            ticks: 12, reject: _ => seen++ == 0);
+        r.Status.Should().Be(BacktestRunStatus.Completed);
+        r.FinalPositionQuantity.Should().BeLessThanOrEqualTo(1, "kein doppelter Entry trotz nicht gefuellter erster Order");
     }
 
     [Fact]

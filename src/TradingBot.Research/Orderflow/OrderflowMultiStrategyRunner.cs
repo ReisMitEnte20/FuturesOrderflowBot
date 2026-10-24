@@ -159,8 +159,7 @@ public sealed class OrderflowMultiStrategyRunner
                 OrdersSubmitted = diag?.OrdersSubmitted ?? 0,
                 OrdersRejectedByRisk = diag?.OrdersRejectedByRisk ?? 0,
                 OrdersRejectedByBroker = diag?.OrdersRejectedByBroker ?? 0,
-                OrdersUnfilledAtEnd = diag?.OrdersUnfilledAtEnd ?? 0,
-                GatePreconditionHeld = (diag?.OrdersRejectedByRisk ?? 0) == 0 && (diag?.OrdersRejectedByBroker ?? 0) == 0
+                OrdersUnfilledAtEnd = diag?.OrdersUnfilledAtEnd ?? 0
             });
         }
 
@@ -240,7 +239,7 @@ public sealed class OrderflowMultiStrategyRunner
                 "Preisgranularitaet 1-Punkt (MNQ real 0,25) ungeklaert und NICHT korrigiert.",
                 "DOM/Orderbuch-Heatmap unvalidiert - als nicht verfuegbar gekennzeichnet.",
                 "Kleiner Einzelabschnitt, kein Out-of-Sample/Holdout.",
-                "SinglePositionGate (max. 1 Kontrakt, kein Add) modelliert die Position aus Signalen; Trades/Position/PnL stammen IMMER aus der Engine. Harte Obergrenze via RiskConfig MaxContracts=1 (Backstop). Je Strategie zeigt GatePreconditionHeld, ob 0 Ablehnungen auftraten (dann Gate-Zustand == Engine-Zustand)."
+                "SinglePositionGate (max. 1 Kontrakt, kein Add) entscheidet gegen den TATSAECHLICHEN Positionszustand der Engine (read-only IPositionManager), nicht gegen ein Signalmodell: abgelehnte/ungefuellte Orders erzeugen keine Phantomposition. Trades/Position/PnL stammen ohnehin aus der Engine; harte Obergrenze via RiskConfig MaxContracts=1 (Backstop)."
             },
             SettingsUsed = req.SettingsUsed
         };

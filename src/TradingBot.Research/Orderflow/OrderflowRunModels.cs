@@ -134,14 +134,6 @@ public sealed record WsStrategy
     public int OrdersRejectedByRisk { get; init; }
     public int OrdersRejectedByBroker { get; init; }
     public int OrdersUnfilledAtEnd { get; init; }
-
-    /// <summary>
-    /// true, wenn KEINE Order abgelehnt wurde (Risk/Broker). Dann konnte der signalbasierte
-    /// SinglePositionGate-Zustand nicht vom tatsaechlichen Engine-Positionszustand abweichen
-    /// (jedes durchgereichte Market-Signal fuellt; der Tick-Pfad erzeugt keine SL/TP-Brackets).
-    /// false => moegliche Gate-Divergenz; die harte Obergrenze (RiskConfig MaxContracts=1) greift dennoch.
-    /// </summary>
-    public bool GatePreconditionHeld { get; init; } = true;
 }
 
 public sealed record WsTrade

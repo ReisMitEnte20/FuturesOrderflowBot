@@ -136,8 +136,7 @@ File.WriteAllText(manifestPath, JsonSerializer.Serialize(new
         s.RealizedNetPnL, s.RealizedFees, s.OpenPositionEntryFees, s.TotalFeesPaid,
         s.UnrealizedGrossAtLastTick, s.LastTickPrice, s.EndEquityRealized, s.EndEquityMarkToMarket,
         s.OpenPositionSide, s.OpenPositionQty, s.OpenPositionAvgPrice,
-        s.SignalsGenerated, s.OrdersSubmitted, s.OrdersRejectedByRisk, s.OrdersRejectedByBroker, s.OrdersUnfilledAtEnd,
-        s.GatePreconditionHeld
+        s.SignalsGenerated, s.OrdersSubmitted, s.OrdersRejectedByRisk, s.OrdersRejectedByBroker, s.OrdersUnfilledAtEnd
     })
 }, new JsonSerializerOptions(jsonWrite) { WriteIndented = true }));
 

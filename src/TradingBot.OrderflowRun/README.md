@@ -29,15 +29,15 @@ sich die Position ändert: gleiche Richtung → halten (kein Add), Flat → schl
 durchreichen (die Engine schließt konservativ; Reopen per Folgesignal). Es gibt **keinen** globalen
 OrderManager-Eingriff.
 
-Der Gate-Zustand wird aus **Signalen** modelliert — ein Signal ist noch kein Fill. Abweichen kann er nur
-bei einer **abgelehnten/ungefüllten** Order (der Tick-Pfad baut **keine** SL/TP-Brackets, also keine
-unbemerkten SL/TP-Exits). Absicherung:
+Der Gate entscheidet gegen den **tatsächlichen Positionszustand der Engine** (read-only über
+`IPositionManager.GetPosition`, gebunden via `IPositionManagerAware`), **nicht** gegen ein signalbasiertes
+Modell. Ein Signal ist noch kein Fill: wird eine Order abgelehnt oder bleibt sie ungefüllt, bleibt die
+gelesene Position flach — es entsteht **keine Phantomposition**, und ein späteres gültiges Signal wird nicht
+fälschlich unterdrückt. Der Tick-Pfad baut zudem **keine** SL/TP-Brackets (keine unbemerkten SL/TP-Exits).
 
-- **Trades/Position/PnL stammen immer aus der Engine**, nie aus dem Gate-Modell.
-- Harte Obergrenze **`MaxContracts=1`** (`config/risk/research-sim.example.json`) garantiert max. 1 Kontrakt
-  auch bei Divergenz (Backstop; im Normalfall nie ausgelöst, da der Gate Adds vermeidet → keine
-  Ablehnungs-Pollution).
-- Je Strategie zeigt **`gatePreconditionHeld`** (0 Ablehnungen), ob Gate-Zustand == Engine-Zustand war.
+- **Trades/Position/PnL stammen immer aus der Engine.**
+- Harte Obergrenze **`MaxContracts=1`** (`config/risk/research-sim.example.json`) als zusätzlicher Backstop
+  (im Normalfall nie ausgelöst, da der Gate Adds vermeidet → keine Ablehnungs-Pollution).
 
 ## Endergebnis (getrennt gespeichert/angezeigt)
 

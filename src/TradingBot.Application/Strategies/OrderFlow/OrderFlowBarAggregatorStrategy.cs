@@ -11,7 +11,7 @@ namespace TradingBot.Application.Strategies.OrderFlow;
 /// Ermöglicht die Nutzung von OrderFlow-Strategien mit der bestehenden <see cref="BacktestEngine"/>
 /// (die nur <see cref="IStrategy.OnTick"/> aufruft), ohne Architektur-Änderung.
 /// </summary>
-public sealed class OrderFlowBarAggregatorStrategy : IStrategy
+public sealed class OrderFlowBarAggregatorStrategy : IStrategy, IPositionManagerAware
 {
     private readonly IStrategy _innerStrategy;
     private readonly int _ticksPerBar;
@@ -61,6 +61,12 @@ public sealed class OrderFlowBarAggregatorStrategy : IStrategy
     public TradeSignal? OnCandle(Candle candle) => null;
 
     public TradeSignal? OnOrderFlowBar(OrderFlowBar bar) => null; // wir aggregieren selbst
+
+    // Read-only Positions-Referenz an die innere Strategie durchreichen (falls diese sie nutzt).
+    public void UsePositionManager(IPositionManager positions)
+    {
+        if (_innerStrategy is IPositionManagerAware aware) aware.UsePositionManager(positions);
+    }
 
     public void Reset()
     {
