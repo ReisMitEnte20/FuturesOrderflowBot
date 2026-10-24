@@ -44,8 +44,8 @@ public sealed class BacktestEngine : IBacktestEngine
         var innerPm = new PositionManager(feeCalc, pnlCalc);
         var positions = new RecordingPositionManager(innerPm);
 
-        // Opt-in: Strategien/Wrapper, die ihren tatsaechlichen Positionszustand lesen wollen (read-only),
-        // erhalten hier die Referenz. Keine Execution-Faehigkeit; Strategien ohne den Hook bleiben unveraendert.
+        // Opt-in: Strategien/Wrapper, die ihren tatsaechlichen Positionszustand abfragen wollen, erhalten hier
+        // die Referenz; sie nutzen sie ausschliesslich lesend (GetPosition). Strategien ohne den Hook bleiben unveraendert.
         if (request.Strategy is IPositionManagerAware positionAware)
             positionAware.UsePositionManager(positions);
 

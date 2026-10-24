@@ -10,11 +10,17 @@ namespace TradingBot.Research.Orderflow;
 /// begrenzt eine innere OrderFlow-Strategie auf HOECHSTENS EINEN Kontrakt und unterdrueckt das Aufstocken
 /// (Add) bei wiederholten gleichgerichteten Signalen — wie der urspruengliche Harness.
 ///
-/// Die Entscheidung stuetzt sich auf den TATSAECHLICHEN Positionszustand der Engine (read-only ueber
-/// <see cref="IPositionManager.GetPosition"/>, gebunden via <see cref="IPositionManagerAware"/>), NICHT auf
-/// ein signalbasiertes Modell. Ein gesendetes Signal ist kein Fill: wird eine Order abgelehnt oder bleibt
-/// sie ungefuellt, bleibt die gelesene Position flach — es entsteht keine Phantomposition und ein spaeteres
-/// gueltiges Signal wird nicht faelschlich unterdrueckt.
+/// Die Entscheidung stuetzt sich auf den TATSAECHLICHEN Positionszustand der Engine; dafuer wird
+/// <see cref="IPositionManager"/> AUSSCHLIESSLICH LESEND genutzt (nur <see cref="IPositionManager.GetPosition"/>,
+/// gebunden via <see cref="IPositionManagerAware"/>). Ein gesendetes Signal ist kein Fill: wird eine Order
+/// abgelehnt oder bleibt sie ungefuellt, bleibt die gelesene Position flach — es entsteht keine Phantomposition
+/// und ein spaeteres gueltiges Signal wird nicht faelschlich unterdrueckt.
+///
+/// Betriebsgrenze (Market-Order-Replay-Pfad): Eine angenommene Market-Order wird am unmittelbar FOLGENDEN Tick
+/// VOLLSTAENDIG gefuellt (Fills laufen je Tick VOR der Strategie; FillModel fuellt Market voll, keine Teilfuellung).
+/// Da Gate-Signale nur am Bar-Schluss entstehen (alle ticksPerBar Ticks), ist eine angenommene Order vor dem
+/// naechsten Signal stets vollstaendig gefuellt — Ausnahme: ein Signal am allerletzten Tick (kein Folge-Tick ->
+/// bleibt pending). Orders bleiben also nicht ueber weitere Signalschritte offen.
 ///
 /// Logik (gegen die tatsaechliche Position):
 ///  - gleiche Richtung bereits offen -> KEIN Signal (halten, kein Add)

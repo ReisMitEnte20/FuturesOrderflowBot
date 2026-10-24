@@ -239,7 +239,7 @@ public sealed class OrderflowMultiStrategyRunner
                 "Preisgranularitaet 1-Punkt (MNQ real 0,25) ungeklaert und NICHT korrigiert.",
                 "DOM/Orderbuch-Heatmap unvalidiert - als nicht verfuegbar gekennzeichnet.",
                 "Kleiner Einzelabschnitt, kein Out-of-Sample/Holdout.",
-                "SinglePositionGate (max. 1 Kontrakt, kein Add) entscheidet gegen den TATSAECHLICHEN Positionszustand der Engine (read-only IPositionManager), nicht gegen ein Signalmodell: abgelehnte/ungefuellte Orders erzeugen keine Phantomposition. Trades/Position/PnL stammen ohnehin aus der Engine; harte Obergrenze via RiskConfig MaxContracts=1 (Backstop)."
+                "SinglePositionGate (max. 1 Kontrakt, kein Add) entscheidet gegen den TATSAECHLICHEN Positionszustand der Engine; es nutzt IPositionManager ausschliesslich lesend (GetPosition). Abgelehnte/ungefuellte Orders erzeugen keine Phantomposition. Betriebsgrenze: im Market-Order-Replay-Pfad wird eine angenommene Order am Folge-Tick vollstaendig gefuellt (vor dem naechsten Bar-Signal); nur ein Signal am allerletzten Tick bleibt pending. Trades/Position/PnL stammen aus der Engine; harte Obergrenze via RiskConfig MaxContracts=1 (Backstop)."
             },
             SettingsUsed = req.SettingsUsed
         };

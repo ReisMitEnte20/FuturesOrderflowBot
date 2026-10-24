@@ -115,15 +115,32 @@ public class SinglePositionGateEngineConsistencyTests
     }
 
     [Fact]
-    public async Task Pending_or_rejected_entry_never_produces_a_double_entry()
+    public async Task Rejected_entry_never_produces_a_double_entry()
     {
-        // Regression 3: Eine angenommene, aber (durch Ablehnung) nicht gefuellte Order fuehrt zu keiner
-        // Doppelposition. Trotz mehrerer gleichgerichteter Signale bleibt die Position <= 1 Kontrakt.
+        // Regression 3: Eine ABGELEHNTE (nicht gefuellte) erste Order fuehrt zu keiner Doppelposition.
+        // Trotz mehrerer gleichgerichteter Signale bleibt die Position <= 1 Kontrakt.
         int seen = 0;
         var r = await Run(Gated(SignalDirection.Long, SignalDirection.Long, SignalDirection.Long, SignalDirection.Long),
             ticks: 12, reject: _ => seen++ == 0);
         r.Status.Should().Be(BacktestRunStatus.Completed);
-        r.FinalPositionQuantity.Should().BeLessThanOrEqualTo(1, "kein doppelter Entry trotz nicht gefuellter erster Order");
+        r.OrdersRejectedByBroker.Should().Be(1);
+        r.FinalPositionQuantity.Should().BeLessThanOrEqualTo(1, "kein doppelter Entry trotz abgelehnter erster Order");
+    }
+
+    [Fact]
+    public async Task Accepted_market_order_is_fully_filled_on_the_next_tick_before_the_next_signal()
+    {
+        // Betriebsgrenze (Market-Order-Replay-Pfad): Eine angenommene Order wird am FOLGE-Tick VOLLSTAENDIG
+        // gefuellt, also vor dem naechsten Bar-Signal. Beweis: bar0 Long -> gefuellt (qty 1, nichts pending);
+        // bar1 Long sieht die Position bereits Long -> unterdrueckt (nur 1 Entry-Submit); bar2 Flat schliesst
+        // -> genau 1 abgeschlossener Trade mit voller Menge.
+        var r = await Run(Gated(SignalDirection.Long, SignalDirection.Long, SignalDirection.Flat), ticks: 8);
+        r.Status.Should().Be(BacktestRunStatus.Completed);
+        r.OrdersSubmitted.Should().Be(2, "bar0 Long + bar2 Flat; bar1 Long unterdrueckt -> die Position war vor bar1 bereits gefuellt");
+        r.OrdersUnfilledAtEnd.Should().Be(0, "die angenommene Order ist vollstaendig gefuellt (kein pending)");
+        r.Trades.Should().ContainSingle();
+        r.Trades[0].Quantity.Should().Be(1, "vollstaendige Fuellung, keine Teilfuellung");
+        r.FinalPositionSide.Should().Be(PositionSide.Flat);
     }
 
     [Fact]

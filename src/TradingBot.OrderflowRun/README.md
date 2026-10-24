@@ -29,11 +29,19 @@ sich die Position ändert: gleiche Richtung → halten (kein Add), Flat → schl
 durchreichen (die Engine schließt konservativ; Reopen per Folgesignal). Es gibt **keinen** globalen
 OrderManager-Eingriff.
 
-Der Gate entscheidet gegen den **tatsächlichen Positionszustand der Engine** (read-only über
-`IPositionManager.GetPosition`, gebunden via `IPositionManagerAware`), **nicht** gegen ein signalbasiertes
-Modell. Ein Signal ist noch kein Fill: wird eine Order abgelehnt oder bleibt sie ungefüllt, bleibt die
-gelesene Position flach — es entsteht **keine Phantomposition**, und ein späteres gültiges Signal wird nicht
-fälschlich unterdrückt. Der Tick-Pfad baut zudem **keine** SL/TP-Brackets (keine unbemerkten SL/TP-Exits).
+Der Gate entscheidet gegen den **tatsächlichen Positionszustand der Engine**; dafür wird `IPositionManager`
+**ausschließlich lesend** genutzt (nur `GetPosition`, gebunden via `IPositionManagerAware`). `IPositionManager`
+ist selbst nicht read-only (bietet auch `ApplyFill`/`MarkToMarket`) — diese werden hier **nicht** aufgerufen.
+Ein Signal ist noch kein Fill: wird eine Order abgelehnt oder bleibt sie ungefüllt, bleibt die gelesene
+Position flach — es entsteht **keine Phantomposition**, und ein späteres gültiges Signal wird nicht fälschlich
+unterdrückt.
+
+**Betriebsgrenze (Market-Order-Replay-Pfad):** Eine angenommene Market-Order wird am unmittelbar **folgenden
+Tick vollständig** gefüllt (Fills laufen je Tick **vor** der Strategie; der `FillModel` füllt Market voll, keine
+Teilfüllung). Da Gate-Signale nur am Bar-Schluss entstehen (alle `ticksPerBar` Ticks), ist eine angenommene
+Order **vor dem nächsten Signal stets vollständig gefüllt** — **Ausnahme:** ein Signal am allerletzten Tick
+(kein Folge-Tick → bleibt pending, Engine bleibt flach). Orders bleiben also **nicht** über weitere
+Signalschritte offen. Der Tick-Pfad baut zudem **keine** SL/TP-Brackets (keine unbemerkten SL/TP-Exits).
 
 - **Trades/Position/PnL stammen immer aus der Engine.**
 - Harte Obergrenze **`MaxContracts=1`** (`config/risk/research-sim.example.json`) als zusätzlicher Backstop
