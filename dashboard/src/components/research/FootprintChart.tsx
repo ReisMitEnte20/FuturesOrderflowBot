@@ -13,6 +13,8 @@ export interface FpBar { candle: { t: number; o: number; h: number; l: number; c
 interface Props {
   bars: FpBar[];
   trades: ChartTrade[];
+  /** true = ALLE Trade-Marker; false (Default) = nur der ausgewaehlte Trade (Selected-Overlay). */
+  showAllTrades?: boolean;
   selected: number | null;
   focusKey: number;
   onSelectTrade?: (index: number) => void;
@@ -45,7 +47,7 @@ export function FootprintChart(props: Props) {
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
-    const { bars, trades } = props;
+    const { bars, trades, showAllTrades } = props;
     const n = bars.length;
 
     // Flache Zell-Daten: [barIdx, price, bid, ask] + globale Max-Intensitaet.
@@ -53,8 +55,8 @@ export function FootprintChart(props: Props) {
     let maxVol = 1;
     bars.forEach((b, i) => b.levels.forEach((lv) => { cells.push([i, lv.p, lv.b, lv.a]); maxVol = Math.max(maxVol, lv.b, lv.a); }));
 
-    const entries = trades.map((t) => ({ value: [t.entryBarIndex, t.entryPrice], tradeIndex: t.index, symbol: t.side === "Long" ? "triangle" : SHORT_DOWN, itemStyle: { color: t.side === "Long" ? KEY : RED, borderColor: FG, borderWidth: 1 } }));
-    const exits = trades.filter((t) => t.exit).map((t) => ({ value: [t.exit!.barIndex, t.exit!.price], tradeIndex: t.index, itemStyle: { color: "#f0c35a" } }));
+    const entries = showAllTrades ? trades.map((t) => ({ value: [t.entryBarIndex, t.entryPrice], tradeIndex: t.index, symbol: t.side === "Long" ? "triangle" : SHORT_DOWN, symbolSize: 9, itemStyle: { color: t.side === "Long" ? KEY : RED, borderColor: FG, borderWidth: 1, opacity: 0.85 } })) : [];
+    const exits = showAllTrades ? trades.filter((t) => t.exit).map((t) => ({ value: [t.exit!.barIndex, t.exit!.price], tradeIndex: t.index, symbolSize: 8, itemStyle: { color: "#f0c35a", opacity: 0.85 } })) : [];
 
     const renderItem = (_params: any, api: any) => {
       const bar = api.value(0), price = api.value(1), bid = api.value(2), ask = api.value(3);
@@ -89,8 +91,9 @@ export function FootprintChart(props: Props) {
           axisLine: { lineStyle: { color: LINE } },
           axisTick: { show: false },
           axisLabel: {
-            color: FAINT, fontSize: 9, hideOverlap: true, lineHeight: 11, interval: "auto",
-            formatter: (_v: string, idx: number) => { const b = bars[idx]; return b ? `Δ${b.candle.delta}\nV${b.candle.v}` : ""; },
+            color: FAINT, fontSize: 9, hideOverlap: true, interval: "auto",
+            // Zeitbeschriftung (statt Bar-Nummern); Δ/Volumen stehen im Tooltip und im Vol/Δ/CVD-Panel.
+            formatter: (_v: string, idx: number) => { const b = bars[idx]; return b ? new Date(b.candle.t).toISOString().slice(11, 19) : ""; },
           },
         },
         yAxis: { type: "value", scale: true, position: "right", splitLine: { lineStyle: { color: LINE } }, axisLabel: { color: FAINT, fontSize: 10, formatter: (v: number) => v.toFixed(0) } },
@@ -128,7 +131,7 @@ export function FootprintChart(props: Props) {
       },
       { notMerge: true },
     );
-  }, [props.bars, props.trades]);
+  }, [props.bars, props.trades, props.showAllTrades]);
 
   // --- Fokus auf ausgewaehlten Trade (Zoom-Fenster + Hervorhebung), ohne Neuberechnung ---
   useEffect(() => {

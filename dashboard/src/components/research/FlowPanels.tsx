@@ -34,7 +34,7 @@ export function FlowPanels(props: Props) {
       xAxis: [
         { ...axCommon, gridIndex: 0, axisLabel: { show: false } },
         { ...axCommon, gridIndex: 1, axisLabel: { show: false } },
-        { ...axCommon, gridIndex: 2, axisLabel: { color: FAINT, fontSize: 9, hideOverlap: true } },
+        { ...axCommon, gridIndex: 2, axisLabel: { color: FAINT, fontSize: 9, hideOverlap: true, formatter: (_v: string, idx: number) => { const c = candles[idx]; return c ? new Date(c.t).toISOString().slice(11, 19) : ""; } } },
       ],
       yAxis: [
         { gridIndex: 0, type: "value", name: "Volumen", nameTextStyle: { color: FAINT, fontSize: 9 }, splitLine: { lineStyle: { color: LINE } }, axisLabel: { color: FAINT, fontSize: 9 } },

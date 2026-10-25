@@ -10,11 +10,12 @@ import {
 const KEY = "#3cf0a0", RED = "#f0566a";
 const eur = (n: number) => (n < 0 ? "−" : "") + "$" + Math.abs(n).toFixed(2);
 const sideCol = (s: string) => (s === "Long" ? KEY : RED);
-const LS = "research-workspace-layout-v1";
+const LS = "research-workspace-layout-v2";
 
 interface Layout { modules: Record<string, boolean>; ind: Record<string, boolean>; maximized: boolean; bubbleMinVol: number; }
 const DEFAULT: Layout = {
-  modules: { footprint: true, candle: true, flow: true, tape: true, status: true },
+  // DOM/Heatmap-Panel standardmaessig eingeklappt (keine validen Daten -> nur Kurzstatus).
+  modules: { footprint: true, candle: true, flow: true, tape: true, status: false },
   ind: { vp: true, vwap: true, tpo: false, bubbles: true },
   maximized: false, bubbleMinVol: 10,
 };
@@ -30,6 +31,8 @@ export function ResearchWorkspace() {
   const [runId, setRunId] = useState<string>("");
   const [lay, setLay] = useState<Layout>(() => { try { return { ...DEFAULT, ...JSON.parse(localStorage.getItem(LS) || "{}"), modules: { ...DEFAULT.modules, ...(JSON.parse(localStorage.getItem(LS) || "{}").modules || {}) }, ind: { ...DEFAULT.ind, ...(JSON.parse(localStorage.getItem(LS) || "{}").ind || {}) } }; } catch { return DEFAULT; } });
   useEffect(() => { try { localStorage.setItem(LS, JSON.stringify(lay)); } catch { } }, [lay]);
+  const [showDetails, setShowDetails] = useState(false);   // technische Provenienz/Diagnose aufklappbar (Analyse-Ansicht: zu)
+  const [showAllTrades, setShowAllTrades] = useState(false); // nur ausgewaehlten Trade markieren; alle Marker optional
 
   const applyData = (data: WorkspaceData, source: string) => {
     const of = data.strategies.findIndex((s) => s.usesOrderflow);
@@ -132,94 +135,124 @@ export function ResearchWorkspace() {
   const tgl = (grp: "modules" | "ind", k: string) => setLay((p) => ({ ...p, [grp]: { ...p[grp], [k]: !p[grp][k] } }));
   const Btn = ({ on, onClick, children }: any) => <button onClick={onClick} className={`h-[24px] px-2 rounded text-[10.5px] border ${on ? "bg-[var(--key)] text-black border-transparent font-semibold" : "border-[var(--line-2)] text-[var(--fg)]"}`}>{children}</button>;
 
+  // Trade-Navigation (prev/next/gesamt) + Hilfen
+  const tradeIdx = strat.trades.map((t) => t.index);
+  const curPos = selected == null ? -1 : tradeIdx.indexOf(selected);
+  const goTrade = (delta: number) => { if (!tradeIdx.length) return; const np = curPos < 0 ? (delta > 0 ? 0 : tradeIdx.length - 1) : (curPos + delta + tradeIdx.length) % tradeIdx.length; pick(tradeIdx[np]); };
+  const posCol = (s?: string) => (s === "Flat" || !s ? "var(--fg-faint)" : s === "Long" ? KEY : RED);
+  const startBal = d.provenance?.startingBalance;
+
   const inner = (
     <div className={`flex flex-col gap-2 ${lay.maximized ? "fixed inset-0 z-50 bg-[#05070b] p-3 overflow-auto" : ""}`}>
-      {/* Steuerleiste */}
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-sm font-medium text-[var(--fg)]">Orderflow-Arbeitsfläche · {d.meta.instrument}</span>
-        <span className="text-[10px] px-1.5 py-0.5 rounded bg-[rgba(240,195,90,.14)] text-[var(--gold,#f0c35a)] border border-[rgba(240,195,90,.4)]">TECHNISCHER TEST · keine Profitabilitätsaussage</span>
+      {/* 1. Kompakte Kopfzeile: Lauf · Strategie · Trade-Navigation · Maximieren */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="text-sm font-semibold text-[var(--fg)]">Orderflow · {d.meta.instrument}</span>
+        <span className="text-[9px] px-1.5 py-0.5 rounded bg-[rgba(240,195,90,.14)] text-[var(--gold,#f0c35a)] border border-[rgba(240,195,90,.4)]" title="Technischer Test – keine Profitabilitätsaussage">TEST</span>
         {runs.length > 0 && (
-          <select value={runId} onChange={(e) => loadRun(e.target.value)} title="Gespeicherte Orderflow-Läufe" className="h-[26px] bg-[var(--panel-2,#13202e)] text-[var(--fg)] border border-[var(--line-2)] rounded text-[11px] px-1 max-w-[300px]">
+          <select value={runId} onChange={(e) => loadRun(e.target.value)} title="Gespeicherte Orderflow-Läufe" className="h-[26px] bg-[var(--panel-2,#13202e)] text-[var(--fg)] border border-[var(--line-2)] rounded text-[11px] px-1 max-w-[240px]">
             {runs.map((r) => <option key={r.id} value={r.id} disabled={r.loadable === false}>{(r.generatedUtc || r.id).slice(0, 19).replace("T", " ")} · {r.instrument} · {r.ok ? "ok" : "⚠ " + r.status}{r.loadable === false ? " (nicht ladbar)" : ""}</option>)}
           </select>
         )}
+        <span className="h-4 w-px bg-[var(--line-2)]" />
         <div className="flex items-center gap-1">
           {d.strategies.map((s, i) => <Btn key={s.name} on={i === stratIdx} onClick={() => { setStratIdx(i); setSelected(0); setFocusKey((k) => k + 1); }}>{s.name}{s.usesOrderflow ? "·OF" : ""}</Btn>)}
         </div>
-        <select value={selected ?? ""} onChange={(e) => pick(e.target.value === "" ? null : +e.target.value)} className="h-[26px] bg-[var(--panel-2,#13202e)] text-[var(--fg)] border border-[var(--line-2)] rounded text-[11px] px-1 max-w-[220px]">
-          <option value="">Trade wählen…</option>
-          {strat.trades.map((t) => <option key={t.index} value={t.index}>#{t.index + 1} {t.side} {t.entryTime}→{t.exitTime} {eur(t.netPnL)}</option>)}
-        </select>
+        <span className="h-4 w-px bg-[var(--line-2)]" />
+        <div className="flex items-center gap-1" title="Trade-Navigation">
+          <Btn on={false} onClick={() => goTrade(-1)}>‹</Btn>
+          <select value={selected ?? ""} onChange={(e) => pick(e.target.value === "" ? null : +e.target.value)} className="h-[26px] bg-[var(--panel-2,#13202e)] text-[var(--fg)] border border-[var(--line-2)] rounded text-[11px] px-1 max-w-[200px]">
+            <option value="">Trade wählen…</option>
+            {strat.trades.map((t) => <option key={t.index} value={t.index}>#{t.index + 1} {t.side} {t.entryTime}→{t.exitTime} {eur(t.netPnL)}</option>)}
+          </select>
+          <Btn on={false} onClick={() => goTrade(1)}>›</Btn>
+          <Btn on={selected == null} onClick={() => pick(null)}>Gesamt</Btn>
+        </div>
         <div className="ml-auto flex items-center gap-1">
           <Btn on={false} onClick={() => exportSnapshot(false)}>Snapshot ⤓</Btn>
-          <Btn on={false} onClick={() => exportSnapshot(true)} >Snapshot @t ⤓</Btn>
+          <Btn on={false} onClick={() => exportSnapshot(true)}>@t ⤓</Btn>
           <Btn on={lay.maximized} onClick={() => setLay((p) => ({ ...p, maximized: !p.maximized }))}>{lay.maximized ? "Verkleinern ✕" : "Maximieren ⤢"}</Btn>
         </div>
       </div>
 
-      {/* Ausgewählter Trade */}
-      <div className="text-[11px] mono text-[var(--fg)]">
-        {selTrade ? <>#{selTrade.index + 1} <b style={{ color: sideCol(selTrade.side) }}>{selTrade.side}</b> · Menge {selTrade.qty} · Bar {selTrade.entryBarIndex}→{selTrade.exitBarIndex} · Entry {selTrade.entryPrice.toFixed(2)} ({selTrade.entryTime}) · Exit {selTrade.exitPrice.toFixed(2)} ({selTrade.exitTime}) · Kosten ${(2 * d.meta.feePerSide).toFixed(2)} · <span style={{ color: selTrade.netPnL >= 0 ? KEY : RED }}>Netto {eur(selTrade.netPnL)}</span></> : <span className="text-[var(--fg-faint)]">Kein Trade gewählt — alle Panels zeigen den gesamten Abschnitt.</span>}
+      {/* 2. Ergebnis-Kennzahlen (klar lesbar) + ausgewählter Trade + Kurz-Warnungen */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-[var(--line)] bg-[var(--bg-2)] px-3 py-1.5 text-[11px] mono">
+        <span className="text-[var(--fg-faint)] uppercase tracking-wide text-[10px]">{strat.name}</span>
+        <span>real. Netto <b style={{ color: (strat.realizedNetPnL ?? 0) >= 0 ? KEY : RED }}>{eur(strat.realizedNetPnL ?? 0)}</b></span>
+        <span>End-Equity MtM <b style={{ color: startBal == null ? "var(--fg)" : (strat.endEquityMarkToMarket ?? 0) >= startBal ? KEY : RED }}>{eur(strat.endEquityMarkToMarket ?? 0)}</b></span>
+        <span>Fees <b className="text-[var(--fg)]">{eur(strat.totalFeesPaid ?? 0)}</b></span>
+        <span>Trades <b className="text-[var(--fg)]">{strat.trades.length}</b></span>
+        <span>offene Pos. <b style={{ color: posCol(strat.openPositionSide) }}>{strat.openPositionSide} {strat.openPositionQty || 0}{strat.openPositionQty ? ` @ ${strat.openPositionAvgPrice?.toFixed(2)}` : ""}</b></span>
+        {selTrade && <span className="text-[var(--fg-dim)]">· #{selTrade.index + 1} <b style={{ color: sideCol(selTrade.side) }}>{selTrade.side}</b> {selTrade.entryTime}→{selTrade.exitTime} Netto <span style={{ color: selTrade.netPnL >= 0 ? KEY : RED }}>{eur(selTrade.netPnL)}</span></span>}
+        <div className="ml-auto flex items-center gap-1">
+          {cov?.truncated && <span className="px-1.5 py-0.5 rounded text-[9.5px]" style={{ color: RED, border: "1px solid rgba(240,86,106,.4)", background: "rgba(240,86,106,.08)" }} title="Tape im Artefakt gekappt (Browser-Schutz); vollständige Indikatoren nutzen die volle Tick-Basis">Tape gekappt · erste {cov.count.toLocaleString()}/{cov.totalTicks.toLocaleString()} (bis {hhmmss(cov.endMs)})</span>}
+          <span className="px-1.5 py-0.5 rounded text-[9.5px] text-[var(--fg-faint)] border border-[var(--line-2)]">DOM/Heatmap n/a</span>
+        </div>
       </div>
 
-      {/* Module + Indikator-Toggles + Anker */}
+      {/* 3. Toggles + aufklappbare Datendetails */}
       <div className="flex flex-wrap items-center gap-1 text-[10px] text-[var(--fg-faint)]">
-        <span className="uppercase tracking-wide">Module:</span>
-        <Btn on={lay.modules.footprint} onClick={() => tgl("modules", "footprint")}>Footprint</Btn>
-        <Btn on={lay.modules.candle} onClick={() => tgl("modules", "candle")}>Kerzen+VP/VWAP</Btn>
-        <Btn on={lay.modules.flow} onClick={() => tgl("modules", "flow")}>Vol/Δ/CVD</Btn>
-        <Btn on={lay.modules.tape} onClick={() => tgl("modules", "tape")}>Tape+DOM</Btn>
-        <Btn on={lay.modules.status} onClick={() => tgl("modules", "status")}>Heatmap-Status</Btn>
+        <button onClick={() => setShowDetails((s) => !s)} className="h-[24px] px-2 rounded border border-[var(--line-2)] text-[var(--fg)]">{showDetails ? "▾" : "▸"} Datendetails</button>
         <span className="mx-1">·</span><span className="uppercase tracking-wide">Indikatoren:</span>
         <Btn on={lay.ind.vp} onClick={() => tgl("ind", "vp")}>Volume Profile</Btn>
         <Btn on={lay.ind.vwap} onClick={() => tgl("ind", "vwap")}>VWAP</Btn>
         <Btn on={lay.ind.tpo} onClick={() => tgl("ind", "tpo")}>Bars/Preis</Btn>
         <Btn on={lay.ind.bubbles} onClick={() => tgl("ind", "bubbles")}>Bubbles</Btn>
+        <Btn on={showAllTrades} onClick={() => setShowAllTrades((s) => !s)}>Alle Trade-Marker</Btn>
+        <span className="mx-1">·</span><span className="uppercase tracking-wide">Module:</span>
+        <Btn on={lay.modules.footprint} onClick={() => tgl("modules", "footprint")}>Footprint</Btn>
+        <Btn on={lay.modules.candle} onClick={() => tgl("modules", "candle")}>Kerzen</Btn>
+        <Btn on={lay.modules.flow} onClick={() => tgl("modules", "flow")}>Vol/Δ/CVD</Btn>
+        <Btn on={lay.modules.tape} onClick={() => tgl("modules", "tape")}>Tape</Btn>
       </div>
 
-      {/* Daten-/Qualitätsstatus */}
-      <div className="text-[10px] text-[var(--fg-faint)] leading-snug border border-[var(--line)] rounded px-2 py-1 bg-[var(--bg-2)]">
-        <b>Datenstatus:</b> {Object.entries(d.availability).map(([k, v]) => <span key={k} className="mr-2">{k}: <span style={{ color: isAvailable(v) ? KEY : RED }}>{v}</span></span>)}
-        <br /><b>Qualität:</b> {d.quality.priceGranularity} · Drops {d.quality.drops} · {d.quality.aggressor} · {d.quality.footprintSource}
-        <br /><b>Anker:</b> VWAP & CVD ab Bar 0 (Datenstart {new Date(d.meta.marketStartMs).toISOString().slice(11, 19)} UTC) · Volume-Profile-Bereich Bars {range[0]}–{range[1]} · Bars/Preis-Einheit 1 Bar = {d.meta.ticksPerBar} Ticks (keine Zeit) · Bubbles ≥ {lay.bubbleMinVol} Kontrakte
-        {cov?.truncated && <><br /><b style={{ color: RED }}>Tape gekappt:</b> Bubbles &amp; Tape-Ansicht decken NUR die ersten {cov.count.toLocaleString()} von {cov.totalTicks.toLocaleString()} Ticks ab (bis {hhmmss(cov.endMs)} UTC); außerhalb „nicht verfügbar", keine Nullwerte. <b style={{ color: KEY }}>VWAP · CVD · Volume-Profil · Delta · Bars/Preis</b> nutzen die VOLLSTÄNDIGE Tick-Basis (Kerzen/Footprint) über den gesamten Abschnitt.</>}
-        {d.provenance && <><br /><b>Lauf:</b> Quelle {src.replace("/", "") || "—"} · {d.provenance.ticks} Ticks → {d.provenance.fullBars} Bars (+{d.provenance.remainderTicks} Rest) · {d.provenance.ticksPerBar} t/Bar · SHA {d.provenance.dataSha256.slice(0, 10)} · {d.provenance.capabilities}</>}
-        {strat?.status && <><br /><b>{strat.name}:</b> {strat.status} · Signale {strat.signalsGenerated} · Orders {strat.ordersSubmitted} (Risk-abgelehnt {strat.ordersRejectedByRisk}) · Pending@Ende {strat.ordersUnfilledAtEnd} · offene Position@Ende <span style={{ color: strat.openPositionSide === "Flat" ? "var(--fg-faint)" : strat.openPositionSide === "Long" ? KEY : RED }}>{strat.openPositionSide} {strat.openPositionQty || 0}{strat.openPositionQty ? ` @ ${strat.openPositionAvgPrice?.toFixed(2)}` : ""}</span></>}
-        {strat?.endEquityMarkToMarket !== undefined && <><br /><b>Ergebnis {strat.name}:</b> real. Netto {eur(strat.realizedNetPnL ?? 0)} · unreal.@letzter Tick {eur(strat.unrealizedGrossAtLastTick ?? 0)} · Fees ges. {eur(strat.totalFeesPaid ?? 0)} (offene Eintritts-Fee {eur(strat.openPositionEntryFees ?? 0)}, keine Exit-Fee) · End-Equity real {eur(strat.endEquityRealized ?? 0)} / MtM {eur(strat.endEquityMarkToMarket ?? 0)}</>}
-      </div>
+      {showDetails && (
+        <div className="text-[10px] text-[var(--fg-faint)] leading-snug border border-[var(--line)] rounded px-2 py-1 bg-[var(--bg-2)]">
+          <b>Datenstatus:</b> {Object.entries(d.availability).map(([k, v]) => <span key={k} className="mr-2">{k}: <span style={{ color: isAvailable(v) ? KEY : RED }}>{v}</span></span>)}
+          <br /><b>Qualität:</b> {d.quality.priceGranularity} · Drops {d.quality.drops} · {d.quality.aggressor} · {d.quality.footprintSource}
+          <br /><b>Anker:</b> VWAP & CVD ab Bar 0 (Datenstart {new Date(d.meta.marketStartMs).toISOString().slice(11, 19)} UTC) · Volume-Profile-Bereich Bars {range[0]}–{range[1]} · Bars/Preis-Einheit 1 Bar = {d.meta.ticksPerBar} Ticks (keine Zeit) · Bubbles ≥ {lay.bubbleMinVol} Kontrakte
+          {cov?.truncated && <><br /><b style={{ color: RED }}>Tape gekappt:</b> Bubbles &amp; Tape-Ansicht decken NUR die ersten {cov.count.toLocaleString()} von {cov.totalTicks.toLocaleString()} Ticks ab (bis {hhmmss(cov.endMs)} UTC); außerhalb „nicht verfügbar", keine Nullwerte. <b style={{ color: KEY }}>VWAP · CVD · Volume-Profil · Delta · Bars/Preis</b> nutzen die VOLLSTÄNDIGE Tick-Basis (Kerzen/Footprint).</>}
+          {d.provenance && <><br /><b>Lauf:</b> Quelle {src.replace("/", "") || "—"} · {d.provenance.ticks} Ticks → {d.provenance.fullBars} Bars (+{d.provenance.remainderTicks} Rest) · {d.provenance.ticksPerBar} t/Bar · SHA {d.provenance.dataSha256.slice(0, 10)} · {d.provenance.capabilities}</>}
+          {strat?.status && <><br /><b>{strat.name}:</b> {strat.status} · Signale {strat.signalsGenerated} · Orders {strat.ordersSubmitted} (Risk-abgelehnt {strat.ordersRejectedByRisk}) · Pending@Ende {strat.ordersUnfilledAtEnd}</>}
+          {strat?.endEquityMarkToMarket !== undefined && <><br /><b>Ergebnis {strat.name}:</b> real. Netto {eur(strat.realizedNetPnL ?? 0)} · unreal.@letzter Tick {eur(strat.unrealizedGrossAtLastTick ?? 0)} · Fees ges. {eur(strat.totalFeesPaid ?? 0)} (offene Eintritts-Fee {eur(strat.openPositionEntryFees ?? 0)}, keine Exit-Fee) · End-Equity real {eur(strat.endEquityRealized ?? 0)} / MtM {eur(strat.endEquityMarkToMarket ?? 0)}</>}
+          <br /><span className="text-[9.5px]">Alle Werte rückblickend (finale Ticks); „Snapshot @t" enthält keine späteren Trades/Profile. VWAP=Preis×Volumen; POC/Value-Area 70 % über den gezeigten Bereich; „Bars/Preis" = Anzahl {d.meta.ticksPerBar}-Tick-Bars, deren Spanne den Preis berührt (kein Zeit-am-Preis/TPO). DOM/Heatmap unvalidiert → nicht verfügbar.</span>
+        </div>
+      )}
 
-      {/* Obere Panel-Reihe */}
-      <div className="grid gap-2 grid-cols-1 xl:grid-cols-3">
-        {lay.modules.footprint && <Panel title="Footprint (Bid links / Ask rechts, je Kerze)" resize>
-          <div className="h-full w-full"><FootprintChart bars={fpBars} trades={chartTrades} selected={selected} focusKey={focusKey} onSelectTrade={pick} className="h-full w-full" /></div>
-        </Panel>}
-        {lay.modules.status && <Panel title="Orderbuch-Heatmap + Trade-Bubbles" resize>
-          <Status items={[["Historische Orderbuch-Heatmap", d.availability.orderbookHeatmap], ["DOM-Snapshots", d.availability.dom]]} note={`${d.quality.domNote}. Trade-Bubbles (große Trades aus dem Tape) werden im Kerzenchart dargestellt (Indikator „Bubbles").${cov?.truncated ? ` Tape gekappt: Bubbles nur für die ersten ${cov.count.toLocaleString()} von ${cov.totalTicks.toLocaleString()} Ticks (bis ${hhmmss(cov.endMs)} UTC); danach nicht verfügbar. VWAP/CVD/Volume-Profil/Delta nutzen die vollständige Tick-Basis.` : ""}`} />
-        </Panel>}
-        {lay.modules.tape && <Panel title="Time & Sales (Tape) + DOM-Ladder" resize>
-          <div className="flex flex-col h-full">
-            <div className="flex-1 overflow-y-auto text-[10px] mono">
-              <div className="flex px-1 py-0.5 text-[var(--fg-faint)] sticky top-0 bg-[var(--panel)]"><span className="w-20">Zeit</span><span className="flex-1 text-right">Preis</span><span className="w-12 text-right">Vol</span><span className="w-12 text-right">Seite</span></div>
-              {tapeWin.map((r, i) => <div key={i} className="flex px-1 py-[1px]"><span className="w-20 text-[var(--fg-faint)]">{new Date(r[0]).toISOString().slice(11, 19)}</span><span className="flex-1 text-right text-[var(--fg)]">{r[1]}</span><span className="w-12 text-right">{r[2]}</span><span className="w-12 text-right" style={{ color: r[3] > 0 ? KEY : r[3] < 0 ? RED : "var(--fg-faint)" }}>{r[3] > 0 ? "Buy" : r[3] < 0 ? "Sell" : "?"}</span></div>)}
-              {tapeWin.length === 0 && tapeWindowOutside && <div className="px-1 py-2" style={{ color: RED }}>Tape hier nicht verfügbar — außerhalb des exportierten Tape-Fensters (erste {cov?.count.toLocaleString()} von {cov?.totalTicks.toLocaleString()} Ticks, bis {hhmmss(cov?.endMs ?? null)} UTC). Vollständige Indikatoren (VWAP/CVD/Volume-Profil/Delta) nutzen die vollständige Tick-Basis.</div>}
-              {tapeWin.length === 0 && !tapeWindowOutside && <div className="px-1 py-2 text-[var(--fg-faint)]">keine Trades im Fenster</div>}
+      {/* 4. Haupt-Layout: grosse, synchronisierte Charts links · kompakte Tape-Seitenleiste rechts */}
+      <div className="grid gap-2 grid-cols-1 xl:grid-cols-[minmax(0,1fr)_300px]">
+        <div className="flex flex-col gap-2 min-w-0">
+          {lay.modules.candle && <Panel title={`Kerzen + Volume Profile + VWAP${lay.ind.tpo ? " + Bars/Preis" : ""}${lay.ind.bubbles ? " + Bubbles" : ""} · ${selTrade ? `Trade #${selTrade.index + 1} (Bars ${range[0]}–${range[1]})` : "gesamter Abschnitt"}`} resize minH={lay.maximized ? 560 : 440}>
+            <CandleProfileChart candles={d.candles} trades={chartTrades} vwap={vwap.vwap} vwapAnchorBar={0} vp={lay.ind.vp ? vp : null} tpo={lay.ind.tpo ? tpo : null} bubbles={lay.ind.bubbles ? bubbles : []} bubbleCoverageBar={coverageEndBar} showAllTrades={showAllTrades} show={{ vp: !!lay.ind.vp, vwap: !!lay.ind.vwap, tpo: !!lay.ind.tpo, bubbles: !!lay.ind.bubbles }} selected={selected} focusKey={focusKey} onSelectTrade={pick} className="h-full w-full" />
+          </Panel>}
+          {lay.modules.footprint && <Panel title="Footprint · Bid links / Ask rechts, je Kerze" resize minH={lay.maximized ? 420 : 320}>
+            <FootprintChart bars={fpBars} trades={chartTrades} showAllTrades={showAllTrades} selected={selected} focusKey={focusKey} onSelectTrade={pick} className="h-full w-full" />
+          </Panel>}
+          {lay.modules.flow && <Panel title="Volumen · Delta · Cumulative Delta (CVD, Anker Bar 0)" resize minH={260}>
+            <FlowPanels candles={d.candles} cvd={cvd.cvd} cvdAnchorBar={0} trades={chartTrades} selected={selected} focusKey={focusKey} className="h-full w-full" />
+          </Panel>}
+        </div>
+
+        <div className="flex flex-col gap-2 min-w-0">
+          {lay.modules.tape && <Panel title="Tape · Time & Sales" resize minH={lay.maximized ? 560 : 440}>
+            <div className="flex flex-col h-full">
+              <div className="flex-1 overflow-y-auto text-[10px] mono">
+                <div className="flex px-1 py-0.5 text-[var(--fg-faint)] sticky top-0 bg-[var(--panel)]"><span className="w-20">Zeit</span><span className="flex-1 text-right">Preis</span><span className="w-12 text-right">Vol</span><span className="w-12 text-right">Seite</span></div>
+                {tapeWin.map((r, i) => <div key={i} className="flex px-1 py-[1px]"><span className="w-20 text-[var(--fg-faint)]">{new Date(r[0]).toISOString().slice(11, 19)}</span><span className="flex-1 text-right text-[var(--fg)]">{r[1]}</span><span className="w-12 text-right">{r[2]}</span><span className="w-12 text-right" style={{ color: r[3] > 0 ? KEY : r[3] < 0 ? RED : "var(--fg-faint)" }}>{r[3] > 0 ? "Buy" : r[3] < 0 ? "Sell" : "?"}</span></div>)}
+                {tapeWin.length === 0 && tapeWindowOutside && <div className="px-1 py-2" style={{ color: RED }}>Tape hier nicht verfügbar — außerhalb des exportierten Tape-Fensters (erste {cov?.count.toLocaleString()} von {cov?.totalTicks.toLocaleString()} Ticks, bis {hhmmss(cov?.endMs ?? null)} UTC). Vollständige Indikatoren (VWAP/CVD/Volume-Profil/Delta) nutzen die vollständige Tick-Basis.</div>}
+                {tapeWin.length === 0 && !tapeWindowOutside && <div className="px-1 py-2 text-[var(--fg-faint)]">keine Trades im Fenster</div>}
+              </div>
             </div>
-            <div className="border-t border-[var(--line)] px-1 py-1 text-[10px]"><span className="text-[var(--fg-faint)]">DOM-Ladder: </span><span style={{ color: RED }}>{d.availability.dom}</span></div>
-          </div>
-        </Panel>}
+          </Panel>}
+          {lay.modules.status
+            ? <Panel title="Orderbuch-Heatmap + DOM" resize minH={180}>
+                <Status items={[["Historische Orderbuch-Heatmap", d.availability.orderbookHeatmap], ["DOM-Snapshots", d.availability.dom]]} note={`${d.quality.domNote}. Trade-Bubbles (große Trades aus dem Tape) im Kerzenchart (Indikator „Bubbles").${cov?.truncated ? ` Tape gekappt: Bubbles nur erste ${cov.count.toLocaleString()}/${cov.totalTicks.toLocaleString()} Ticks (bis ${hhmmss(cov.endMs)} UTC).` : ""}`} />
+              </Panel>
+            : <div className="rounded-lg border border-[var(--line)] bg-[var(--bg-2)] px-2 py-1.5 text-[10px] text-[var(--fg-faint)] flex items-center gap-2">
+                <span>DOM / Orderbuch-Heatmap: <span style={{ color: RED }}>nicht verfügbar (unvalidiert)</span></span>
+                <button onClick={() => tgl("modules", "status")} className="ml-auto text-[var(--key)]">Details</button>
+              </div>}
+        </div>
       </div>
-
-      {/* Kerzenchart mit VP/VWAP/TPO/Bubbles */}
-      {lay.modules.candle && <Panel title={`Kerzen + Volume Profile + VWAP${lay.ind.tpo ? " + Bars/Preis" : ""}${lay.ind.bubbles ? " + Bubbles" : ""} (Bereich Bars ${range[0]}–${range[1]})`} resize minH={lay.maximized ? 480 : 360}>
-        <CandleProfileChart candles={d.candles} trades={chartTrades} vwap={vwap.vwap} vwapAnchorBar={0} vp={lay.ind.vp ? vp : null} tpo={lay.ind.tpo ? tpo : null} bubbles={lay.ind.bubbles ? bubbles : []} bubbleCoverageBar={coverageEndBar} show={{ vp: !!lay.ind.vp, vwap: !!lay.ind.vwap, tpo: !!lay.ind.tpo, bubbles: !!lay.ind.bubbles }} selected={selected} focusKey={focusKey} onSelectTrade={pick} className="h-full w-full" />
-      </Panel>}
-
-      {/* Volumen / Delta / CVD */}
-      {lay.modules.flow && <Panel title="Volumen · Delta · Cumulative Delta (CVD, Anker Bar 0)" resize minH={220}>
-        <FlowPanels candles={d.candles} cvd={cvd.cvd} cvdAnchorBar={0} trades={chartTrades} selected={selected} focusKey={focusKey} className="h-full w-full" />
-      </Panel>}
-
-      <div className="text-[9.5px] text-[var(--fg-faint)]">Alle Werte <b>rückblickend</b> (finale Ticks); ein exportierter „Snapshot @t" enthält keine späteren Trades/Profile. Footprint/Delta aus allen Trades der Quelle (Tape-Ansicht &amp; Bubbles ggf. gekappt — siehe Anker-Zeile); VWAP=Preis×Volumen (Anker sichtbar); POC/Value-Area 70 % über den gezeigten Bereich; „Bars/Preis" = Anzahl {d.meta.ticksPerBar}-Tick-Bars, deren Spanne den Preis berührt (kein Zeit-am-Preis/TPO, da Tick-Bars keine feste Dauer haben). DOM/Heatmap unvalidiert → als nicht verfügbar gekennzeichnet. Preisgranularität: {d.quality.priceGranularity}.</div>
     </div>
   );
   return <Box>{inner}</Box>;
