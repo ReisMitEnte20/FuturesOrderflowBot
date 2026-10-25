@@ -16,6 +16,8 @@ interface Props {
   bubbles: Bubble[];
   /** Bar-Index, bis zu dem das (ggf. gekappte) Tape reicht; rechts davon sind Bubbles NICHT verfuegbar. null = volles Tape. */
   bubbleCoverageBar?: number | null;
+  /** true = ALLE Trade-Marker zeigen; false (Default) = nur den ausgewaehlten Trade (Selected-Overlay). */
+  showAllTrades?: boolean;
   show: { vp: boolean; vwap: boolean; tpo: boolean; bubbles: boolean };
   selected: number | null; focusKey: number;
   onSelectTrade?: (i: number) => void;
@@ -42,10 +44,11 @@ export function CandleProfileChart(props: Props) {
 
   useEffect(() => {
     const chart = chartRef.current; if (!chart) return;
-    const { candles, trades, vwap, vp, tpo, bubbles, show, vwapAnchorBar, bubbleCoverageBar } = props;
+    const { candles, trades, vwap, vp, tpo, bubbles, show, vwapAnchorBar, bubbleCoverageBar, showAllTrades } = props;
     const n = candles.length;
-    const entries = trades.map((t) => ({ value: [t.entryBarIndex, t.entryPrice], tradeIndex: t.index, symbol: t.side === "Long" ? "triangle" : SHORT_DOWN, itemStyle: { color: t.side === "Long" ? KEY : RED } }));
-    const exits = trades.filter((t) => t.exit).map((t) => ({ value: [t.exit!.barIndex, t.exit!.price], tradeIndex: t.index, itemStyle: { color: GOLD } }));
+    // Standard: nur der ausgewaehlte Trade (Selected-Overlay). Alle Marker nur auf Wunsch (kleiner, damit Kerzen sichtbar bleiben).
+    const entries = showAllTrades ? trades.map((t) => ({ value: [t.entryBarIndex, t.entryPrice], tradeIndex: t.index, symbol: t.side === "Long" ? "triangle" : SHORT_DOWN, symbolSize: 8, itemStyle: { color: t.side === "Long" ? KEY : RED, opacity: 0.8 } })) : [];
+    const exits = showAllTrades ? trades.filter((t) => t.exit).map((t) => ({ value: [t.exit!.barIndex, t.exit!.price], tradeIndex: t.index, symbolSize: 7, itemStyle: { color: GOLD, opacity: 0.8 } })) : [];
     const maxVp = vp ? Math.max(1, ...vp.levels.map((l) => l.vol)) : 1;
     const maxTpo = tpo ? Math.max(1, ...tpo.levels.map((l) => l.count)) : 1;
     const maxBub = Math.max(1, ...bubbles.map((b) => b.v));
@@ -80,7 +83,7 @@ export function CandleProfileChart(props: Props) {
     chart.setOption({
       animation: false,
       grid: { left: 8, right: 60, top: 12, bottom: 46, containLabel: true },
-      xAxis: { type: "category", data: candles.map((_, i) => String(i)), boundaryGap: true, axisLine: { lineStyle: { color: LINE } }, axisTick: { show: false }, axisLabel: { color: FAINT, fontSize: 9, hideOverlap: true } },
+      xAxis: { type: "category", data: candles.map((_, i) => String(i)), boundaryGap: true, axisLine: { lineStyle: { color: LINE } }, axisTick: { show: false }, axisLabel: { color: FAINT, fontSize: 9, hideOverlap: true, formatter: (_v: string, idx: number) => { const c = candles[idx]; return c ? new Date(c.t).toISOString().slice(11, 19) : ""; } } },
       yAxis: { type: "value", scale: true, position: "right", splitLine: { lineStyle: { color: LINE } }, axisLabel: { color: FAINT, fontSize: 10, formatter: (v: number) => v.toFixed(0) } },
       tooltip: {
         trigger: "axis", axisPointer: { type: "cross", lineStyle: { color: "#2a4868" }, crossStyle: { color: "#2a4868" }, label: { backgroundColor: "#1d3654" } },
@@ -108,7 +111,7 @@ export function CandleProfileChart(props: Props) {
         { name: "Selected", type: "scatter", data: [], z: 10, symbolSize: 16, markArea: { silent: true, itemStyle: { color: "rgba(34,184,240,0.08)" }, data: [] } },
       ],
     }, { notMerge: true });
-  }, [props.candles, props.trades, props.vwap, props.vp, props.tpo, props.bubbles, props.show, props.bubbleCoverageBar]);
+  }, [props.candles, props.trades, props.vwap, props.vp, props.tpo, props.bubbles, props.show, props.bubbleCoverageBar, props.showAllTrades]);
 
   useEffect(() => {
     const chart = chartRef.current; if (!chart) return;

@@ -173,6 +173,7 @@ export function Research() {
   const [cfg, setCfg] = useState<ResearchConfig>(DEFAULT_CONFIG);
   const [evalOpts] = useState<QuantEvaluationOptions>({ ...defaultEvaluationOptions, frequency: "Daily" });
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showConfig, setShowConfig] = useState(false); // „Neuen Lauf konfigurieren" bei der Analyse standardmaessig geschlossen
 
   const [run, setRun] = useState<ResearchRunRecord | null>(null);
   const [savedRuns, setSavedRuns] = useState<ResearchRunRecord[]>([]);
@@ -416,7 +417,16 @@ export function Research() {
         {/* Orderflow-Arbeitsfläche auf AUFGENOMMENEN ATAS-Daten (technischer Test; Reuse ECharts-Komponenten) */}
         <ResearchWorkspace />
 
-        {/* Konfiguration — bearbeitbarer Entwurf für einen NEUEN Lauf (ändert kein geladenes Ergebnis) */}
+        {/* Konfiguration — einklappbar; bei der Analyse standardmäßig geschlossen (ändert kein geladenes Ergebnis) */}
+        <button
+          onClick={() => setShowConfig((s) => !s)}
+          className="flex w-full items-center gap-2 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-2 text-left"
+        >
+          <span className="text-[var(--key)] text-xs">{showConfig ? "▾" : "▸"}</span>
+          <span className="rounded bg-[var(--panel-3)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--fg-dim)]">Neuen Lauf konfigurieren</span>
+          <span className="text-[11px] text-[var(--fg-faint)]">{showConfig ? "ausblenden" : "Entwurf für einen neuen Lauf öffnen (ändert das geladene Ergebnis nicht)"}</span>
+        </button>
+        {showConfig && (
         <Panel>
           <div className="flex items-center gap-2 mb-2">
             <span className="rounded bg-[var(--panel-3)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--fg-dim)]">Neuer Lauf · Entwurf</span>
@@ -512,6 +522,7 @@ export function Research() {
             <span>Frequenz: <b className="text-[var(--fg)]">{evalOpts.frequency}</b></span>
           </div>
         </Panel>
+        )}
 
         {!run && !campaign && (
           <Panel>
