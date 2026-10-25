@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -19,27 +20,146 @@ using TradingBot.Research.Orderflow;
 
 const decimal StartingBalance = 10_000m; // Research-Startkapital (keine Broker-Kontoconfig vorhanden) - in Provenienz gespeichert.
 
-string repoRoot = args.Length > 1 ? args[1] : FindRepoRoot();
-string recording = args.Length > 0 ? args[0]
-    : @"C:\Users\Anton Minh Duy Tran\ATAS_OF_Recordings\MNQ_20261023_084204Z\ticks.csv";
+// ---- Argumente: Sierra-Fenster-Lauf ODER (Default, rueckwaertskompatibel) ATAS-Aufnahme ----
+//   Sierra:  --sierra <pfad> [--symbol MES] --from <isoUtc> --to <isoUtc> [--repo <root>] [--max-tape N]
+//   ATAS  :  <recording> [repoRoot]        (unveraendert)
+var opts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+var pos = new List<string>();
+for (int i = 0; i < args.Length; i++)
+{
+    if (args[i].StartsWith("--", StringComparison.Ordinal))
+    {
+        string k = args[i];
+        string v = (i + 1 < args.Length && !args[i + 1].StartsWith("--", StringComparison.Ordinal)) ? args[++i] : "true";
+        opts[k] = v;
+    }
+    else pos.Add(args[i]);
+}
+bool sierraMode = opts.ContainsKey("--sierra");
 
-Console.WriteLine($"Repo:      {repoRoot}");
-Console.WriteLine($"Aufnahme:  {recording}");
-if (!File.Exists(recording)) { Console.Error.WriteLine($"FEHLER: Aufnahme nicht gefunden: {recording}"); return 2; }
+string repoRoot = opts.TryGetValue("--repo", out var repoOpt) ? repoOpt : (pos.Count > 1 ? pos[1] : FindRepoRoot());
 
 var jsonRead = new JsonSerializerOptions
 {
     PropertyNameCaseInsensitive = true,
     Converters = { new JsonStringEnumConverter() }
 };
-
 // ---- Konfiguration ausschliesslich aus config/ (keine hardcodierten Fees/TickSizes) ----
 string cfg(string rel) => Path.Combine(repoRoot, "config", rel);
-var instrument = Load<InstrumentProfile>(cfg(@"instruments\mnq.example.json"), jsonRead);
-var fee = Load<FeeProfile>(cfg(@"fees\amp-rithmic-mnq.example.json"), jsonRead);
-var broker = Load<BrokerProfile>(cfg(@"brokers\amp-rithmic.example.json"), jsonRead);
-var risk = Load<RiskConfig>(cfg(@"risk\research-sim.example.json"), jsonRead);
-var importProfile = Load<CsvImportProfile>(cfg(@"import-profiles\atas-tick.example.json"), jsonRead);
+
+// gemeinsame Laufvariablen (beide Modi)
+InstrumentProfile instrument;
+FeeProfile fee;
+BrokerProfile broker;
+RiskConfig risk;
+ImportedMarketDataSet set;
+string sha, dataFilePath, dataSource, aggressorNote, priceGranularityNote, footprintSourceNote;
+int maxTape;
+Dictionary<string, string> settingsUsed;
+
+if (sierraMode)
+{
+    string sierraPath = opts["--sierra"];
+    string symbol = opts.TryGetValue("--symbol", out var sy) ? sy : "MES";
+    if (!opts.TryGetValue("--from", out var fromStr) || !opts.TryGetValue("--to", out var toStr))
+    { Console.Error.WriteLine("FEHLER: --from <isoUtc> und --to <isoUtc> sind im --sierra-Modus Pflicht."); return 2; }
+    var fromUtc = DateTimeOffset.Parse(fromStr, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal);
+    var toUtc = DateTimeOffset.Parse(toStr, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal);
+    maxTape = opts.TryGetValue("--max-tape", out var mt) && int.TryParse(mt, out var mtv) ? mtv : 5000;
+
+    Console.WriteLine($"Repo:      {repoRoot}");
+    Console.WriteLine($"Sierra:    {sierraPath}");
+    Console.WriteLine($"Symbol:    {symbol}");
+    Console.WriteLine($"Fenster:   {fromUtc:O} .. {toUtc:O} (UTC, inklusive)");
+    if (!File.Exists(sierraPath)) { Console.Error.WriteLine($"FEHLER: Sierra-Datei nicht gefunden: {sierraPath}"); return 2; }
+
+    instrument = Load<InstrumentProfile>(cfg(@"instruments\mes.example.json"), jsonRead);
+    fee = Load<FeeProfile>(cfg(@"fees\amp-rithmic-mes.example.json"), jsonRead);
+    broker = Load<BrokerProfile>(cfg(@"brokers\amp-rithmic.example.json"), jsonRead);
+    risk = Load<RiskConfig>(cfg(@"risk\research-sim.example.json"), jsonRead);
+
+    Console.WriteLine("SHA-256 der Quelldatei (streamend) ...");
+    var swSha = System.Diagnostics.Stopwatch.StartNew();
+    sha = Sha256File(sierraPath);
+    swSha.Stop();
+    Console.WriteLine($"SHA-256:   {sha}  ({swSha.Elapsed.TotalSeconds:F1}s)");
+
+    Console.WriteLine("Lese NUR das UTC-Fenster (streamend, kein Materialisieren der Gesamtdatei) ...");
+    var swImp = System.Diagnostics.Stopwatch.StartNew();
+    long lastProg = 0;
+    set = new SierraMarketDataAdapter().ImportWindowedSet(sierraPath, symbol, fromUtc, toUtc,
+        onProgress: n => { if (n - lastProg >= 5_000_000) { lastProg = n; Console.WriteLine($"  ... {n:N0} Zeilen gescannt"); } });
+    swImp.Stop();
+    Console.WriteLine($"Fenster gelesen in {swImp.Elapsed.TotalSeconds:F1}s.");
+
+    dataFilePath = sierraPath;
+    dataSource = $"Sierra MES {fromUtc:yyyy-MM-dd} (UTC-Kalendertag {fromUtc:HH:mm}-{toUtc:HH:mm}Z, keine Boersensession)";
+    aggressorNote = "aus Sierra BidVolume/AskVolume je Trade (am Ask=Kaeufer/Buy, am Bid=Verkaeufer/Sell); im Fenster voll klassifiziert";
+    priceGranularityNote = "0,25 (nativ, Sierra MES-Tick); NICHT korrigiert";
+    footprintSourceNote = "aus Sierra BidVolume/AskVolume je Trade, je 500-Tick-Bar (kein nativer ATAS-Footprint)";
+    settingsUsed = new Dictionary<string, string>
+    {
+        ["mode"] = "sierra-windowed",
+        ["instrumentConfig"] = "config/instruments/mes.example.json (EXAMPLE VALUES = Annahmen)",
+        ["feeConfig"] = "config/fees/amp-rithmic-mes.example.json (EXAMPLE VALUES = Annahmen)",
+        ["brokerConfig"] = "config/brokers/amp-rithmic.example.json",
+        ["riskConfig"] = "config/risk/research-sim.example.json (PERMISSIV, nur dieser lokale Simulationslauf)",
+        ["window.fromUtc"] = fromUtc.ToString("O", CultureInfo.InvariantCulture),
+        ["window.toUtc"] = toUtc.ToString("O", CultureInfo.InvariantCulture),
+        ["window.tzEvidence"] = "Date/Time werden als UTC interpretiert (Sierra-Intraday-Konvention bzw. Importer-Annahme, DateTimeStyles.AssumeUniversal); NICHT unabhaengig aus der Datei verifiziert.",
+        ["maxTapeEntries"] = maxTape.ToString(),
+        ["risk.enforceSession"] = risk.EnforceSession.ToString(),
+        ["risk.maxContracts"] = risk.MaxContracts.ToString(),
+        ["risk.maxOpenPositions"] = risk.MaxOpenPositions.ToString(),
+        ["risk.maxDailyLoss"] = risk.MaxDailyLoss.ToString("F2"),
+        ["instrument.tickSize"] = instrument.TickSize.ToString(),
+        ["instrument.pointValue"] = instrument.PointValue.ToString(),
+        ["fee.estimatedSlippageTicks"] = fee.EstimatedSlippageTicks.ToString(),
+        ["startingBalance"] = StartingBalance.ToString("F2"),
+        ["ticksPerBar"] = "500"
+    };
+}
+else
+{
+    string recording = pos.Count > 0 ? pos[0]
+        : @"C:\Users\Anton Minh Duy Tran\ATAS_OF_Recordings\MNQ_20261023_084204Z\ticks.csv";
+
+    Console.WriteLine($"Repo:      {repoRoot}");
+    Console.WriteLine($"Aufnahme:  {recording}");
+    if (!File.Exists(recording)) { Console.Error.WriteLine($"FEHLER: Aufnahme nicht gefunden: {recording}"); return 2; }
+
+    instrument = Load<InstrumentProfile>(cfg(@"instruments\mnq.example.json"), jsonRead);
+    fee = Load<FeeProfile>(cfg(@"fees\amp-rithmic-mnq.example.json"), jsonRead);
+    broker = Load<BrokerProfile>(cfg(@"brokers\amp-rithmic.example.json"), jsonRead);
+    risk = Load<RiskConfig>(cfg(@"risk\research-sim.example.json"), jsonRead);
+    var importProfile = Load<CsvImportProfile>(cfg(@"import-profiles\atas-tick.example.json"), jsonRead);
+
+    sha = Sha256File(recording);
+    set = new AtasTickCsvImporter(importProfile).ImportFile(recording);
+    dataFilePath = recording;
+    dataSource = $"ATAS-Replay-Aufnahme {Path.GetFileName(Path.GetDirectoryName(recording))}";
+    aggressorNote = "aus Aufnahme (AggressorSide je Trade)";
+    priceGranularityNote = string.Empty;   // Runner-Default beibehalten
+    footprintSourceNote = string.Empty;
+    maxTape = 0;                            // unbegrenzt (altes Verhalten)
+    settingsUsed = new Dictionary<string, string>
+    {
+        ["instrumentConfig"] = "config/instruments/mnq.example.json",
+        ["feeConfig"] = "config/fees/amp-rithmic-mnq.example.json",
+        ["brokerConfig"] = "config/brokers/amp-rithmic.example.json",
+        ["riskConfig"] = "config/risk/research-sim.example.json (PERMISSIV, nur dieser lokale Simulationslauf)",
+        ["importProfile"] = "config/import-profiles/atas-tick.example.json",
+        ["risk.enforceSession"] = risk.EnforceSession.ToString(),
+        ["risk.maxContracts"] = risk.MaxContracts.ToString(),
+        ["risk.maxOpenPositions"] = risk.MaxOpenPositions.ToString(),
+        ["risk.maxDailyLoss"] = risk.MaxDailyLoss.ToString("F2"),
+        ["instrument.tickSize"] = instrument.TickSize.ToString(),
+        ["instrument.pointValue"] = instrument.PointValue.ToString(),
+        ["fee.estimatedSlippageTicks"] = fee.EstimatedSlippageTicks.ToString(),
+        ["startingBalance"] = StartingBalance.ToString("F2"),
+        ["ticksPerBar"] = "500"
+    };
+}
 
 var account = new TradingAccount
 {
@@ -50,9 +170,6 @@ var account = new TradingAccount
     StartingBalance = StartingBalance
 };
 
-// ---- Import + Fingerabdruck ----
-string sha = Sha256File(recording);
-var set = new AtasTickCsvImporter(importProfile).ImportFile(recording);
 Console.WriteLine($"Import:    {set.Quality.RowsAccepted}/{set.Quality.RowsRead} Ticks akzeptiert, Symbol {set.Symbol}, Caps.DeltaCvd={set.Capabilities.SupportsDeltaCvd}");
 if (!set.Capabilities.SupportsDeltaCvd)
 {
@@ -76,31 +193,18 @@ var request = new OrderflowRunRequest
     TicksPerBar = 500,
     SlippageTicksOverride = null, // nutzt FeeProfile.EstimatedSlippageTicks (= config)
     Candidates = candidates,
-    DataSource = $"ATAS-Replay-Aufnahme {Path.GetFileName(Path.GetDirectoryName(recording))}",
-    DataFilePath = recording,
+    DataSource = dataSource,
+    DataFilePath = dataFilePath,
     DataSha256 = sha,
     CapabilitiesSufficient = set.Capabilities.SupportsDeltaCvd,
-    AggressorNote = "aus Aufnahme (AggressorSide je Trade)",
+    AggressorNote = aggressorNote,
     RowsRead = set.Quality.RowsRead,
     RowsAccepted = set.Quality.RowsAccepted,
     DeltaThreshold = DeltaFlowStrategy.DefaultDeltaThreshold,
-    SettingsUsed = new Dictionary<string, string>
-    {
-        ["instrumentConfig"] = "config/instruments/mnq.example.json",
-        ["feeConfig"] = "config/fees/amp-rithmic-mnq.example.json",
-        ["brokerConfig"] = "config/brokers/amp-rithmic.example.json",
-        ["riskConfig"] = "config/risk/research-sim.example.json (PERMISSIV, nur dieser lokale Simulationslauf)",
-        ["importProfile"] = "config/import-profiles/atas-tick.example.json",
-        ["risk.enforceSession"] = risk.EnforceSession.ToString(),
-        ["risk.maxContracts"] = risk.MaxContracts.ToString(),
-        ["risk.maxOpenPositions"] = risk.MaxOpenPositions.ToString(),
-        ["risk.maxDailyLoss"] = risk.MaxDailyLoss.ToString("F2"),
-        ["instrument.tickSize"] = instrument.TickSize.ToString(),
-        ["instrument.pointValue"] = instrument.PointValue.ToString(),
-        ["fee.estimatedSlippageTicks"] = fee.EstimatedSlippageTicks.ToString(),
-        ["startingBalance"] = StartingBalance.ToString("F2"),
-        ["ticksPerBar"] = "500"
-    }
+    MaxTapeEntries = maxTape,
+    PriceGranularityNote = priceGranularityNote,
+    FootprintSourceNote = footprintSourceNote,
+    SettingsUsed = settingsUsed
 };
 
 var result = await new OrderflowMultiStrategyRunner().RunAsync(request);

@@ -89,6 +89,53 @@ public sealed class SierraMarketDataAdapter
         Action<long>? onProgress = null)
         => SierraOrderFlowBarBuilder.StreamTicks(reader, symbol, maxRows, fromUtc, toUtc, onProgress);
 
+    /// <summary>
+    /// Importiert NUR das UTC-Fenster [fromUtc, toUtc] einer (grossen) Sierra-Datei als <see cref="ImportedMarketDataSet"/>
+    /// (Ticks + Qualitaet + EHRLICHE Capabilities) — streamend und fenster-begrenzt BEIM LESEN, d. h. die Gesamtdatei
+    /// wird nicht materialisiert. Dies ist der Konsolen-/Research-Eingang fuer Sierra (parallel zu
+    /// <see cref="AtasTickCsvImporter"/>), ohne neue Engine. Capabilities werden ehrlich aus der Klassifikation
+    /// abgeleitet (Delta/CVD nur bei voller Aggressor-Klassifikation). KEINE Quote-/DOM-Faehigkeit: BidSize/AskSize
+    /// sind AUSGEFUEHRTE Volumina, keine ruhenden Orderbuchmengen.
+    /// </summary>
+    public ImportedMarketDataSet ImportWindowedSet(
+        string path, string symbol, DateTimeOffset fromUtc, DateTimeOffset toUtc, Action<long>? onProgress = null)
+    {
+        var r = SierraOrderFlowBarBuilder.StreamTicksWindowedFile(path, symbol, fromUtc, toUtc, onProgress);
+
+        var issues = new List<DataQualityIssue>();
+        if (!r.HasBidAsk)
+            issues.Add(CsvGrid.Warning("NoBidAskVolume",
+                "Spalten BidVolume/AskVolume fehlen – keine Aggressor-Klassifikation, keine Delta/CVD-Capability."));
+        if (r.HasBidAsk && r.Unclassified > 0)
+            issues.Add(CsvGrid.Warning("PartialClassification",
+                $"{r.Unclassified} von {r.Ticks.Count} Ticks im Fenster ohne eindeutige Bid/Ask-Klassifikation – Delta/CVD NICHT erlaubt."));
+        if (r.Rejected > 0)
+            issues.Add(CsvGrid.Warning("RejectedRows",
+                $"{r.Rejected} Zeile(n) im Fenster abgelehnt (ungueltiger Zeitstempel/Preis/Volumen)."));
+        issues.Add(CsvGrid.Info("SierraWindowedStream",
+            $"Gefensterter Streaming-Import [{fromUtc:O} .. {toUtc:O}] (UTC): {r.Ticks.Count} Ticks akzeptiert; BidSize/AskSize = ausgefuehrte Volumina (keine ruhenden Quotes/DOM)."));
+
+        bool fullyClassified = r.HasBidAsk && r.Ticks.Count > 0 && r.Unclassified == 0;
+        var sourceType = fullyClassified ? MarketDataSourceType.AggressorTick : MarketDataSourceType.MinimalTick;
+
+        return new ImportedMarketDataSet
+        {
+            SourceType = sourceType,
+            Symbol = symbol,
+            Ticks = r.Ticks,
+            Quality = new OrderFlowDataQualityReport
+            {
+                SourceType = sourceType,
+                RowsRead = ClampInt(r.RowsReadInWindow + r.Rejected),
+                RowsAccepted = r.Ticks.Count,
+                Issues = issues
+            },
+            Capabilities = fullyClassified
+                ? new OrderFlowCapabilities { SupportsDeltaCvd = true, SupportsAbsorption = true, SupportsBarImbalance = true }
+                : OrderFlowCapabilities.None
+        };
+    }
+
     /// <summary>Mappt den Aggregations-Report auf das kanonische <see cref="ImportedMarketDataSet"/>.</summary>
     private static ImportedMarketDataSet ToDataset(string symbol, SierraAggregationResult agg)
     {

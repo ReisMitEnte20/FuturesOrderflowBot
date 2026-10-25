@@ -596,6 +596,95 @@ public sealed class SierraOrderFlowBarBuilder
         return ticks;
     }
 
+    /// <summary>Ergebnis des gefensterten Streaming-Tick-Imports: nur die Ticks im UTC-Fenster plus Zaehler.</summary>
+    public sealed record SierraTickStreamResult(
+        IReadOnlyList<MarketTick> Ticks, long RowsReadInWindow, long Rejected, long Unclassified, bool HasBidAsk);
+
+    /// <summary>
+    /// Streamt Sierra-Ticks NUR fuer das UTC-Fenster [fromUtc, toUtc] (beide inklusive) direkt aus der Datei.
+    /// Das Fenster wird WAEHREND des Lesens angewandt (kein Materialisieren der Gesamtdatei); da Sierra-Exporte
+    /// chronologisch sind, wird nach Ueberschreiten von toUtc abgebrochen (kein Weiterscannen). Liefert zusaetzlich
+    /// die Zaehler (gelesene/abgelehnte/unklassifizierte Zeilen im Fenster) fuer eine ehrliche Qualitaetsmeldung.
+    /// Bid/Ask-PREISfelder bleiben 0 (Sierra-Intraday hat keine ruhenden Quotes); BidSize/AskSize tragen die
+    /// AUSGEFUEHRTEN Volumina (am Bid = Verkaeufer-Aggressor, am Ask = Kaeufer-Aggressor) und sind NIEMALS als
+    /// ruhende Orderbuchmengen zu interpretieren. Keine Quote-/DOM-Faehigkeit.
+    /// </summary>
+    public static SierraTickStreamResult StreamTicksWindowedFile(
+        string path, string symbol, DateTimeOffset fromUtc, DateTimeOffset toUtc, Action<long>? onProgress = null)
+    {
+        if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("Pfad muss angegeben werden.", nameof(path));
+        if (!File.Exists(path)) throw new FileNotFoundException($"Sierra-Datei nicht gefunden: '{path}'.", path);
+        if (toUtc < fromUtc) throw new ArgumentException("toUtc darf nicht vor fromUtc liegen.");
+        using var reader = new StreamReader(path);
+        return StreamTicksWindowed(reader, symbol, fromUtc, toUtc, onProgress);
+    }
+
+    /// <summary>Wie <see cref="StreamTicksWindowedFile"/>, aber ueber TextReader (Tests).</summary>
+    public static SierraTickStreamResult StreamTicksWindowed(
+        TextReader reader, string symbol, DateTimeOffset fromUtc, DateTimeOffset toUtc, Action<long>? onProgress = null)
+    {
+        ArgumentNullException.ThrowIfNull(reader);
+        if (string.IsNullOrWhiteSpace(symbol))
+            throw new ArgumentException("Symbol muss angegeben werden (Sierra-CSV hat keine Symbol-Spalte).", nameof(symbol));
+
+        string? header = ReadNonEmptyLine(reader) ?? throw new CsvMarketDataException("Leere Datei oder fehlende Kopfzeile.");
+        var self = new SierraOrderFlowBarBuilder();
+        var columns = self.IndexColumns(header);
+        self.RequireColumns(columns, "date", "time", "last", "volume");
+
+        bool hasBidAsk = self.Has(columns, "bidvolume") && self.Has(columns, "askvolume");
+
+        long scanned = 0, rowsInWindow = 0, rejected = 0, unclassified = 0;
+        bool reachedWindow = false;
+        var ticks = new List<MarketTick>();
+
+        string? line;
+        while ((line = reader.ReadLine()) is not null)
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            scanned++;
+            if (scanned % ProgressEvery == 0) onProgress?.Invoke(scanned);
+
+            var f = self.SplitTrim(line);
+            var ts = self.CombineTimestamp(f, columns);
+
+            // Chronologisch: sobald das Fenster-Ende ueberschritten ist, abbrechen.
+            if (ts is not null && ts > toUtc) break;
+            if (ts is not null && ts < fromUtc) continue;     // vor dem Fenster
+            if (ts is not null) reachedWindow = true;
+            if (!reachedWindow) continue;                     // noch nicht im Fenster (auch unparsebare Zeilen davor ignorieren)
+
+            var price = self.Dec(f, columns, "last");
+            var volume = self.Dec(f, columns, "volume");
+            if (ts is null || price is null || price <= 0m || volume is null || volume < 0m)
+            {
+                rejected++;                                   // im/um das Fenster abgelehnte Zeile
+                continue;
+            }
+
+            rowsInWindow++;
+            decimal bid = hasBidAsk ? self.Dec(f, columns, "bidvolume") ?? 0m : 0m;
+            decimal ask = hasBidAsk ? self.Dec(f, columns, "askvolume") ?? 0m : 0m;
+            var aggressor = Classify(hasBidAsk, bid, ask);
+            if (hasBidAsk && aggressor == AggressorSide.Unknown) unclassified++;
+
+            ticks.Add(new MarketTick
+            {
+                Symbol = symbol,
+                Timestamp = ts.Value,
+                Price = price.Value,
+                Volume = volume.Value,
+                Aggressor = aggressor,
+                Bid = 0m,            // keine ruhenden Quotes aus Sierra-Intraday
+                Ask = 0m,
+                BidSize = bid,       // AUSGEFUEHRTES Volumen am Bid (Verkaeufer-Aggressor), KEINE ruhende Menge
+                AskSize = ask        // AUSGEFUEHRTES Volumen am Ask (Kaeufer-Aggressor), KEINE ruhende Menge
+            });
+        }
+
+        return new SierraTickStreamResult(ticks, rowsInWindow, rejected, unclassified, hasBidAsk);
+    }
+
     /// <summary>Untere Intervallgrenze (UTC-getaktet ab DateTime-Epoche), z. B. volle Minute.</summary>
     private static DateTimeOffset BucketStart(DateTimeOffset ts, TimeSpan interval)
     {

@@ -14,6 +14,8 @@ interface Props {
   vwap: (number | null)[]; vwapAnchorBar: number;
   vp: VolumeProfile | null; tpo: BarPriceOccupancy | null;
   bubbles: Bubble[];
+  /** Bar-Index, bis zu dem das (ggf. gekappte) Tape reicht; rechts davon sind Bubbles NICHT verfuegbar. null = volles Tape. */
+  bubbleCoverageBar?: number | null;
   show: { vp: boolean; vwap: boolean; tpo: boolean; bubbles: boolean };
   selected: number | null; focusKey: number;
   onSelectTrade?: (i: number) => void;
@@ -40,7 +42,7 @@ export function CandleProfileChart(props: Props) {
 
   useEffect(() => {
     const chart = chartRef.current; if (!chart) return;
-    const { candles, trades, vwap, vp, tpo, bubbles, show, vwapAnchorBar } = props;
+    const { candles, trades, vwap, vp, tpo, bubbles, show, vwapAnchorBar, bubbleCoverageBar } = props;
     const n = candles.length;
     const entries = trades.map((t) => ({ value: [t.entryBarIndex, t.entryPrice], tradeIndex: t.index, symbol: t.side === "Long" ? "triangle" : SHORT_DOWN, itemStyle: { color: t.side === "Long" ? KEY : RED } }));
     const exits = trades.filter((t) => t.exit).map((t) => ({ value: [t.exit!.barIndex, t.exit!.price], tradeIndex: t.index, itemStyle: { color: GOLD } }));
@@ -69,6 +71,10 @@ export function CandleProfileChart(props: Props) {
       vaLines.push({ yAxis: vp.poc, lineStyle: { color: GOLD, type: "solid", width: 1 }, label: { show: true, formatter: `POC ${px(vp.poc)}`, color: GOLD, fontSize: 9, position: "insideStartTop" } });
       vaLines.push({ yAxis: vp.vah, lineStyle: { color: CYAN, type: "dashed", width: 1 }, label: { show: true, formatter: `VAH ${px(vp.vah)}`, color: CYAN, fontSize: 9, position: "insideStartTop" } });
       vaLines.push({ yAxis: vp.val, lineStyle: { color: CYAN, type: "dashed", width: 1 }, label: { show: true, formatter: `VAL ${px(vp.val)}`, color: CYAN, fontSize: 9, position: "insideStartBottom" } });
+    }
+    // Gekapptes Tape: vertikale Grenze, ab der Bubbles NICHT verfuegbar sind (kein irrefuehrendes "keine grossen Trades").
+    if (show.bubbles && bubbleCoverageBar != null && bubbleCoverageBar >= 0 && bubbleCoverageBar < n - 1) {
+      vaLines.push({ xAxis: bubbleCoverageBar, lineStyle: { color: RED, type: "dotted", width: 1 }, label: { show: true, formatter: "Tape-Ende → Bubbles n/a", color: RED, fontSize: 8, position: "insideEndTop" } });
     }
 
     chart.setOption({
@@ -102,7 +108,7 @@ export function CandleProfileChart(props: Props) {
         { name: "Selected", type: "scatter", data: [], z: 10, symbolSize: 16, markArea: { silent: true, itemStyle: { color: "rgba(34,184,240,0.08)" }, data: [] } },
       ],
     }, { notMerge: true });
-  }, [props.candles, props.trades, props.vwap, props.vp, props.tpo, props.bubbles, props.show]);
+  }, [props.candles, props.trades, props.vwap, props.vp, props.tpo, props.bubbles, props.show, props.bubbleCoverageBar]);
 
   useEffect(() => {
     const chart = chartRef.current; if (!chart) return;
