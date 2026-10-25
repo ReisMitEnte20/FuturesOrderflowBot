@@ -4,7 +4,7 @@ import { CandleProfileChart, type Bubble } from "@/components/research/CandlePro
 import { FlowPanels } from "@/components/research/FlowPanels";
 import type { ChartTrade } from "@/lib/replay";
 import {
-  type WorkspaceData, type WsTrade, type WsRunIndexEntry, cvdSeries, vwapSeries, volumeProfile, barPriceOccupancy, tradeBubbles, buildSnapshot, isAvailable,
+  type WorkspaceData, type WsTrade, type WsRunIndexEntry, cvdSeries, vwapSeries, volumeProfile, barPriceOccupancy, tradeBubbles, buildSnapshot, isAvailable, tapeCoverage,
 } from "@/lib/workspace";
 
 const KEY = "#3cf0a0", RED = "#f0566a";
@@ -88,12 +88,19 @@ export function ResearchWorkspace() {
   }, [d, selTrade]);
   const vp = useMemo(() => (d ? volumeProfile(d.footprint, range[0], range[1]) : null), [d, range]);
   const tpo = useMemo(() => (d ? barPriceOccupancy(d.candles, range[0], range[1]) : null), [d, range]);
+  // Tape kann aus Browser-Schutz GEKAPPT sein (nur erste N Ticks). Bubbles & Tape-Ansicht decken dann nur dieses
+  // Fenster ab; VWAP/CVD/Volume-Profil/Bars-Preis/Delta kommen dagegen aus der VOLLSTAENDIGEN Tick-Basis (Kerzen/Footprint).
+  const cov = useMemo(() => (d ? tapeCoverage(d) : null), [d]);
+  const barOfTime = useMemo(() => {
+    const starts = d ? d.candles.map((c) => c.t) : [];
+    return (t: number) => { let lo = 0, hi = starts.length - 1, r = 0; while (lo <= hi) { const m = (lo + hi) >> 1; if (starts[m] <= t) { r = m; lo = m + 1; } else hi = m - 1; } return r; };
+  }, [d]);
+  const coverageEndBar = useMemo(() => (cov?.truncated && cov.endMs != null ? barOfTime(cov.endMs) : null), [cov, barOfTime]);
+
   const bubbles: Bubble[] = useMemo(() => {
     if (!d) return [];
-    const starts = d.candles.map((c) => c.t);
-    const barOf = (t: number) => { let lo = 0, hi = starts.length - 1, r = 0; while (lo <= hi) { const m = (lo + hi) >> 1; if (starts[m] <= t) { r = m; lo = m + 1; } else hi = m - 1; } return r; };
-    return tradeBubbles(d.tape, lay.bubbleMinVol).map((b) => ({ barIndex: barOf(b.t), p: b.p, v: b.v, dir: b.dir }));
-  }, [d, lay.bubbleMinVol]);
+    return tradeBubbles(d.tape, lay.bubbleMinVol).map((b) => ({ barIndex: barOfTime(b.t), p: b.p, v: b.v, dir: b.dir }));
+  }, [d, lay.bubbleMinVol, barOfTime]);
 
   const tapeWin = useMemo(() => {
     if (!d) return [];
@@ -101,6 +108,15 @@ export function ResearchWorkspace() {
     const t1 = selTrade ? selTrade.exitTimeMs + 5000 : d.meta.marketStartMs + 20000;
     return d.tape.filter((r) => r[0] >= t0 && r[0] <= t1).slice(0, 400);
   }, [d, selTrade]);
+
+  // Liegt das aktuelle Tape-Anzeigefenster ausserhalb der (gekappten) Tape-Abdeckung? Dann ist das Tape hier
+  // NICHT verfuegbar (nicht "keine Trades"). Vollstaendige Indikatoren bleiben verfuegbar.
+  const tapeWindowOutside = useMemo(() => {
+    if (!d || !cov?.truncated || cov.endMs == null) return false;
+    const t0 = selTrade ? selTrade.entryTimeMs - 5000 : d.meta.marketStartMs;
+    return t0 > cov.endMs;
+  }, [d, cov, selTrade]);
+  const hhmmss = (ms: number | null) => (ms == null ? "—" : new Date(ms).toISOString().slice(11, 19));
 
   function exportSnapshot(pit: boolean) {
     if (!d) return;
@@ -165,7 +181,8 @@ export function ResearchWorkspace() {
       <div className="text-[10px] text-[var(--fg-faint)] leading-snug border border-[var(--line)] rounded px-2 py-1 bg-[var(--bg-2)]">
         <b>Datenstatus:</b> {Object.entries(d.availability).map(([k, v]) => <span key={k} className="mr-2">{k}: <span style={{ color: isAvailable(v) ? KEY : RED }}>{v}</span></span>)}
         <br /><b>Qualität:</b> {d.quality.priceGranularity} · Drops {d.quality.drops} · {d.quality.aggressor} · {d.quality.footprintSource}
-        <br /><b>Anker:</b> VWAP & CVD ab Bar 0 (Aufnahmestart {new Date(d.meta.marketStartMs).toISOString().slice(11, 19)} UTC) · Volume-Profile-Bereich Bars {range[0]}–{range[1]} · Bars/Preis-Einheit 1 Bar = {d.meta.ticksPerBar} Ticks (keine Zeit) · Bubbles ≥ {lay.bubbleMinVol} Kontrakte
+        <br /><b>Anker:</b> VWAP & CVD ab Bar 0 (Datenstart {new Date(d.meta.marketStartMs).toISOString().slice(11, 19)} UTC) · Volume-Profile-Bereich Bars {range[0]}–{range[1]} · Bars/Preis-Einheit 1 Bar = {d.meta.ticksPerBar} Ticks (keine Zeit) · Bubbles ≥ {lay.bubbleMinVol} Kontrakte
+        {cov?.truncated && <><br /><b style={{ color: RED }}>Tape gekappt:</b> Bubbles &amp; Tape-Ansicht decken NUR die ersten {cov.count.toLocaleString()} von {cov.totalTicks.toLocaleString()} Ticks ab (bis {hhmmss(cov.endMs)} UTC); außerhalb „nicht verfügbar", keine Nullwerte. <b style={{ color: KEY }}>VWAP · CVD · Volume-Profil · Delta · Bars/Preis</b> nutzen die VOLLSTÄNDIGE Tick-Basis (Kerzen/Footprint) über den gesamten Abschnitt.</>}
         {d.provenance && <><br /><b>Lauf:</b> Quelle {src.replace("/", "") || "—"} · {d.provenance.ticks} Ticks → {d.provenance.fullBars} Bars (+{d.provenance.remainderTicks} Rest) · {d.provenance.ticksPerBar} t/Bar · SHA {d.provenance.dataSha256.slice(0, 10)} · {d.provenance.capabilities}</>}
         {strat?.status && <><br /><b>{strat.name}:</b> {strat.status} · Signale {strat.signalsGenerated} · Orders {strat.ordersSubmitted} (Risk-abgelehnt {strat.ordersRejectedByRisk}) · Pending@Ende {strat.ordersUnfilledAtEnd} · offene Position@Ende <span style={{ color: strat.openPositionSide === "Flat" ? "var(--fg-faint)" : strat.openPositionSide === "Long" ? KEY : RED }}>{strat.openPositionSide} {strat.openPositionQty || 0}{strat.openPositionQty ? ` @ ${strat.openPositionAvgPrice?.toFixed(2)}` : ""}</span></>}
         {strat?.endEquityMarkToMarket !== undefined && <><br /><b>Ergebnis {strat.name}:</b> real. Netto {eur(strat.realizedNetPnL ?? 0)} · unreal.@letzter Tick {eur(strat.unrealizedGrossAtLastTick ?? 0)} · Fees ges. {eur(strat.totalFeesPaid ?? 0)} (offene Eintritts-Fee {eur(strat.openPositionEntryFees ?? 0)}, keine Exit-Fee) · End-Equity real {eur(strat.endEquityRealized ?? 0)} / MtM {eur(strat.endEquityMarkToMarket ?? 0)}</>}
@@ -177,14 +194,15 @@ export function ResearchWorkspace() {
           <div className="h-full w-full"><FootprintChart bars={fpBars} trades={chartTrades} selected={selected} focusKey={focusKey} onSelectTrade={pick} className="h-full w-full" /></div>
         </Panel>}
         {lay.modules.status && <Panel title="Orderbuch-Heatmap + Trade-Bubbles" resize>
-          <Status items={[["Historische Orderbuch-Heatmap", d.availability.orderbookHeatmap], ["DOM-Snapshots", d.availability.dom]]} note={`${d.quality.domNote}. Trade-Bubbles (große Trades aus dem Tape) werden im Kerzenchart dargestellt (Indikator „Bubbles").`} />
+          <Status items={[["Historische Orderbuch-Heatmap", d.availability.orderbookHeatmap], ["DOM-Snapshots", d.availability.dom]]} note={`${d.quality.domNote}. Trade-Bubbles (große Trades aus dem Tape) werden im Kerzenchart dargestellt (Indikator „Bubbles").${cov?.truncated ? ` Tape gekappt: Bubbles nur für die ersten ${cov.count.toLocaleString()} von ${cov.totalTicks.toLocaleString()} Ticks (bis ${hhmmss(cov.endMs)} UTC); danach nicht verfügbar. VWAP/CVD/Volume-Profil/Delta nutzen die vollständige Tick-Basis.` : ""}`} />
         </Panel>}
         {lay.modules.tape && <Panel title="Time & Sales (Tape) + DOM-Ladder" resize>
           <div className="flex flex-col h-full">
             <div className="flex-1 overflow-y-auto text-[10px] mono">
               <div className="flex px-1 py-0.5 text-[var(--fg-faint)] sticky top-0 bg-[var(--panel)]"><span className="w-20">Zeit</span><span className="flex-1 text-right">Preis</span><span className="w-12 text-right">Vol</span><span className="w-12 text-right">Seite</span></div>
               {tapeWin.map((r, i) => <div key={i} className="flex px-1 py-[1px]"><span className="w-20 text-[var(--fg-faint)]">{new Date(r[0]).toISOString().slice(11, 19)}</span><span className="flex-1 text-right text-[var(--fg)]">{r[1]}</span><span className="w-12 text-right">{r[2]}</span><span className="w-12 text-right" style={{ color: r[3] > 0 ? KEY : r[3] < 0 ? RED : "var(--fg-faint)" }}>{r[3] > 0 ? "Buy" : r[3] < 0 ? "Sell" : "?"}</span></div>)}
-              {tapeWin.length === 0 && <div className="px-1 py-2 text-[var(--fg-faint)]">keine Trades im Fenster</div>}
+              {tapeWin.length === 0 && tapeWindowOutside && <div className="px-1 py-2" style={{ color: RED }}>Tape hier nicht verfügbar — außerhalb des exportierten Tape-Fensters (erste {cov?.count.toLocaleString()} von {cov?.totalTicks.toLocaleString()} Ticks, bis {hhmmss(cov?.endMs ?? null)} UTC). Vollständige Indikatoren (VWAP/CVD/Volume-Profil/Delta) nutzen die vollständige Tick-Basis.</div>}
+              {tapeWin.length === 0 && !tapeWindowOutside && <div className="px-1 py-2 text-[var(--fg-faint)]">keine Trades im Fenster</div>}
             </div>
             <div className="border-t border-[var(--line)] px-1 py-1 text-[10px]"><span className="text-[var(--fg-faint)]">DOM-Ladder: </span><span style={{ color: RED }}>{d.availability.dom}</span></div>
           </div>
@@ -193,7 +211,7 @@ export function ResearchWorkspace() {
 
       {/* Kerzenchart mit VP/VWAP/TPO/Bubbles */}
       {lay.modules.candle && <Panel title={`Kerzen + Volume Profile + VWAP${lay.ind.tpo ? " + Bars/Preis" : ""}${lay.ind.bubbles ? " + Bubbles" : ""} (Bereich Bars ${range[0]}–${range[1]})`} resize minH={lay.maximized ? 480 : 360}>
-        <CandleProfileChart candles={d.candles} trades={chartTrades} vwap={vwap.vwap} vwapAnchorBar={0} vp={lay.ind.vp ? vp : null} tpo={lay.ind.tpo ? tpo : null} bubbles={lay.ind.bubbles ? bubbles : []} show={{ vp: !!lay.ind.vp, vwap: !!lay.ind.vwap, tpo: !!lay.ind.tpo, bubbles: !!lay.ind.bubbles }} selected={selected} focusKey={focusKey} onSelectTrade={pick} className="h-full w-full" />
+        <CandleProfileChart candles={d.candles} trades={chartTrades} vwap={vwap.vwap} vwapAnchorBar={0} vp={lay.ind.vp ? vp : null} tpo={lay.ind.tpo ? tpo : null} bubbles={lay.ind.bubbles ? bubbles : []} bubbleCoverageBar={coverageEndBar} show={{ vp: !!lay.ind.vp, vwap: !!lay.ind.vwap, tpo: !!lay.ind.tpo, bubbles: !!lay.ind.bubbles }} selected={selected} focusKey={focusKey} onSelectTrade={pick} className="h-full w-full" />
       </Panel>}
 
       {/* Volumen / Delta / CVD */}
@@ -201,7 +219,7 @@ export function ResearchWorkspace() {
         <FlowPanels candles={d.candles} cvd={cvd.cvd} cvdAnchorBar={0} trades={chartTrades} selected={selected} focusKey={focusKey} className="h-full w-full" />
       </Panel>}
 
-      <div className="text-[9.5px] text-[var(--fg-faint)]">Alle Werte <b>rückblickend</b> (finale Ticks); ein exportierter „Snapshot @t" enthält keine späteren Trades/Profile. Footprint/Tape/Delta aus aufgenommenen Trades; VWAP=Preis×Volumen (Anker sichtbar); POC/Value-Area 70 % über den gezeigten Bereich; „Bars/Preis" = Anzahl 500-Tick-Bars, deren Spanne den Preis berührt (kein Zeit-am-Preis/TPO, da Tick-Bars keine feste Dauer haben). DOM/Heatmap unvalidiert → als nicht verfügbar gekennzeichnet. Preisgranularität 1-Punkt (MNQ real 0,25 ungeklärt).</div>
+      <div className="text-[9.5px] text-[var(--fg-faint)]">Alle Werte <b>rückblickend</b> (finale Ticks); ein exportierter „Snapshot @t" enthält keine späteren Trades/Profile. Footprint/Delta aus allen Trades der Quelle (Tape-Ansicht &amp; Bubbles ggf. gekappt — siehe Anker-Zeile); VWAP=Preis×Volumen (Anker sichtbar); POC/Value-Area 70 % über den gezeigten Bereich; „Bars/Preis" = Anzahl {d.meta.ticksPerBar}-Tick-Bars, deren Spanne den Preis berührt (kein Zeit-am-Preis/TPO, da Tick-Bars keine feste Dauer haben). DOM/Heatmap unvalidiert → als nicht verfügbar gekennzeichnet. Preisgranularität: {d.quality.priceGranularity}.</div>
     </div>
   );
   return <Box>{inner}</Box>;

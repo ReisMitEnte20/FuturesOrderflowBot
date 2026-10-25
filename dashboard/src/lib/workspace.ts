@@ -117,6 +117,28 @@ export function tradeBubbles(tape: WsTapeRow[], minVol: number, t0?: number, t1?
   return out;
 }
 
+/** Abdeckung des mitgelieferten Tapes. Das Tape kann aus Browser-Schutz GEKAPPT sein (nur die ersten N Ticks);
+ *  Kerzen/Footprint/Delta/CVD/VWAP/Volume-Profil nutzen dagegen IMMER die vollstaendige Tick-Basis (Runner-seitig).
+ *  totalTicks stammt aus der Provenienz (vollstaendige Tickzahl); truncated = es fehlen Tape-Zeilen. */
+export interface TapeCoverage { count: number; totalTicks: number; truncated: boolean; startMs: number | null; endMs: number | null; }
+export function tapeCoverage(d: WorkspaceData): TapeCoverage {
+  const count = d.tape.length;
+  const totalTicks = d.provenance?.ticks ?? count;
+  return {
+    count, totalTicks, truncated: totalTicks > count,
+    startMs: count > 0 ? d.tape[0][0] : null,
+    endMs: count > 0 ? d.tape[count - 1][0] : null,
+  };
+}
+/** Liegt der Zeitpunkt t im exportierten Tape-Fenster? Bei vollstaendigem Tape immer true; bei gekapptem Tape
+ *  nur innerhalb [startMs, endMs]. Ausserhalb => Tape/Bubbles "nicht verfuegbar" (KEIN irrefuehrender Nullwert). */
+export function tapeCoversTime(d: WorkspaceData, tMs: number): boolean {
+  const c = tapeCoverage(d);
+  if (!c.truncated) return true;
+  if (c.startMs == null || c.endMs == null) return false;
+  return tMs >= c.startMs && tMs <= c.endMs;
+}
+
 /** Bar-Index, dessen Schluss <= t ist (letzte VOLLSTAENDIG bekannte Kerze zum Zeitpunkt t). */
 export function barAt(candles: WsCandle[], t: number): number {
   let idx = -1;

@@ -35,6 +35,19 @@ public sealed record OrderflowRunRequest
     public int RowsAccepted { get; init; }
     public decimal DeltaThreshold { get; init; }
 
+    /// <summary>
+    /// Maximale Anzahl Tape-Eintraege im Dashboard-Artefakt (0 = unbegrenzt, Rueckwaertskompatibel).
+    /// Schuetzt den Browser davor, zig Millionen Tick-Tape-Eintraege zu laden; Kerzen/Footprint/Delta nutzen
+    /// weiterhin ALLE Ticks.
+    /// </summary>
+    public int MaxTapeEntries { get; init; }
+
+    /// <summary>Ehrlicher, quellenspezifischer Hinweis zur Preisgranularitaet (leer = Runner-Default).</summary>
+    public string PriceGranularityNote { get; init; } = string.Empty;
+
+    /// <summary>Ehrlicher, quellenspezifischer Hinweis zur Footprint-Quelle (leer = Runner-Default).</summary>
+    public string FootprintSourceNote { get; init; } = string.Empty;
+
     /// <summary>Tatsaechlich verwendete Einstellungen/Config-Quellen (Freitext key/value), werden mit gespeichert.</summary>
     public IReadOnlyDictionary<string, string> SettingsUsed { get; init; } = new Dictionary<string, string>();
 }

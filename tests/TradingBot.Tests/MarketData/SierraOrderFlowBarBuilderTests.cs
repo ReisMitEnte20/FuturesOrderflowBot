@@ -322,6 +322,67 @@ public class SierraOrderFlowBarBuilderTests
         act.Should().Throw<ArgumentException>().WithMessage("*Symbol*");
     }
 
+    // ---- Gefensterter Streaming-Import (nur UTC-Fenster, Zaehler, Abbruch nach Fenster-Ende) ----
+
+    // Zeilen vor/innerhalb/nach dem Fenster + eine abgelehnte Zeile (Last=0) innerhalb des Fensters.
+    private const string WindowTicks = Header + "\n" +
+        "2025/12/28, 23:00:05, 100.00, 100.25, 100.00, 100.00, 5, 1, 0, 5\n" +   // vor Fenster
+        "2025/12/28, 23:00:10, 100.25, 100.50, 100.25, 100.25, 5, 1, 0, 5\n" +   // in Fenster (Grenze from) -> Buy
+        "2025/12/28, 23:00:20, 100.25, 100.50, 100.25, 100.25, 3, 1, 3, 0\n" +   // in Fenster -> Sell
+        "2025/12/28, 23:00:25, 0,0,0, 0, 2, 1, 2, 0\n" +                         // in Fenster -> abgelehnt (Last<=0)
+        "2025/12/28, 23:00:30, 100.50, 100.75, 100.50, 100.50, 2, 1, 0, 2\n" +   // in Fenster (Grenze to) -> Buy
+        "2025/12/28, 23:00:40, 100.75, 100.75, 100.50, 100.75, 4, 1, 4, 0\n";    // nach Fenster -> Abbruch
+
+    [Fact]
+    public void StreamTicksWindowed_keeps_only_in_window_ticks_and_counts_rejected()
+    {
+        var from = new DateTimeOffset(2025, 12, 28, 23, 0, 10, TimeSpan.Zero);
+        var to = new DateTimeOffset(2025, 12, 28, 23, 0, 30, TimeSpan.Zero);
+
+        var r = SierraOrderFlowBarBuilder.StreamTicksWindowed(R(WindowTicks), "MES", from, to);
+
+        r.Ticks.Should().HaveCount(3);                        // :10, :20, :30 (vor/nach ausgeschlossen)
+        r.Ticks[0].Timestamp.Should().Be(from);               // from inklusive
+        r.Ticks[^1].Timestamp.Should().Be(to);                // to inklusive
+        r.RowsReadInWindow.Should().Be(3);
+        r.Rejected.Should().Be(1);                            // Last<=0 im Fenster
+        r.Unclassified.Should().Be(0);
+        r.HasBidAsk.Should().BeTrue();
+
+        r.Ticks[0].Aggressor.Should().Be(AggressorSide.Buy);
+        r.Ticks[1].Aggressor.Should().Be(AggressorSide.Sell);
+        r.Ticks[2].Aggressor.Should().Be(AggressorSide.Buy);
+
+        // BidSize/AskSize = AUSGEFUEHRTE Volumina; Bid/Ask-PREISfelder bleiben 0 (keine ruhenden Quotes).
+        r.Ticks[1].BidSize.Should().Be(3m);
+        r.Ticks[1].AskSize.Should().Be(0m);
+        r.Ticks.All(t => t.Bid == 0m && t.Ask == 0m).Should().BeTrue();
+    }
+
+    [Fact]
+    public void AdapterImportWindowedSet_reports_capabilities_and_quality()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"sierra-win-{Guid.NewGuid():N}.txt");
+        File.WriteAllText(path, WindowTicks);
+        try
+        {
+            var from = new DateTimeOffset(2025, 12, 28, 23, 0, 10, TimeSpan.Zero);
+            var to = new DateTimeOffset(2025, 12, 28, 23, 0, 30, TimeSpan.Zero);
+
+            var set = new SierraMarketDataAdapter().ImportWindowedSet(path, "MES", from, to);
+
+            set.Symbol.Should().Be("MES");
+            set.Ticks.Should().HaveCount(3);
+            set.Capabilities.SupportsDeltaCvd.Should().BeTrue();   // voll klassifiziert im Fenster
+            set.Quality.RowsAccepted.Should().Be(3);
+            set.Quality.RowsRead.Should().Be(4);                   // 3 akzeptiert + 1 abgelehnt
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     // -------------------------------------------------------------------------------------------
     // Holdout-Grenze (Befund A): Der Tick-Filter ist zeitstempel-INKLUSIVE (ts > toUtc -> überspringen).
     // Ein Tick exakt auf dem Bucket-Start (= Holdout-Start) würde daher eine Kerze mit OpenTime == Grenze

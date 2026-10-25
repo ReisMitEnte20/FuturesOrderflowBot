@@ -73,10 +73,16 @@ public sealed class OrderflowMultiStrategyRunner
             footprint.Add(BuildFootprint(ticks, i * tpb, tpb));
         }
 
-        // --- Tape (alle Ticks) ---
-        var tape = new List<object[]>(ticks.Count);
-        foreach (var t in ticks)
+        // --- Tape (optional gekappt, damit das Dashboard-Artefakt nicht Millionen Eintraege in den Browser laedt;
+        //     Kerzen/Footprint/Delta/CVD oben nutzen weiterhin ALLE Ticks) ---
+        int tapeCap = req.MaxTapeEntries > 0 ? Math.Min(req.MaxTapeEntries, ticks.Count) : ticks.Count;
+        bool tapeTruncated = tapeCap < ticks.Count;
+        var tape = new List<object[]>(tapeCap);
+        for (int i = 0; i < tapeCap; i++)
+        {
+            var t = ticks[i];
             tape.Add(new object[] { Ms(t.Timestamp), t.Price, t.Volume, Dir(t.Aggressor) });
+        }
 
         // --- Trade -> Bar-Index (gleiche Basis wie Kerzen) ---
         var barOpenMs = fullBarList.Select(b => Ms(b.OpenTime)).ToArray();
@@ -173,7 +179,9 @@ public sealed class OrderflowMultiStrategyRunner
             MarketEndMs = Ms(fullBarList[^1].CloseTime),
             TicksPerBar = tpb,
             PointValue = req.Instrument.PointValue,
-            TickSizeNote = $"Config-TickSize {req.Instrument.TickSize}; Aufnahme 1-Punkt-granular (ungeklaert, nicht korrigiert)",
+            TickSizeNote = string.IsNullOrEmpty(req.PriceGranularityNote)
+                ? $"Config-TickSize {req.Instrument.TickSize}; Aufnahme 1-Punkt-granular (ungeklaert, nicht korrigiert)"
+                : $"Config-TickSize {req.Instrument.TickSize}; {req.PriceGranularityNote}",
             FeePerSide = feePerSide,
             SlippageTicks = slipTicks,
             GeneratedUtc = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture)
@@ -183,8 +191,10 @@ public sealed class OrderflowMultiStrategyRunner
         {
             ["candles"] = "verfuegbar (volle Bars)",
             ["footprint"] = "abgeleitet (aus Ticks je Bar)",
-            ["tape"] = "verfuegbar (aufgenommene Trades)",
-            ["delta"] = "abgeleitet (Aggressor aus Aufnahme)",
+            ["tape"] = tapeTruncated
+                ? $"verfuegbar, gekappt: erste {tapeCap} von {ticks.Count} Ticks (Kerzen/Footprint/Delta nutzen ALLE Ticks)"
+                : "verfuegbar (alle Ticks)",
+            ["delta"] = "abgeleitet (Aggressor aus Quelle)",
             ["cvd"] = "abgeleitet",
             ["dom"] = "nicht verfuegbar (unvalidiert)",
             ["orderbookHeatmap"] = "nicht verfuegbar (unvalidiert)"
@@ -192,12 +202,29 @@ public sealed class OrderflowMultiStrategyRunner
 
         var quality = new OrderflowQuality
         {
-            PriceGranularity = "1-Punkt (Aufnahme; MNQ real 0,25 ungeklaert)",
+            PriceGranularity = string.IsNullOrEmpty(req.PriceGranularityNote)
+                ? "1-Punkt (Aufnahme; MNQ real 0,25 ungeklaert)"
+                : req.PriceGranularityNote,
             Drops = Math.Max(0, req.RowsRead - req.RowsAccepted),
-            Aggressor = string.IsNullOrEmpty(req.AggressorNote) ? "aus Aufnahme (AggressorSide)" : req.AggressorNote,
-            FootprintSource = "aus Ticks je 500-Tick-Bar (kein nativer ATAS-Footprint)",
+            Aggressor = string.IsNullOrEmpty(req.AggressorNote) ? "aus Quelle (AggressorSide)" : req.AggressorNote,
+            FootprintSource = string.IsNullOrEmpty(req.FootprintSourceNote)
+                ? "aus Ticks je 500-Tick-Bar (kein nativer ATAS-Footprint)"
+                : req.FootprintSourceNote,
             DomNote = "DOM/Orderbuch-Heatmap unvalidiert -> nicht verfuegbar"
         };
+
+        var caveats = new List<string>
+        {
+            "Technischer Funktionsnachweis - KEINE Profitabilitaetsaussage.",
+            string.IsNullOrEmpty(req.PriceGranularityNote)
+                ? "Preisgranularitaet 1-Punkt (MNQ real 0,25) ungeklaert und NICHT korrigiert."
+                : $"Preisgranularitaet: {req.PriceGranularityNote}.",
+            "DOM/Orderbuch-Heatmap unvalidiert - als nicht verfuegbar gekennzeichnet (BidSize/AskSize = ausgefuehrte Volumina, keine ruhenden Mengen).",
+            "Kleiner Einzelabschnitt, kein Out-of-Sample/Holdout.",
+            "SinglePositionGate (max. 1 Kontrakt, kein Add) entscheidet gegen den TATSAECHLICHEN Positionszustand der Engine; es nutzt IPositionManager ausschliesslich lesend (GetPosition). Abgelehnte/ungefuellte Orders erzeugen keine Phantomposition. Betriebsgrenze: im Market-Order-Replay-Pfad wird eine angenommene Order am Folge-Tick vollstaendig gefuellt (vor dem naechsten Bar-Signal); nur ein Signal am allerletzten Tick bleibt pending. Trades/Position/PnL stammen aus der Engine; harte Obergrenze via RiskConfig MaxContracts=1 (Backstop)."
+        };
+        if (tapeTruncated)
+            caveats.Add($"Tape im Dashboard-Artefakt auf {tapeCap} von {ticks.Count} Ticks gekappt (Browser-Schutz); Kerzen/Footprint/Delta/CVD basieren auf ALLEN Ticks.");
 
         var provenance = new OrderflowProvenance
         {
@@ -233,14 +260,7 @@ public sealed class OrderflowMultiStrategyRunner
                 "Das letzte volle Bar-Signal wird (anders als im Harness) ausgefuehrt und fuellt am ersten Folge-Tick; die Rest-Ticks erzeugen selbst KEINE Signal-Bar.",
                 "Fill-/Slippage-/Flip-Details stammen aus FillModel/OrderManager, nicht aus der vereinfachten Harness-Transition -> PnL bewusst NICHT identisch erzwungen."
             },
-            Caveats = new[]
-            {
-                "Technischer Funktionsnachweis - KEINE Profitabilitaetsaussage.",
-                "Preisgranularitaet 1-Punkt (MNQ real 0,25) ungeklaert und NICHT korrigiert.",
-                "DOM/Orderbuch-Heatmap unvalidiert - als nicht verfuegbar gekennzeichnet.",
-                "Kleiner Einzelabschnitt, kein Out-of-Sample/Holdout.",
-                "SinglePositionGate (max. 1 Kontrakt, kein Add) entscheidet gegen den TATSAECHLICHEN Positionszustand der Engine; es nutzt IPositionManager ausschliesslich lesend (GetPosition). Abgelehnte/ungefuellte Orders erzeugen keine Phantomposition. Betriebsgrenze: im Market-Order-Replay-Pfad wird eine angenommene Order am Folge-Tick vollstaendig gefuellt (vor dem naechsten Bar-Signal); nur ein Signal am allerletzten Tick bleibt pending. Trades/Position/PnL stammen aus der Engine; harte Obergrenze via RiskConfig MaxContracts=1 (Backstop)."
-            },
+            Caveats = caveats,
             SettingsUsed = req.SettingsUsed
         };
 
