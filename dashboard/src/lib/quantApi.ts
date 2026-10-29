@@ -3,9 +3,9 @@
 // clientseitig erfundenen Kennzahlen. Fehlende Werte bleiben null und werden als solche dargestellt.
 
 import type { RunRequest, CostProfile } from "./backtestApi";
+import { QUANT_API } from "./apiBase.ts";
 
-const BASE: string =
-  (import.meta as any).env?.VITE_QUANT_API || "http://localhost:5034/api/quant";
+const BASE: string = QUANT_API;
 
 export interface QuantEvaluationOptions {
   frequency: "Bar" | "Daily" | "Weekly" | "Monthly";

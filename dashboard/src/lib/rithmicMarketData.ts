@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { useTradingStore } from "@/stores/tradingStore";
 import { exchangeFor, mapBars, type RithmicQuote, type RithmicTimeBar } from "@/lib/rithmicBars";
+import { RITHMIC_API } from "@/lib/apiBase";
 
 export type { RithmicQuote };
 
-const API_BASE = "/api/rithmic";
+const API_BASE = RITHMIC_API;
 const BAR_POLL_MS = 15_000;
 const QUOTE_POLL_MS = 1_000;
 const LOOKBACK_HOURS = 8;

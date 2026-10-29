@@ -30,9 +30,12 @@ npm install
 npm test
 ```
 
-### Dashboards starten
+### Starten
 
-**Backend + Blazor-DevDashboard** (`http://localhost:5034`, Profil `http`):
+Oberfläche und Backend sind getrennt: **React (Vite) ist die einzige UI**, das **.NET-DevDashboard ist
+reiner API-Host**. Beide laufen getrennt und werden gemeinsam betrieben.
+
+**Backend (API-Host, öffnet keinen Browser)** (`http://localhost:5034`, Profil `http`):
 
 ```bash
 dotnet run --project src/TradingBot.DevDashboard/TradingBot.DevDashboard.csproj --launch-profile http
@@ -40,24 +43,23 @@ dotnet run --project src/TradingBot.DevDashboard/TradingBot.DevDashboard.csproj 
 Rithmic__Enabled=true dotnet run --project src/TradingBot.DevDashboard/TradingBot.DevDashboard.csproj --launch-profile http
 ```
 
-**React-Dashboard** (Vite, `http://127.0.0.1:5899`):
+Das Backend liefert nur noch JSON-APIs unter `/api/*`; die Wurzel `/` gibt eine knappe Statusantwort.
+Es wird **keine** Blazor-Oberfläche mehr ausgeliefert.
+
+**React-Dashboard (einzige UI)** (Vite, `http://127.0.0.1:5899`, Einstieg `/research`):
 
 ```bash
 cd dashboard
-npm run dev      # Dev-Server
+npm install      # einmalig
+npm run dev      # Dev-Server → http://127.0.0.1:5899/research
 npm run build    # tsc -b + vite build → dashboard/dist/
 ```
 
-Das React-Dashboard ruft die Backtest- und Quant-API direkt unter `http://localhost:5034/api/backtest`
-bzw. `/api/quant` auf (überschreibbar per `VITE_BACKTEST_API` / `VITE_QUANT_API`; CORS erlaubt
-`127.0.0.1:5899`/`localhost:5899` und `:4173`).
-
-> **Bekannte Einschränkung Rithmic im Dev-Modus:** Die Rithmic-Komponenten rufen `/api/rithmic/*`
-> **relativ** auf. `vite.config.ts` enthält **keinen** Proxy, d. h. vom Vite-Dev-Server (5899) aus
-> erreichen diese Aufrufe das Backend nicht ohne zusätzliche Weiterleitung. `dashboard/rithmic-proxy.cjs`
-> (`node dashboard/rithmic-proxy.cjs`) ist ein lokaler Node-Proxy auf Port 3001, der `/api/rithmic/*` an
-> das Backend (Port 5034, `BACKEND_PORT`) weiterreicht; er ist aber nicht automatisch in den Vite-Server
-> eingebunden.
+Die API-Basisadresse ist **zentral** in `dashboard/src/lib/apiBase.ts` festgelegt und über `VITE_API_URL`
+überschreibbar (Standard `http://127.0.0.1:5034`, siehe `dashboard/.env.example`). Daraus leiten sich
+`/api/backtest`, `/api/quant` und `/api/rithmic` ab — keine verteilten, hartkodierten localhost-Adressen.
+Für ein Backend auf einem anderen Rechner genügt es, `VITE_API_URL` zu setzen. CORS erlaubt
+`127.0.0.1:5899`/`localhost:5899` und `:4173`.
 
 ## Architektur
 
@@ -89,22 +91,24 @@ Grundregeln (Details in [CLAUDE.md](CLAUDE.md)):
 | `TradingBot.PaperTrading` | Paper-Trading-Engine (Simulation) | Application, Core, Domain |
 | `TradingBot.Research` | Monte Carlo, Walk Forward, Parameter Sweep, Sensitivity, Robustness, Ranking | Application, Backtesting, Infrastructure, Core, Domain |
 | `TradingBot.Quant` | Quant-Research: Walk-forward, Monte Carlo, Overfitting (CSCV/PBO, PSR/DSR), Robustness, Versuchsregister, Holdout | Backtesting, Core, Domain |
-| `TradingBot.DevDashboard` | Blazor-DevDashboard + lokale HTTP-API für das React-Dashboard | Domain, Core, Infrastructure, Backtesting, PaperTrading, Research, Quant |
+| `TradingBot.DevDashboard` | Lokaler HTTP-**API-Host** (`/api/*`) für das React-Dashboard (keine serverseitige UI mehr) | Domain, Core, Infrastructure, Backtesting, PaperTrading, Research, Quant |
 | `TradingBot.Console` | Konsolen-Einstieg (Research-Demo mit Sierra-Orderflow-Ticks) | alle außer DevDashboard/Quant |
 | `TradingBot.Tests` | xUnit-Tests | alle |
 
 Abhängigkeiten zeigen nach innen Richtung `Domain`; `Application` kennt nur Interfaces aus `Core`.
 
-## Dashboards
+## Oberfläche & API
 
-**React-Dashboard** (`dashboard/`, Vite + React + TypeScript + Tailwind + ECharts) — Seiten:
+**React-Dashboard — die einzige UI** (`dashboard/`, Vite + React + TypeScript + Tailwind + ECharts) auf
+`http://127.0.0.1:5899`, Einstieg `/research` — Seiten:
 `/` Trading Desk · `/signals` · `/backtest` · `/research` · `/market` · `/pipeline` · `/settings`.
 Screenshots: [picture/README.md](picture/README.md). Keine Order-/Buy-/Sell-Buttons.
 
-**Blazor-DevDashboard** (`src/TradingBot.DevDashboard`, Port 5034) — Seiten:
-`/` Status · `/paper` Paper Monitor · `/research` Research Dashboard · `/replay` Backtest Replay.
+**API-Host** (`src/TradingBot.DevDashboard`, Port 5034) — liefert ausschließlich JSON-APIs unter `/api/*`;
+die Wurzel `/` gibt eine knappe Statusantwort. Die frühere Blazor-Oberfläche (Status/Paper/Research/Replay)
+wird **nicht mehr ausgeliefert**.
 
-**Backend-API** (im DevDashboard):
+**Backend-API** (im API-Host):
 
 | Gruppe | Inhalt |
 |---|---|

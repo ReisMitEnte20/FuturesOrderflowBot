@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import { useTradingStore } from "@/stores/tradingStore";
 import { RithmicLoginModal } from "@/components/trading/RithmicLoginModal";
 import { Button } from "@/components/common/Button";
+import { RITHMIC_API } from "@/lib/apiBase";
 
-const API_BASE = "/api/rithmic";
+const API_BASE = RITHMIC_API;
 
 // /status ist ein rein LOKALER Snapshot des eigenen Backends (kein Rithmic-Netzwerkzugriff). Er wird beim Laden
 // und periodisch abgefragt, damit die Anzeige den echten Backend-Zustand zeigt (z. B. nach Reload/ForcedLogout).

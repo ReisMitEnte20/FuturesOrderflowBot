@@ -3,11 +3,12 @@ import { createPortal } from "react-dom";
 import { useTradingStore } from "@/stores/tradingStore";
 import { Button } from "@/components/common/Button";
 import { X } from "lucide-react";
+import { RITHMIC_API } from "@/lib/apiBase";
 
 // Vorschläge; maßgeblich ist die System-Liste, die das Gateway beim Connect meldet (Fehlermeldung listet sie).
 const SYSTEM_SUGGESTIONS = ["Rithmic Test", "Rithmic Paper Trading", "Rithmic 01", "LucidTrading"];
 
-const API_BASE = "/api/rithmic";
+const API_BASE = RITHMIC_API;
 
 interface RithmicLoginModalProps {
   open: boolean;

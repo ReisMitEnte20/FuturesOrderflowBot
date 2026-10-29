@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import { Card, CardHeader, CardBody } from "@/components/common/Card";
 import { Button } from "@/components/common/Button";
 import { ShieldCheck } from "lucide-react";
+import { RITHMIC_API } from "@/lib/apiBase";
 
-const API_BASE = "/api/rithmic";
+const API_BASE = RITHMIC_API;
 
 interface ConformanceStatus {
   isRunning: boolean;
