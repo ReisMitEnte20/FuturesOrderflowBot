@@ -108,6 +108,8 @@ public sealed record WsCandle
     public decimal C { get; init; }
     public decimal V { get; init; }
     public decimal Delta { get; init; }
+    /// <summary>Belegte Bar-SCHLUSSZEIT (ms) aus dem Aggregator (fuer leakage-freien Snapshot @t der letzten Bar).</summary>
+    public long Tc { get; init; }
 }
 
 public sealed record WsFpLevel

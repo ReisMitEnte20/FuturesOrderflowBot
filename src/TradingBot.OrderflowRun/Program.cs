@@ -139,9 +139,19 @@ else
     dataFilePath = recording;
     dataSource = $"ATAS-Replay-Aufnahme {Path.GetFileName(Path.GetDirectoryName(recording))}";
     aggressorNote = "aus Aufnahme (AggressorSide je Trade)";
-    priceGranularityNote = string.Empty;   // Runner-Default beibehalten
-    footprintSourceNote = string.Empty;
-    maxTape = 0;                            // unbegrenzt (altes Verhalten)
+    // Quellenbezogene Granularitaet: beobachtete Preisschrittweite (aus den tatsaechlichen Ticks) GETRENNT
+    // von der Instrument-TickSize ausweisen. So bleiben alte 1-Punkt-Aufnahmen als 1,0 erkennbar und werden
+    // nicht nachtraeglich als 0,25 ausgegeben; 0,25-Aufnahmen erscheinen als 0,25.
+    decimal observedTick = ObservedPriceGranularity(set.Ticks);
+    priceGranularityNote = observedTick <= 0m
+        ? $"beobachtet: n/a (zu wenige Preise); Instrument-TickSize {instrument.TickSize}"
+        : observedTick == instrument.TickSize
+            ? $"{observedTick} (beobachtet = Instrument-TickSize {instrument.TickSize})"
+            : observedTick > instrument.TickSize
+                ? $"{observedTick} beobachtet — GROEBER als Instrument-TickSize {instrument.TickSize} (nicht korrigiert)"
+                : $"{observedTick} beobachtet (feiner als Instrument-TickSize {instrument.TickSize})";
+    footprintSourceNote = "aus Ticks je 500-Tick-Bar (Footprint/Delta aus AggressorSide je Trade)";
+    maxTape = 5000;                         // begrenzt NUR den Dashboard-Tape-Export; Simulation + Kerzen/Footprint/Delta/CVD nutzen ALLE Ticks
     settingsUsed = new Dictionary<string, string>
     {
         ["instrumentConfig"] = "config/instruments/mnq.example.json",
@@ -154,8 +164,10 @@ else
         ["risk.maxOpenPositions"] = risk.MaxOpenPositions.ToString(),
         ["risk.maxDailyLoss"] = risk.MaxDailyLoss.ToString("F2"),
         ["instrument.tickSize"] = instrument.TickSize.ToString(),
+        ["observedPriceGranularity"] = observedTick.ToString(),
         ["instrument.pointValue"] = instrument.PointValue.ToString(),
         ["fee.estimatedSlippageTicks"] = fee.EstimatedSlippageTicks.ToString(),
+        ["maxTapeEntries"] = maxTape.ToString(),
         ["startingBalance"] = StartingBalance.ToString("F2"),
         ["ticksPerBar"] = "500"
     };
@@ -294,6 +306,25 @@ static string FindRepoRoot()
     while (dir != null && !File.Exists(Path.Combine(dir.FullName, "TradingBot.sln"))) dir = dir.Parent;
     return dir?.FullName ?? Directory.GetCurrentDirectory();
 }
+
+// Beobachtete Preis-Schrittweite aus den tatsaechlichen Tick-Preisen: GCD der Differenzen zu einem Basispreis
+// (in 1/100-Einheiten). Liefert z. B. 0,25 bei Viertel-Ticks, 1,0 bei ganzzahligen Preisen. 0 = unbestimmbar.
+static decimal ObservedPriceGranularity(IReadOnlyList<MarketTick> ticks)
+{
+    long g = 0, baseC = long.MinValue;
+    foreach (var t in ticks)
+    {
+        long c = (long)Math.Round(t.Price * 100m);
+        if (baseC == long.MinValue) { baseC = c; continue; }
+        long d = c - baseC; if (d < 0) d = -d;
+        if (d == 0) continue;
+        g = Gcd(g, d);
+        if (g == 1) break; // feiner als 0,01 nicht moeglich
+    }
+    return g == 0 ? 0m : g / 100m;
+}
+
+static long Gcd(long a, long b) { while (b != 0) { var t = b; b = a % b; a = t; } return a; }
 
 // Read-only Index ueber alle vorhandenen Laeufe (artifacts/orderflow/runs/<id>/manifest.json).
 // Spiegelt jeden Workspace nach dashboard/public/orderflow-runs/<id>.json (damit aeltere Laeufe weiter ladbar

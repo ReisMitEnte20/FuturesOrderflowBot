@@ -3,7 +3,8 @@
 // Rueckblickende finale Werte sind als solche gekennzeichnet; ein Snapshot "zum Zeitpunkt t" enthaelt KEINE
 // spaeteren Trades/Profile/finalen Kerzeninformationen. Fehlende Daten => "nicht verfuegbar", nie erfunden.
 
-export interface WsCandle { t: number; o: number; h: number; l: number; c: number; v: number; delta: number; }
+export interface WsCandle { t: number; o: number; h: number; l: number; c: number; v: number; delta: number; tc?: number; }
+// tc = belegte Bar-SCHLUSSZEIT (ms) aus dem Aggregator. Optional: alte Artefakte tragen sie nicht.
 export interface WsFpLevel { p: number; b: number; a: number; }
 export type WsTapeRow = [number, number, number, number]; // [t_ms, price, vol, dir(1=Buy/Ask,-1=Sell/Bid,0=unbekannt)]
 export interface WsTrade {
@@ -139,10 +140,16 @@ export function tapeCoversTime(d: WorkspaceData, tMs: number): boolean {
   return tMs >= c.startMs && tMs <= c.endMs;
 }
 
-/** Bar-Index, dessen Schluss <= t ist (letzte VOLLSTAENDIG bekannte Kerze zum Zeitpunkt t). */
+/** Bar-Index, dessen Schluss <= t ist (letzte VOLLSTAENDIG bekannte Kerze zum Zeitpunkt t).
+ *  Schluss = Oeffnung der naechsten Bar (Bars sind lueckenlos). Fuer die LETZTE Bar gibt es keine naechste:
+ *  dann die BELEGTE Schlusszeit (tc aus dem Aggregator) nutzen; fehlt sie (alte Artefakte), die letzte Bar
+ *  KONSERVATIV ausschliessen (keine Zeit erfinden) -> sie gilt nie als abgeschlossen. */
 export function barAt(candles: WsCandle[], t: number): number {
   let idx = -1;
-  for (let i = 0; i < candles.length; i++) { const close = candles[i + 1]?.t ?? candles[i].t; if (close <= t) idx = i; else break; }
+  for (let i = 0; i < candles.length; i++) {
+    const close = i + 1 < candles.length ? candles[i + 1].t : (candles[i].tc ?? Infinity);
+    if (close <= t) idx = i; else break;
+  }
   return idx;
 }
 

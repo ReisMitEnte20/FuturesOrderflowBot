@@ -68,7 +68,7 @@ public sealed class OrderflowMultiStrategyRunner
             candles.Add(new WsCandle
             {
                 T = Ms(bar.OpenTime), O = bar.Open, H = bar.High, L = bar.Low, C = bar.Close,
-                V = bar.TotalVolume, Delta = bar.Delta
+                V = bar.TotalVolume, Delta = bar.Delta, Tc = Ms(bar.CloseTime)
             });
             footprint.Add(BuildFootprint(ticks, i * tpb, tpb));
         }

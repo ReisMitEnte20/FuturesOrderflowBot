@@ -118,3 +118,47 @@ test("pointInTimeTrade: Trade mit Entry in der Zukunft ist unsichtbar", () => {
   // Entry exakt bei t -> sichtbar.
   assert.ok(pointInTimeTrade(mkTrade({ entryTimeMs: 1000 }), 1000));
 });
+
+// --- Letzte Bar: Schluss erst bei BELEGTER Schlusszeit (tc); ohne tc konservativ ausgeschlossen ---
+// Zuvor wurde die letzte Bar durch den Fallback candles[i+1]?.t ?? candles[i].t bereits ab ihrer OEFFNUNG
+// als abgeschlossen behandelt (Look-ahead). Jetzt: tc aus dem Aggregator, sonst nie abgeschlossen.
+const candles3 = [
+  { t: 0, o: 100, h: 101, l: 99, c: 100, v: 20, delta: 0 },
+  { t: 1000, o: 100, h: 103, l: 100, c: 102, v: 40, delta: 0 },
+  { t: 2000, o: 102, h: 106, l: 101, c: 105, v: 60, delta: 0, tc: 3000 }, // letzte Bar, Schluss belegt bei 3000
+];
+const fp3 = [
+  [{ p: 100, b: 10, a: 10 }], // POC-Vol 20
+  [{ p: 102, b: 20, a: 20 }], // POC-Vol 40
+  [{ p: 105, b: 30, a: 30 }], // POC-Vol 60 (nur nach Schluss sichtbar)
+];
+const tape3 = [[500, 100, 5, 1]];
+const trade3 = () => mkTrade({ entryBarIndex: 0, exitBarIndex: 0, entryTimeMs: 0, exitTimeMs: 0 });
+
+test("Snapshot @t: letzte Bar fliesst WAEHREND ihrer Dauer nicht ein, erst nach belegtem Schluss (tc)", () => {
+  const d = mkData(candles3, fp3, tape3, trade3());
+  const during = buildSnapshot(d, 0, d.strategies[0].trades[0], { ...OPTS, pointInTimeMs: 2500 }); // mitten in Bar 2
+  assert.deepEqual(during.indicatorParams.vpRange, [0, 1], "waehrend der letzten Bar nur bis Bar 1");
+  assert.equal(during.values.poc, 102, "letzte Bar (POC 105) ist bei t=2500 noch NICHT enthalten");
+
+  const atClose = buildSnapshot(d, 0, d.strategies[0].trades[0], { ...OPTS, pointInTimeMs: 3000 }); // belegter Schluss
+  assert.deepEqual(atClose.indicatorParams.vpRange, [0, 2], "ab belegtem Schluss bis Bar 2");
+  assert.equal(atClose.values.poc, 105, "nach belegtem Schluss (tc=3000) ist die letzte Bar enthalten");
+});
+
+test("Snapshot @t: ohne belegte Schlusszeit (alte Artefakte) bleibt die letzte Bar immer ausgeschlossen", () => {
+  const noTc = candles3.map(({ tc, ...rest }) => rest); // tc entfernen -> alte Artefaktform, keine Zeit erfinden
+  const d = mkData(noTc, fp3, tape3, trade3());
+  for (const pit of [2500, 9_999_999]) {
+    const s = buildSnapshot(d, 0, d.strategies[0].trades[0], { ...OPTS, pointInTimeMs: pit });
+    assert.deepEqual(s.indicatorParams.vpRange, [0, 1], `ohne tc bleibt Bar 2 ausgeschlossen (t=${pit})`);
+    assert.equal(s.values.poc, 102, "letzte Bar nie enthalten ohne belegten Schluss");
+  }
+});
+
+test("Rueckblick (pit=null) zeigt weiterhin die letzte Bar (unveraendert)", () => {
+  const d = mkData(candles3, fp3, tape3, trade3());
+  const s = buildSnapshot(d, 0, d.strategies[0].trades[0], { ...OPTS, pointInTimeMs: null });
+  assert.deepEqual(s.indicatorParams.vpRange, [0, 2], "Rueckblick nutzt alle Bars inkl. der letzten");
+  assert.equal(s.values.poc, 105);
+});
