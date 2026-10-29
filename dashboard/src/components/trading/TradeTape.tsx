@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Card } from "@/components/common/Card";
 import { appendTape, type TapeTick } from "@/lib/rithmicBars";
+import { RITHMIC_API } from "@/lib/apiBase";
 
-const API_BASE = "/api/rithmic";
+const API_BASE = RITHMIC_API;
 const POLL_MS = 500;
 const MAX_ROWS = 300;
 const BIG_PRINT = 10;

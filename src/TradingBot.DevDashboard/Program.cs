@@ -1,27 +1,22 @@
-using TradingBot.DevDashboard.Components;
 using TradingBot.DevDashboard.Services;
 using TradingBot.DevDashboard.Services.Quant;
 using TradingBot.Quant.Research;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
-builder.Services.AddRazorComponents()
-    .AddInteractiveServerComponents();
+// API-only Host: Die einzige Benutzeroberflaeche ist das separate React-Dashboard (Vite, http://127.0.0.1:5899).
+// Dieser .NET-Host liefert ausschliesslich die JSON-APIs unter /api/* (Backtest, Quant, Rithmic-Marktdaten).
+// Es wird KEINE serverseitige Blazor-UI mehr registriert oder ausgeliefert. Keine Order-/Broker-/Execution-Referenz.
 
-// Read-only Dashboard-Services (keine Order-/Broker-/Execution-Referenz).
+// Read-only API-Services (keine Order-/Broker-/Execution-Referenz).
 var repoRoot = RepoLocator.FindRoot(builder.Environment.ContentRootPath);
 // Lokale Rithmic-Einstellungen (AppName, weitere Gateways) – gitignored, keine Passwörter hier ablegen.
 if (repoRoot is not null)
     builder.Configuration.AddJsonFile(Path.Combine(repoRoot, "config", "marketdata", "rithmic.local.json"), optional: true, reloadOnChange: false);
-builder.Services.AddSingleton<RithmicDashboardService>();
-builder.Services.AddSingleton<ProjectStatusService>();
-builder.Services.AddSingleton(new GitInfoService(repoRoot));
-builder.Services.AddSingleton(new ConfigOverviewService(repoRoot));
-builder.Services.AddSingleton(new PaperDemoService(repoRoot)); // PAPER SIMULATION ONLY
-builder.Services.AddSingleton<ResearchDemoService>();          // RESEARCH / SIMULATION ONLY (deterministische Demo)
-builder.Services.AddSingleton<ReplayDemoService>();            // RESEARCH / SIMULATION ONLY (deterministisches Replay)
-builder.Services.AddSingleton<SierraBacktestReplayService>(); // LOCAL HISTORICAL REPLAY / SIMULATION ONLY (lokale Datei, read-only)
+builder.Services.AddSingleton<RithmicDashboardService>(); // Marktdaten-API /api/rithmic (standardmaessig deaktiviert)
+// Die frueheren Blazor-UI-Demo-Services (ProjectStatus/GitInfo/ConfigOverview/PaperDemo/ResearchDemo/ReplayDemo/
+// SierraBacktestReplay) werden nicht mehr registriert: sie dienten ausschliesslich den entfernten Razor-Seiten.
+// Die Klassen (read-only Simulation) bleiben samt Tests erhalten, sind aber nicht mehr Teil des ausgelieferten Hosts.
 var backtestApi = new BacktestApiService(repoRoot);
 builder.Services.AddSingleton(backtestApi); // OHLC-BACKTEST (Simulation-only, keine Execution/Broker)
 // QUANT-RESEARCH (Auswertung, Validierung, Monte Carlo, Overfitting) — rechnet ausschließlich lokal
@@ -50,21 +45,18 @@ var app = builder.Build();
 
 app.UseCors(ReactCors);
 
-// Configure the HTTP request pipeline.
-if (!app.Environment.IsDevelopment())
-{
-    app.UseExceptionHandler("/Error", createScopeForErrors: true);
-    // The default HSTS value is 30 days. You may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
-    app.UseHsts();
-}
-
+// Lokaler API-Host: HTTPS-Redirect bleibt erhalten (im http-Profil ein No-Op). Keine Blazor-Static-Files,
+// keine Antiforgery, keine Razor-Komponenten mehr — die Oberflaeche ist ausschliesslich das React-Dashboard.
 app.UseHttpsRedirection();
 
-app.UseStaticFiles();
-app.UseAntiforgery();
-
-app.MapRazorComponents<App>()
-    .AddInteractiveServerRenderMode();
+// Backend-Wurzel: knappe API-/Statusantwort statt einer Oberflaeche. Einzige UI ist das React-Dashboard (:5899, /research).
+app.MapGet("/", () => Results.Ok(new
+{
+    service = "FuturesOrderflowBot API",
+    status = "ok",
+    ui = "React-Dashboard: http://127.0.0.1:5899/research",
+    api = new[] { "/api/backtest", "/api/quant", "/api/rithmic" }
+})).RequireCors(ReactCors);
 
 // Rithmic API endpoints (R|Protocol, NUR Marktdaten: Ticker + History Plant, kein Order-/PnL-Plant).
 // Standardmäßig DEAKTIVIERT: Aktivierung nur explizit über "Rithmic:Enabled" = true (z. B. Umgebungsvariable

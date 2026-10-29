@@ -91,12 +91,25 @@ nur **lokal** und **streamend** lesen (kein `ReadAllText`, kein `.ToList()` übe
 
 ## Standard-Kommandos
 
+Oberfläche und Backend sind getrennt: **React (Vite) ist die einzige UI** auf `http://127.0.0.1:5899`
+(Einstieg `/research`); das **.NET-DevDashboard ist reiner API-Host** auf `http://localhost:5034`
+(`/api/backtest`, `/api/quant`, `/api/rithmic`). Die alte Blazor-Oberfläche wird nicht mehr ausgeliefert
+(`/`, `/paper`, `/replay`, `/research` am Backend liefern keine UI mehr). Beide lassen sich getrennt starten.
+
 ```bash
 dotnet build
 dotnet test
-# Dashboard (Routen: / /paper /research /replay):
-dotnet run --project src\TradingBot.DevDashboard\TradingBot.DevDashboard.csproj
+
+# Backend (API-Host, öffnet KEINEN Browser) auf :5034
+dotnet run --project src\TradingBot.DevDashboard\TradingBot.DevDashboard.csproj --launch-profile http
+
+# React-Dashboard (einzige UI) auf :5899 — Einstieg http://127.0.0.1:5899/research
+cd dashboard && npm install && npm run dev
+# dashboard/ zusätzlich: npm test   (Node-Tests),  npm run build  (tsc + Vite Prod-Build)
 ```
+
+API-Basisadresse zentral in `dashboard/src/lib/apiBase.ts`; überschreibbar via `VITE_API_URL`
+(Standard `http://127.0.0.1:5034`, siehe `dashboard/.env.example`) — keine verteilten localhost-Adressen.
 
 ## Arbeitsweise für Claude
 

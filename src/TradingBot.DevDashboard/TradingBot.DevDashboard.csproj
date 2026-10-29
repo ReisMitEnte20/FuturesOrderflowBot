@@ -18,6 +18,9 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- API-only Host: keine serverseitige UI, keine statischen Web-Assets/kein wwwroot mehr.
+         Verhindert, dass der Default-Host ein (nicht mehr vorhandenes) wwwroot als Content-Root erwartet. -->
+    <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
   </PropertyGroup>
 
 </Project>

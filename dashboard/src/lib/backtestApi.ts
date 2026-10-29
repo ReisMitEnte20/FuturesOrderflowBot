@@ -1,8 +1,9 @@
-// Realer Client für die OHLC-Backtest-API des lokalen .NET-Backends (DevDashboard, Port 5034).
-// Keine Mock-Ergebnisse — spricht das echte Backend an.
+// Realer Client für die OHLC-Backtest-API des lokalen .NET-Backends (DevDashboard-API-Host, Port 5034).
+// Keine Mock-Ergebnisse — spricht das echte Backend an. Basisadresse zentral aus ./apiBase.
 
-const BASE: string =
-  (import.meta as any).env?.VITE_BACKTEST_API || "http://localhost:5034/api/backtest";
+import { BACKTEST_API } from "./apiBase.ts";
+
+const BASE: string = BACKTEST_API;
 
 export interface StrategyParamDef { key: string; label: string; type: string; default: string; }
 export interface StrategyDef { id: string; name: string; description: string; isReference: boolean; params: StrategyParamDef[]; }
