@@ -22,6 +22,26 @@ dotnet run --project src/TradingBot.OrderflowRun [pfad/zu/ticks.csv] [repoRoot]
 
 Ohne Argumente wird die zuletzt genutzte Aufnahme und der Repo-Root (anhand `TradingBot.sln`) verwendet.
 
+### Committeter Collection-Tag (ohne ATAS-Bedienung)
+
+```powershell
+dotnet run --project src/TradingBot.OrderflowRun -- --collection "F:\ATAS_Data\Collections\MNQ_NewYork_0930-1200_America-New-York_2026-10-26_bis_2026-10-30\collection_manifest.json" --day 2026-10-26
+```
+
+Je Datum ein eigener Aufruf/Lauf, dieselben drei Kandidaten und Kostenprofile, 500 Ticks/Bar,
+maximal ein Kontrakt. `AtasCollectionImporter` liest die CSV streamend und hält nur den gewählten Tag
+für die bestehende Engine im Speicher. Das Manifest muss genau ein vollständiges, committetes
+09:30–12:00-America/New_York-Fenster enthalten (26.–30.10.2026: 13:30–16:00 UTC, Ende exklusiv).
+Bytezahl, Collection-/Job-Zeilenzahlen sowie Tages-Buy-/Sell-/Gesamtvolumen werden abgeglichen;
+falsches Fenster, unbekannte Aggressoren oder rückläufige Zeitstempel brechen den Import ab.
+Keine Deduplizierung, keine Quelländerung und kein künstlicher Endschluss. Nanosekunden dienen der
+Fenster-/Reihenfolgeprüfung; die Engine erhält auf 100 ns abgerundete Zeitstempel bei gleicher Reihenfolge.
+Quell- und Manifest-SHA, Mengen und Grenzen stehen in `provenance.settingsUsed`.
+
+Collection-Läufe ergänzen den Dashboard-Index und lassen vorhandene Laufdateien und den bisherigen
+Fallback `orderflow-run.json` unangetastet. `/research` zeigt den Handelstag in der Laufauswahl,
+den Volumenabgleich unter **Datendetails** und offene Endpositionen separat vom realisierten Netto-PnL.
+
 ## SinglePositionGate (max. 1 Kontrakt, kein Aufstocken)
 
 Die inneren **Signalregeln bleiben unverändert**. Ein lokaler Wrapper reicht ein Signal nur weiter, wenn
