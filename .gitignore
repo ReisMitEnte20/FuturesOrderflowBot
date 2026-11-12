@@ -51,3 +51,7 @@ dashboard/public/trade-preview.json
 dashboard/public/research-workspace.json
 dashboard/public/orderflow-run.json
 dashboard/public/orderflow-runs/
+
+# Python-Bytecode (research/data-bridge u. a.)
+__pycache__/
+*.pyc
