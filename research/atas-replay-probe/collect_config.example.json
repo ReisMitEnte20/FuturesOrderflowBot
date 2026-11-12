@@ -1,0 +1,21 @@
+{
+  "_hinweis": "Beispiel-Konfiguration fuer den Sammellauf (EIN Startbefehl). Die Fenster sind benutzerdefinierte DEUTSCHE Zeitfenster (Europe/Berlin), NICHT automatisch korrekte Boersenzeiten. UTC wird per TimeZoneInfo (DST-korrekt) berechnet. Start: AtasReplayProbe collect collect_config.example.json lauf.txt",
+  "session": "TestMix",
+  "year": 2026,
+  "timezone": "W. Europe Standard Time",
+  "speed": "100x",
+  "collectionDir": "F:\\ATAS_Data\\Collections\\TestMix_2026",
+  "python": "python",
+  "collectorScript": "A:\\Projects\\FuturesOrderflowBot\\research\\data-bridge\\atas_collect.py",
+  "keepRecorderAttached": false,
+  "_windows_hinweis": "Begrenzter Nachweis: drei kurze, nachweislich verfuegbare 1-Minuten-Fenster. Noch KEINE Jahreskampagne.",
+  "windows": [
+    { "startBerlin": "26.10.2026 09:00:00", "endBerlin": "26.10.2026 09:01:00" },
+    { "startBerlin": "26.10.2026 15:30:00", "endBerlin": "26.10.2026 15:31:00" },
+    { "startBerlin": "26.10.2026 09:30:00", "endBerlin": "26.10.2026 09:31:00" }
+  ],
+  "_sessionfenster_beispiele": {
+    "London": { "startBerlin": "HH 09:00:00", "endBerlin": "HH 12:00:00", "hinweis": "09:00-12:00 Europe/Berlin, benutzerdefiniert" },
+    "NewYork": { "startBerlin": "HH 15:30:00", "endBerlin": "HH 18:00:00", "hinweis": "15:30-18:00 Europe/Berlin, benutzerdefiniert" }
+  }
+}
