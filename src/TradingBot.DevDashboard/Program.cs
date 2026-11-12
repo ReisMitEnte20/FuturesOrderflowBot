@@ -19,6 +19,14 @@ builder.Services.AddSingleton<RithmicDashboardService>(); // Marktdaten-API /api
 // Die Klassen (read-only Simulation) bleiben samt Tests erhalten, sind aber nicht mehr Teil des ausgelieferten Hosts.
 var backtestApi = new BacktestApiService(repoRoot);
 builder.Services.AddSingleton(backtestApi); // OHLC-BACKTEST (Simulation-only, keine Execution/Broker)
+// TICK-REPLAY (read-only): echte Trades einer Collection-Session portionsweise fuer das Research-Dashboard.
+// Collection und Cache sind konfigurierbar (TickReplay:CollectionDir / TickReplay:CacheDir, z. B. per Umgebungsvariable
+// TickReplay__CollectionDir). Der Cache liegt standardmaessig unter artifacts/ (gitignored); Originaldaten werden nur gelesen.
+var tickReplayCollection = builder.Configuration["TickReplay:CollectionDir"]
+    ?? @"F:\ATAS_Data\Collections\MNQ_NewYork_0930-1200_America-New-York_2026-10-26_bis_2026-10-30";
+var tickReplayCache = builder.Configuration["TickReplay:CacheDir"]
+    ?? Path.Combine(repoRoot ?? AppContext.BaseDirectory, "artifacts", "tickreplay-cache");
+builder.Services.AddSingleton(new TickReplayService(tickReplayCollection, tickReplayCache));
 // QUANT-RESEARCH (Auswertung, Validierung, Monte Carlo, Overfitting) — rechnet ausschließlich lokal
 // auf den Ergebnissen der OHLC-Engine. Keine Broker-/Marktdaten-Calls, keine Orders.
 builder.Services.AddSingleton(new QuantApiService(backtestApi, repoRoot));
@@ -55,7 +63,7 @@ app.MapGet("/", () => Results.Ok(new
     service = "FuturesOrderflowBot API",
     status = "ok",
     ui = "React-Dashboard: http://127.0.0.1:5899/research",
-    api = new[] { "/api/backtest", "/api/quant", "/api/rithmic" }
+    api = new[] { "/api/backtest", "/api/quant", "/api/rithmic", "/api/tickreplay" }
 })).RequireCors(ReactCors);
 
 // Rithmic API endpoints (R|Protocol, NUR Marktdaten: Ticker + History Plant, kein Order-/PnL-Plant).
@@ -137,6 +145,25 @@ bt.MapPost("/run", async (BacktestRunRequest request, BacktestApiService s, Canc
 {
     var result = await s.RunAsync(request, ct);
     return result.Ok ? Results.Ok(result) : Results.BadRequest(result);
+});
+
+// Tick-Replay-API (read-only): Sessions auflisten, Session vorbereiten (einmaliger Cache-Aufbau ueber den
+// fail-closed AtasCollectionImporter) und Trades portionsweise als Binaer-Spaltenblock ausliefern.
+var tr = app.MapGroup("/api/tickreplay").RequireCors(ReactCors);
+tr.MapGet("/sessions", (TickReplayService s) => Results.Ok(s.ListSessions()));
+tr.MapGet("/sessions/{jobId}/meta", async (string jobId, TickReplayService s, CancellationToken ct) =>
+{
+    try { return Results.Ok(await s.PrepareAsync(jobId, ct)); }
+    catch (KeyNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
+    catch (InvalidDataException ex) { return Results.UnprocessableEntity(new { error = "Daten fail-closed abgelehnt: " + ex.Message }); }
+    catch (FileNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
+});
+tr.MapGet("/sessions/{jobId}/ticks", (string jobId, long offset, int count, TickReplayService s) =>
+{
+    try { return Results.Bytes(s.ReadTicks(jobId, offset, count), "application/octet-stream"); }
+    catch (KeyNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
+    catch (ArgumentOutOfRangeException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
 });
 
 // Quant-Research-API (Auswertung, Validierung, Monte Carlo, Overfitting, Versuchsregister).

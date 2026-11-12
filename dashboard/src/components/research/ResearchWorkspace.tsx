@@ -149,8 +149,8 @@ export function ResearchWorkspace() {
         <span className="text-sm font-semibold text-[var(--fg)]">Orderflow · {d.meta.instrument}</span>
         <span className="text-[9px] px-1.5 py-0.5 rounded bg-[rgba(240,195,90,.14)] text-[var(--gold,#f0c35a)] border border-[rgba(240,195,90,.4)]" title="Technischer Test – keine Profitabilitätsaussage">TEST</span>
         {runs.length > 0 && (
-          <select value={runId} onChange={(e) => loadRun(e.target.value)} title="Gespeicherte Orderflow-Läufe" className="h-[26px] bg-[var(--panel-2,#0e2139)] text-[var(--fg)] border border-[var(--line-2)] rounded text-[11px] px-1 max-w-[240px]">
-            {runs.map((r) => <option key={r.id} value={r.id} disabled={r.loadable === false}>{(r.generatedUtc || r.id).slice(0, 19).replace("T", " ")} · {r.instrument} · {r.ok ? "ok" : "⚠ " + r.status}{r.loadable === false ? " (nicht ladbar)" : ""}</option>)}
+          <select value={runId} onChange={(e) => loadRun(e.target.value)} title="Gespeicherte Orderflow-Läufe" className="h-[26px] bg-[var(--panel-2,#0e2139)] text-[var(--fg)] border border-[var(--line-2)] rounded text-[11px] px-1 max-w-[440px]">
+            {runs.map((r) => <option key={r.id} value={r.id} disabled={r.loadable === false}>{r.dataSource || r.instrument} · {r.ok ? "ok" : "⚠ " + r.status} · Lauf {(r.generatedUtc || r.id).slice(0, 19).replace("T", " ")}{r.loadable === false ? " (nicht ladbar)" : ""}</option>)}
           </select>
         )}
         <span className="h-4 w-px bg-[var(--line-2)]" />
@@ -207,6 +207,11 @@ export function ResearchWorkspace() {
 
       {showDetails && (
         <div className="text-[10px] text-[var(--fg-faint)] leading-snug border border-[var(--line)] rounded px-2 py-1 bg-[var(--bg-2)]">
+          <b>Session:</b> {d.meta.dataSource}<br />
+          {d.provenance?.settingsUsed?.["mode"] === "atas-collection-day" && <>
+            <b>Import geprüft:</b> {d.provenance.settingsUsed["import.rows"]} Ticks · Volumen {d.provenance.settingsUsed["import.totalVolume"]} · Buy {d.provenance.settingsUsed["import.buyVolume"]} / Sell {d.provenance.settingsUsed["import.sellVolume"]} / unbekannt {d.provenance.settingsUsed["import.unknownVolume"]} · mit Manifest abgeglichen, keine Deduplizierung.<br />
+            <b>Grenzen:</b> Kontrakt/Serie unbestätigt · Engine-Zeitauflösung 100 ns (Quellreihenfolge erhalten) · kein erzwungener Endschluss.<br />
+          </>}
           <b>Datenstatus:</b> {Object.entries(d.availability).map(([k, v]) => <span key={k} className="mr-2">{k}: <span style={{ color: isAvailable(v) ? KEY : RED }}>{v}</span></span>)}
           <br /><b>Qualität:</b> {d.quality.priceGranularity} · Drops {d.quality.drops} · {d.quality.aggressor} · {d.quality.footprintSource}
           <br /><b>Anker:</b> VWAP & CVD ab Bar 0 (Datenstart {new Date(d.meta.marketStartMs).toISOString().slice(11, 19)} UTC) · Volume-Profile-Bereich Bars {range[0]}–{range[1]} · Bars/Preis-Einheit 1 Bar = {d.meta.ticksPerBar} Ticks (keine Zeit) · Bubbles ≥ {lay.bubbleMinVol} Kontrakte

@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Isoliertes Mach­barkeits-Werkzeug fuer die ATAS-Replay-Steuerung. BEWUSST NICHT Teil der Solution
+    (TradingBot.sln), damit `dotnet build`/`dotnet test` des Hauptprojekts unberuehrt bleiben.
+    net8.0-windows + UseWPF => Zugriff auf System.Windows.Automation (UIAutomationClient/Types).
+    Es wird NICHTS in ATAS gepatcht/injiziert; nur Metadaten-Reflection (MetadataLoadContext) und
+    Windows UI Automation als normaler Client.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>AtasReplayProbe</AssemblyName>
+    <RootNamespace>AtasReplayProbe</RootNamespace>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Reflection.MetadataLoadContext" Version="8.0.1" />
+    <PackageReference Include="System.Drawing.Common" Version="8.0.11" />
+  </ItemGroup>
+
+  <!-- A4 (Recheck): denselben Token-Handshake wie der Recorder nutzen (Single Source of Truth, kein Drift). -->
+  <ItemGroup>
+    <Compile Include="..\recorder-core\TokenHandshake.cs" />
+  </ItemGroup>
+
+</Project>

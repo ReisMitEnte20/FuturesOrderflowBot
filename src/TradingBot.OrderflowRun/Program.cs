@@ -36,6 +36,10 @@ for (int i = 0; i < args.Length; i++)
     else pos.Add(args[i]);
 }
 bool sierraMode = opts.ContainsKey("--sierra");
+bool collectionMode = opts.ContainsKey("--collection");
+if (collectionMode && (sierraMode || !opts.ContainsKey("--day")))
+{ Console.Error.WriteLine("--collection <manifest> requires --day yyyy-MM-dd and cannot be combined with --sierra."); return 2; }
+AtasCollectionImporter.Result? collection = null;
 
 string repoRoot = opts.TryGetValue("--repo", out var repoOpt) ? repoOpt : (pos.Count > 1 ? pos[1] : FindRepoRoot());
 
@@ -121,8 +125,14 @@ if (sierraMode)
 }
 else
 {
-    string recording = pos.Count > 0 ? pos[0]
-        : @"C:\Users\Anton Minh Duy Tran\ATAS_OF_Recordings\MNQ_20261023_084204Z\ticks.csv";
+    if (collectionMode)
+    {
+        Console.WriteLine($"Collection import: {opts["--day"]} (streaming, manifest reconciliation) ...");
+        collection = new AtasCollectionImporter().ImportDay(opts["--collection"],
+            DateOnly.ParseExact(opts["--day"], "yyyy-MM-dd", CultureInfo.InvariantCulture));
+    }
+    string recording = collection?.CsvPath ?? (pos.Count > 0 ? pos[0]
+        : @"C:\Users\Anton Minh Duy Tran\ATAS_OF_Recordings\MNQ_20261023_084204Z\ticks.csv");
 
     Console.WriteLine($"Repo:      {repoRoot}");
     Console.WriteLine($"Aufnahme:  {recording}");
@@ -134,10 +144,11 @@ else
     risk = Load<RiskConfig>(cfg(@"risk\research-sim.example.json"), jsonRead);
     var importProfile = Load<CsvImportProfile>(cfg(@"import-profiles\atas-tick.example.json"), jsonRead);
 
-    sha = Sha256File(recording);
-    set = new AtasTickCsvImporter(importProfile).ImportFile(recording);
+    sha = collection?.CsvSha256 ?? Sha256File(recording);
+    set = collection?.Data ?? new AtasTickCsvImporter(importProfile).ImportFile(recording);
     dataFilePath = recording;
-    dataSource = $"ATAS-Replay-Aufnahme {Path.GetFileName(Path.GetDirectoryName(recording))}";
+    dataSource = collection is null ? $"ATAS-Replay-Aufnahme {Path.GetFileName(Path.GetDirectoryName(recording))}"
+        : $"ATAS MNQ NewYork {opts["--day"]} 09:30–12:00 America/New_York ({collection.Evidence["window.fromUtc"].Substring(11, 5)}–{collection.Evidence["window.toUtc"].Substring(11, 5)} UTC)";
     aggressorNote = "aus Aufnahme (AggressorSide je Trade)";
     // Quellenbezogene Granularitaet: beobachtete Preisschrittweite (aus den tatsaechlichen Ticks) GETRENNT
     // von der Instrument-TickSize ausweisen. So bleiben alte 1-Punkt-Aufnahmen als 1,0 erkennbar und werden
@@ -171,6 +182,12 @@ else
         ["startingBalance"] = StartingBalance.ToString("F2"),
         ["ticksPerBar"] = "500"
     };
+    if (collection is not null)
+    {
+        settingsUsed["importProfile"] = "atas-collection-trades-1 (manifest-validated streaming import)";
+        foreach (var pair in collection.Evidence) settingsUsed[pair.Key] = pair.Value;
+        Console.WriteLine($"Reconciled: {settingsUsed["import.rows"]} rows, volume {settingsUsed["import.totalVolume"]}, buy {settingsUsed["import.buyVolume"]}, sell {settingsUsed["import.sellVolume"]}");
+    }
 }
 
 var account = new TradingAccount
@@ -261,7 +278,8 @@ string pubRuns = Path.Combine(repoRoot, "dashboard", "public", "orderflow-runs")
 Directory.CreateDirectory(pubRuns);
 File.WriteAllText(Path.Combine(pubRuns, result.RunId + ".json"), JsonSerializer.Serialize(result.Workspace, jsonWrite));
 // Latest/Fallback (Zwischenstand bleibt gueltig):
-File.WriteAllText(Path.Combine(repoRoot, "dashboard", "public", "orderflow-run.json"), JsonSerializer.Serialize(result.Workspace, jsonWrite));
+if (!collectionMode)
+    File.WriteAllText(Path.Combine(repoRoot, "dashboard", "public", "orderflow-run.json"), JsonSerializer.Serialize(result.Workspace, jsonWrite));
 
 var index = BuildIndex(runsRoot, pubRuns);
 string indexPath = Path.Combine(pubRuns, "index.json");
@@ -283,7 +301,7 @@ foreach (var d in result.Workspace.Provenance.DivergencesFromHarness) Console.Wr
 
 Console.WriteLine($"\nGeschrieben:\n  {workspacePath}\n  {manifestPath}\n  {Path.Combine(pubRuns, result.RunId + ".json")}\n  {indexPath}  ({index.Count} Lauf/Laeufe im Index)");
 Console.WriteLine("Dashboard: Research-Tab -> Orderflow-Arbeitsflaeche -> Lauf im Dropdown auswaehlbar.");
-return 0;
+return runOk ? 0 : 4;
 
 // ------------------------------------------------------------------------------------------------
 static T Load<T>(string path, JsonSerializerOptions opts)
@@ -346,8 +364,8 @@ static List<object> BuildIndex(string runsRoot, string pubRuns)
                 entries.Add(("", new { id, generatedUtc = "", status = "fehlgeschlagen", ok = false, loadable = false, note = "kein Manifest", strategies = Array.Empty<object>() }));
                 continue;
             }
-            if (File.Exists(workspace))
-                File.Copy(workspace, Path.Combine(pubRuns, id + ".json"), overwrite: true);
+            if (File.Exists(workspace) && !File.Exists(Path.Combine(pubRuns, id + ".json")))
+                File.Copy(workspace, Path.Combine(pubRuns, id + ".json"), overwrite: false);
             bool loadable = File.Exists(Path.Combine(pubRuns, id + ".json"));
 
             using var doc = JsonDocument.Parse(File.ReadAllText(manifest));

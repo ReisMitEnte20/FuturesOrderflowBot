@@ -36,6 +36,7 @@ import { HeadlineStat, MetricList, NoteBlock, Unavailable } from "@/components/r
 import { EquityDrawdownChart } from "@/components/backtest/EquityDrawdownChart";
 import { BacktestChart } from "@/components/backtest/BacktestChart";
 import { ResearchWorkspace } from "@/components/research/ResearchWorkspace";
+import { TickReplayPanel } from "@/components/research/TickReplayPanel";
 import {
   CostHeatmap,
   DistributionChart,
@@ -416,6 +417,9 @@ export function Research() {
 
         {/* Orderflow-Arbeitsfläche auf AUFGENOMMENEN ATAS-Daten (technischer Test; Reuse ECharts-Komponenten) */}
         <ResearchWorkspace />
+
+        {/* Tick-Replay: 5-Minuten-Kerzen bauen sich aus ALLEN echten Trades einer Session auf (read-only, /api/tickreplay) */}
+        <TickReplayPanel />
 
         {/* Konfiguration — einklappbar; bei der Analyse standardmäßig geschlossen (ändert kein geladenes Ergebnis) */}
         <button
