@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Schlanke Windows-Oberflaeche (WinForms) ueber den bestehenden ATAS-Collector.
+    Sie implementiert KEINEN zweiten Aufnahmeablauf, sondern ruft die getestete
+    Probe (AtasReplayProbe.exe collect <config> <protokoll>) je Fenster auf.
+    Bewusst NICHT Teil von TradingBot.sln (wie die Probe).
+    Veroeffentlichung: self-contained single-file (siehe BUILD-Kommando im Paket).
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>AtasSessionCollector</AssemblyName>
+    <RootNamespace>AtasSessionCollector</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <Version>1.2.5</Version>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+
+</Project>
