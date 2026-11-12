@@ -265,14 +265,14 @@ export function TickReplayPanel() {
     cs: eng!.candles().map((c) => [c.bucket, c.open, c.high, c.low, c.close, c.volume, c.trades]),
   }) : "";
 
-  const btn = "h-[28px] px-2.5 rounded-md border border-[var(--line-2)] text-[var(--fg)] text-xs disabled:opacity-40";
-  const btnOn = "h-[28px] px-2.5 rounded-md bg-[var(--key)] text-black text-xs font-semibold";
+  const btn = "h-[28px] px-2.5 rounded-md border border-[var(--line-2)] bg-[rgba(14,33,57,0.85)] text-[var(--fg-dim)] text-xs font-mono transition-colors hover:text-[var(--fg)] hover:border-[rgba(34,184,240,0.55)] disabled:opacity-40 disabled:hover:border-[var(--line-2)]";
+  const btnOn = "h-[28px] px-2.5 rounded-md bg-grad-brand text-[var(--bg)] text-xs font-mono font-bold transition hover:brightness-110 disabled:opacity-40";
 
   return (
-    <div className="rounded-lg border border-[var(--line)] bg-[var(--panel)]" data-testid="tick-replay" data-replay-state={replayState}>
+    <div className="relative overflow-hidden rounded-lg border border-[var(--line)] bg-[var(--panel)]" data-testid="tick-replay" data-replay-state={replayState}>
       <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-2 px-3 py-2 text-left">
         <span className="text-[var(--key)] text-xs">{open ? "▾" : "▸"}</span>
-        <span className="rounded bg-[var(--panel-3)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--fg-dim)]">Tick-Replay · 5-Minuten-Kerzen</span>
+        <span className="rounded border border-[rgba(60,240,160,0.3)] bg-[rgba(60,240,160,0.1)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--key)]">Tick-Replay · 5-Minuten-Kerzen</span>
         <span className="text-[11px] text-[var(--fg-faint)]">historisches Replay der echten aufgezeichneten Trades – die laufende Kerze baut sich Trade für Trade auf</span>
       </button>
       {open && (
@@ -280,9 +280,9 @@ export function TickReplayPanel() {
           {listErr && <div className="text-xs text-[var(--red)]">{listErr}</div>}
 
           <div className="flex flex-wrap items-center gap-2">
-            <label className="text-[11px] text-[var(--fg-dim)]">Session</label>
+            <label className="eyebrow">Session</label>
             <select value={jobId} onChange={(e) => setJobId(e.target.value)} data-testid="tick-replay-session"
-              className="h-[28px] rounded-md border border-[var(--line-2)] bg-[var(--panel-3)] px-2 text-xs text-[var(--fg)]">
+              className="h-[28px] rounded-md border border-[var(--line-2)] bg-[var(--panel-2)] px-2 text-xs text-[var(--fg)] focus:border-[rgba(60,240,160,0.6)] focus:outline-none">
               {sessions.map((s) => <option key={s.jobId} value={s.jobId}>{s.label} · {nf.format(s.rows)} Trades</option>)}
             </select>
             {m && <span className="text-[11px] text-[var(--fg-faint)]">
@@ -297,7 +297,7 @@ export function TickReplayPanel() {
                   : `Lade Trades portionsweise: ${nf.format(load.loaded)} / ${nf.format(load.total)}`}
               </div>
               <div className="h-1.5 w-full overflow-hidden rounded bg-[var(--panel-3)]">
-                <div className="h-full bg-[var(--key)]" style={{ width: load.total ? `${(100 * load.loaded) / load.total}%` : "8%" }} />
+                <div className="h-full rounded bg-grad-brand shadow-[0_0_10px_rgba(60,240,160,0.6)]" style={{ width: load.total ? `${(100 * load.loaded) / load.total}%` : "8%" }} />
               </div>
             </div>
           )}
@@ -323,7 +323,7 @@ export function TickReplayPanel() {
                 ))}
                 <input value={gotoText} onChange={(e) => setGotoText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && gotoNy()}
                   placeholder="hh:mm:ss ET" data-testid="tr-goto"
-                  className="h-[28px] w-[96px] rounded-md border border-[var(--line-2)] bg-[var(--panel-3)] px-2 text-xs text-[var(--fg)]" />
+                  className="h-[28px] w-[96px] rounded-md border border-[var(--line-2)] bg-[var(--panel-2)] px-2 font-mono text-xs text-[var(--fg)] placeholder:text-[var(--fg-faint)] focus:border-[rgba(60,240,160,0.6)] focus:outline-none" />
                 <button className={btn} onClick={gotoNy}>Gehe zu</button>
                 <label className="ml-2 flex items-center gap-1 text-[11px] text-[var(--fg-dim)]">
                   <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} /> aktuellem Preis folgen
@@ -334,16 +334,16 @@ export function TickReplayPanel() {
                 onChange={(e) => seekTime(Number(e.target.value))} data-testid="tr-slider" />
 
               <div className="grid gap-2 text-[11px] md:grid-cols-3">
-                <div className="rounded-md border border-[var(--line)] bg-[var(--panel-3)] p-2" data-testid="tr-clock">
+                <div className="rounded-lg border border-[var(--line-2)] bg-[var(--panel-2)] p-2.5 shadow-[inset_0_1px_0_rgba(60,240,160,0.35)]" data-testid="tr-clock">
                   <div className="text-[var(--fg-faint)]">Marktzeit (Replay-Uhr)</div>
                   <div className="font-mono text-sm text-[var(--fg)]">{fmtTime(m, clock, nyFmt)} {tzShort(offMs(m, clock))} <span className="text-[var(--fg-faint)]">({TZ})</span></div>
                   <div className="font-mono text-[var(--fg-dim)]">{fmtTime(m, clock, utcFmt)} UTC · {m.day}</div>
                   <div className="mt-1 text-[var(--fg-dim)]">Position {nf.format(eng.p)} / {nf.format(st.total)} Trades{st.loaded < st.total ? ` · geladen ${nf.format(st.loaded)}` : ""}</div>
-                  {playing && waitingRef.current && <div className="text-[var(--gold,#e8c069)]">wartet auf Nachladen – kein Trade wird übersprungen</div>}
-                  {pending != null && <div className="text-[var(--gold,#e8c069)]">Sprung zu {fmtTime(m, pending, nyFmt, 0)} vorgemerkt – wird angewandt, sobald alle Trades bis dahin geladen sind</div>}
+                  {playing && waitingRef.current && <div className="text-[var(--gold)]">wartet auf Nachladen – kein Trade wird übersprungen</div>}
+                  {pending != null && <div className="text-[var(--gold)]">Sprung zu {fmtTime(m, pending, nyFmt, 0)} vorgemerkt – wird angewandt, sobald alle Trades bis dahin geladen sind</div>}
                   {atEnd && eng.p >= st.total && <div className="text-[var(--fg-dim)]">Sessionende erreicht (alle {nf.format(st.total)} Trades abgespielt)</div>}
                 </div>
-                <div className="rounded-md border border-[var(--line)] bg-[var(--panel-3)] p-2" data-testid="tr-candle">
+                <div className="rounded-lg border border-[var(--line-2)] bg-[var(--panel-2)] p-2.5 shadow-[inset_0_1px_0_rgba(240,195,90,0.35)]" data-testid="tr-candle">
                   <div className="text-[var(--fg-faint)]">Aktuelle Kerze {currentSlot != null && slots[currentSlot] ? slots[currentSlot].range : ""} {curStatus ? `· ${curStatus}` : ""}</div>
                   {cur ? (
                     <div className="font-mono text-[var(--fg)]">
@@ -353,7 +353,7 @@ export function TickReplayPanel() {
                   ) : <div className="text-[var(--fg-dim)]">noch kein Trade abgespielt</div>}
                   <div className="mt-1 text-[var(--fg-dim)]">abgeschlossene Kerzen: {eng.closed.length} · Intervalle ohne Trades bisher: {gaps} (keine Kerze erfunden)</div>
                 </div>
-                <div className="rounded-md border border-[var(--line)] bg-[var(--panel-3)] p-2" data-testid="tr-last">
+                <div className="rounded-lg border border-[var(--line-2)] bg-[var(--panel-2)] p-2.5 shadow-[inset_0_1px_0_rgba(34,184,240,0.35)]" data-testid="tr-last">
                   <div className="text-[var(--fg-faint)]">Letzter abgespielter Trade</div>
                   {lastIdx >= 0 ? (
                     <div className="font-mono text-[var(--fg)]">
