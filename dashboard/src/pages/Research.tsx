@@ -402,7 +402,7 @@ export function Research() {
               <button onClick={cancel} className="h-[30px] px-3 rounded-md bg-[var(--red)] text-black text-xs font-medium">Abbrechen</button>
             ) : (
               <>
-                <button onClick={() => startComparison(false)} className="h-[30px] px-4 rounded-md bg-[var(--key)] text-black text-xs font-semibold" title="Mehrere Strategie-Familien vergleichen (eine Kampagne)">Vergleich starten</button>
+                <button onClick={() => startComparison(false)} className="h-[30px] px-4 rounded-md bg-grad-brand text-[var(--bg)] text-xs font-semibold" title="Mehrere Strategie-Familien vergleichen (eine Kampagne)">Vergleich starten</button>
                 <button onClick={() => startComparison(true)} title="Demo-/Abnahmevergleich (verbraucht keinen echten Forschungs-Holdout)" className="h-[30px] px-3 rounded-md border border-[var(--line-2)] text-[var(--fg)] text-xs">Demo-Vergleich</button>
                 <span className="mx-1 h-4 w-px bg-[var(--line-2)]" />
                 <button onClick={() => start(false)} className="h-[30px] px-3 rounded-md border border-[var(--line-2)] text-[var(--fg)] text-xs" title="Einzelne Strategie (nur eine Familie)">Einzellauf</button>
@@ -850,9 +850,9 @@ function OosEquityChart({ t, equity }: { t: number[]; equity: number[] }) {
     chart.setOption({
       animation: false, grid: { top: 16, right: 16, bottom: 24, left: 52 },
       tooltip: { trigger: "axis" },
-      xAxis: { type: "time", axisLine: { lineStyle: { color: "#232120" } }, axisLabel: { color: "#8a857c", fontSize: 10 } },
-      yAxis: { type: "value", scale: true, splitLine: { lineStyle: { color: "#232120" } }, axisLabel: { color: "#8a857c", fontSize: 10 } },
-      series: [{ type: "line", data, showSymbol: false, lineStyle: { color: "#7fc4b4", width: 1.5 }, name: "OOS-Equity (verkettet, indexiert)" }],
+      xAxis: { type: "time", axisLine: { lineStyle: { color: "#14273f" } }, axisLabel: { color: "#6b8399", fontSize: 10 } },
+      yAxis: { type: "value", scale: true, splitLine: { lineStyle: { color: "#14273f" } }, axisLabel: { color: "#6b8399", fontSize: 10 } },
+      series: [{ type: "line", data, showSymbol: false, lineStyle: { color: "#22b8f0", width: 1.5 }, name: "OOS-Equity (verkettet, indexiert)" }],
     });
     const ro = new ResizeObserver(() => chart.resize());
     ro.observe(ref.current);
@@ -932,7 +932,7 @@ function RegisterBlock({ campaignId }: { campaignId: string }) {
 // Mehrstrategie-Vergleich
 // ==============================================================================================
 
-const FAMILY_COLORS = ["#7fc4b4", "#d9a441", "#6f9bd8", "#c67fb0", "#9ac47f", "#d87f7f"];
+const FAMILY_COLORS = ["#22b8f0", "#f0c35a", "#9b8cff", "#3cf0a0", "#f08a5a", "#f0566a"];
 const fmtMoney = (v: number | null | undefined): string =>
   v === null || v === undefined || !Number.isFinite(v)
     ? "n. b."
@@ -1146,10 +1146,10 @@ function SharedEquityChart({ cmp }: { cmp: ResearchComparison }) {
       }));
     chart.setOption({
       animation: false, grid: { top: 28, right: 16, bottom: 28, left: 64 },
-      legend: { top: 0, textStyle: { color: "#8a857c", fontSize: 10 } },
+      legend: { top: 0, textStyle: { color: "#6b8399", fontSize: 10 } },
       tooltip: { trigger: "axis", valueFormatter: (v: number) => fmtMoney(v) },
-      xAxis: { type: "value", name: "OOS-Beobachtung", nameTextStyle: { color: "#8a857c", fontSize: 9 }, axisLine: { lineStyle: { color: "#232120" } }, axisLabel: { color: "#8a857c", fontSize: 10 } },
-      yAxis: { type: "value", scale: true, name: "Kapital", nameTextStyle: { color: "#8a857c", fontSize: 9 }, splitLine: { lineStyle: { color: "#232120" } }, axisLabel: { color: "#8a857c", fontSize: 10 } },
+      xAxis: { type: "value", name: "OOS-Beobachtung", nameTextStyle: { color: "#6b8399", fontSize: 9 }, axisLine: { lineStyle: { color: "#14273f" } }, axisLabel: { color: "#6b8399", fontSize: 10 } },
+      yAxis: { type: "value", scale: true, name: "Kapital", nameTextStyle: { color: "#6b8399", fontSize: 9 }, splitLine: { lineStyle: { color: "#14273f" } }, axisLabel: { color: "#6b8399", fontSize: 10 } },
       series,
     });
     const ro = new ResizeObserver(() => chart.resize());
@@ -1194,10 +1194,10 @@ function SharedDrawdownChart({ cmp }: { cmp: ResearchComparison }) {
       });
     chart.setOption({
       animation: false, grid: { top: 28, right: 16, bottom: 28, left: 64 },
-      legend: { top: 0, textStyle: { color: "#8a857c", fontSize: 10 } },
+      legend: { top: 0, textStyle: { color: "#6b8399", fontSize: 10 } },
       tooltip: { trigger: "axis", valueFormatter: (v: number) => `${Number(v).toFixed(2)} %` },
-      xAxis: { type: "value", name: "OOS-Beobachtung", nameTextStyle: { color: "#8a857c", fontSize: 9 }, axisLine: { lineStyle: { color: "#232120" } }, axisLabel: { color: "#8a857c", fontSize: 10 } },
-      yAxis: { type: "value", max: 0, name: "Drawdown %", nameTextStyle: { color: "#8a857c", fontSize: 9 }, splitLine: { lineStyle: { color: "#232120" } }, axisLabel: { color: "#8a857c", fontSize: 10 } },
+      xAxis: { type: "value", name: "OOS-Beobachtung", nameTextStyle: { color: "#6b8399", fontSize: 9 }, axisLine: { lineStyle: { color: "#14273f" } }, axisLabel: { color: "#6b8399", fontSize: 10 } },
+      yAxis: { type: "value", max: 0, name: "Drawdown %", nameTextStyle: { color: "#6b8399", fontSize: 9 }, splitLine: { lineStyle: { color: "#14273f" } }, axisLabel: { color: "#6b8399", fontSize: 10 } },
       series,
     });
     const ro = new ResizeObserver(() => chart.resize());
@@ -1294,29 +1294,29 @@ function MonteCarloFan({ mc }: { mc: QuantMonteCarloResponse }) {
 
     const pathSeries = mc.paths.slice(0, 60).map((p) => ({
       type: "line" as const, data: sliceX(p), showSymbol: false, silent: true,
-      lineStyle: { color: "#7fc4b4", width: 0.6, opacity: 0.12 }, z: 1, animation: false,
+      lineStyle: { color: "#22b8f0", width: 0.6, opacity: 0.12 }, z: 1, animation: false,
     }));
     const band = [
       { type: "line" as const, data: sliceX(mc.bandP95), showSymbol: false, lineStyle: { opacity: 0 }, z: 2, animation: false, name: "P95" },
       { type: "line" as const, data: sliceX(mc.bandP5), showSymbol: false, lineStyle: { opacity: 0 }, z: 2, animation: false, name: "P5",
-        areaStyle: { color: "rgba(162,230,93,0.10)" } },
+        areaStyle: { color: "rgba(60,240,160,0.10)" } },
       { type: "line" as const, data: sliceX(mc.bandMedian), showSymbol: false, z: 3, animation: false,
-        lineStyle: { color: "#a2e65d", width: 2 }, name: "Median" },
+        lineStyle: { color: "#3cf0a0", width: 2 }, name: "Median" },
     ];
     const marks = {
       type: "line" as const, data: [], markLine: {
         silent: true, symbol: "none",
         data: [
-          { yAxis: mc.initialCapital, lineStyle: { color: "#8a857c", type: "dashed" as const }, label: { formatter: "Start", color: "#8a857c", fontSize: 10 } },
-          ...(mc.capitalBarrier != null ? [{ yAxis: mc.capitalBarrier, lineStyle: { color: "#c1503f", type: "dashed" as const }, label: { formatter: "Grenze", color: "#c1503f", fontSize: 10 } }] : []),
+          { yAxis: mc.initialCapital, lineStyle: { color: "#6b8399", type: "dashed" as const }, label: { formatter: "Start", color: "#6b8399", fontSize: 10 } },
+          ...(mc.capitalBarrier != null ? [{ yAxis: mc.capitalBarrier, lineStyle: { color: "#f0566a", type: "dashed" as const }, label: { formatter: "Grenze", color: "#f0566a", fontSize: 10 } }] : []),
         ],
       }, z: 4, animation: false,
     };
     chart.setOption({
       animation: false, grid: { top: 16, right: 16, bottom: 24, left: 56 },
       tooltip: { trigger: "axis" },
-      xAxis: { type: "value", min: 0, max: Math.max(1, horizon - 1), axisLine: { lineStyle: { color: "#232120" } }, axisLabel: { color: "#8a857c", fontSize: 10 }, name: "Schritt", nameTextStyle: { color: "#8a857c", fontSize: 10 } },
-      yAxis: { type: "value", scale: true, splitLine: { lineStyle: { color: "#232120" } }, axisLabel: { color: "#8a857c", fontSize: 10 } },
+      xAxis: { type: "value", min: 0, max: Math.max(1, horizon - 1), axisLine: { lineStyle: { color: "#14273f" } }, axisLabel: { color: "#6b8399", fontSize: 10 }, name: "Schritt", nameTextStyle: { color: "#6b8399", fontSize: 10 } },
+      yAxis: { type: "value", scale: true, splitLine: { lineStyle: { color: "#14273f" } }, axisLabel: { color: "#6b8399", fontSize: 10 } },
       series: [...pathSeries, ...band, marks],
     }, true);
     const ro = new ResizeObserver(() => chart.resize());

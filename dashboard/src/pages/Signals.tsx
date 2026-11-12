@@ -27,37 +27,33 @@ export function Signals() {
   return (
     <div className="p-4 space-y-4">
       <div className="flex items-center gap-2 flex-wrap">
-        <Filter className="h-4 w-4 text-muted-foreground" />
+        <Filter className="h-4 w-4 text-[var(--fg-faint)]" />
         <button
           onClick={() => setFilterDir("all")}
-          className={`px-3 py-1 rounded-md text-sm border transition-colors ${
-            filterDir === "all" ? "bg-primary text-primary-foreground border-primary" : "bg-card border-border hover:bg-muted"
-          }`}
+          aria-pressed={filterDir === "all"}
+          className={`chip ${filterDir === "all" ? "chip-active" : ""}`}
         >
           All
         </button>
         <button
           onClick={() => setFilterDir("long")}
-          className={`px-3 py-1 rounded-md text-sm border transition-colors ${
-            filterDir === "long" ? "bg-success/20 text-success border-success/40" : "bg-card border-border hover:bg-muted"
-          }`}
+          aria-pressed={filterDir === "long"}
+          className={`chip chip-long ${filterDir === "long" ? "chip-active" : ""}`}
         >
           LONG
         </button>
         <button
           onClick={() => setFilterDir("short")}
-          className={`px-3 py-1 rounded-md text-sm border transition-colors ${
-            filterDir === "short" ? "bg-destructive/20 text-destructive border-destructive/40" : "bg-card border-border hover:bg-muted"
-          }`}
+          aria-pressed={filterDir === "short"}
+          className={`chip chip-short ${filterDir === "short" ? "chip-active" : ""}`}
         >
           SHORT
         </button>
-        <div className="w-px h-6 bg-border mx-1" />
+        <div className="w-px h-6 bg-[var(--line-2)] mx-1" />
         <button
           onClick={() => setFilterSym("all")}
-          className={`px-3 py-1 rounded-md text-sm border transition-colors ${
-            filterSym === "all" ? "bg-primary text-primary-foreground border-primary" : "bg-card border-border hover:bg-muted"
-          }`}
+          aria-pressed={filterSym === "all"}
+          className={`chip ${filterSym === "all" ? "chip-active" : ""}`}
         >
           All Symbols
         </button>
@@ -65,9 +61,8 @@ export function Signals() {
           <button
             key={sym}
             onClick={() => setFilterSym(sym)}
-            className={`px-3 py-1 rounded-md text-sm border transition-colors font-mono ${
-              filterSym === sym ? "bg-primary text-primary-foreground border-primary" : "bg-card border-border hover:bg-muted"
-            }`}
+            aria-pressed={filterSym === sym}
+            className={`chip ${filterSym === sym ? "chip-active" : ""}`}
           >
             {sym}
           </button>
@@ -80,7 +75,7 @@ export function Signals() {
             <Card key={signal.signalId} hover>
               <CardContent className="p-4">
                 <div className="flex items-center justify-between mb-3">
-                  <span className="font-mono text-lg font-bold">{signal.symbol}</span>
+                  <span className="display text-lg">{signal.symbol}</span>
                   <Badge
                     variant={signal.direction === "long" ? "success" : "danger"}
                     dot
@@ -125,7 +120,7 @@ export function Signals() {
         <EmptyState
           title="No signals found"
           description={signals.length === 0 ? "Waiting for trade signals from strategies..." : "No signals match the selected filters"}
-          icon={<Zap className="h-8 w-8" />}
+          icon={<Zap className="h-7 w-7" strokeWidth={1.5} />}
         />
       )}
     </div>

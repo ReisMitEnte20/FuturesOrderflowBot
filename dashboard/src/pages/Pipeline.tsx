@@ -2,6 +2,7 @@ import { Card } from "@/components/common/Card";
 import { EmptyState } from "@/components/common/EmptyState";
 import { Badge } from "@/components/common/Badge";
 import { useTradingStore } from "@/stores/tradingStore";
+import { Workflow } from "lucide-react";
 
 export function Pipeline() {
   const pipeline = useTradingStore((s) => s.pipeline);
@@ -32,6 +33,7 @@ export function Pipeline() {
         <EmptyState
           title="No pipeline"
           description="Define your strategy pipeline to visualize data flow"
+          icon={<Workflow className="h-7 w-7" strokeWidth={1.5} />}
         />
       </div>
     );
@@ -40,8 +42,8 @@ export function Pipeline() {
   return (
     <div className="p-4 space-y-4">
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <Card className="lg:col-span-2 min-h-[400px]">
-          <p className="text-xs font-mono text-[var(--fg-faint)] mb-4">Pipeline Graph</p>
+        <Card className="lg:col-span-2 min-h-[400px] p-4">
+          <p className="eyebrow mb-4">Pipeline Graph</p>
           <div className="flex flex-wrap gap-3 items-center justify-center min-h-[300px]">
             {nodes.map((node) => (
               <PipelineNode key={node.id} node={node} color={typeColors[node.type] || "#3cf0a0"} label={typeLabels[node.type] || node.type} />
@@ -49,8 +51,8 @@ export function Pipeline() {
           </div>
         </Card>
 
-        <Card>
-          <p className="text-xs font-mono text-[var(--fg-faint)] mb-4">Strategies</p>
+        <Card className="p-4">
+          <p className="eyebrow mb-4">Strategies</p>
           {strategies.length > 0 ? (
             <div className="space-y-2">
               {strategies.map((s) => (
@@ -90,8 +92,8 @@ export function Pipeline() {
         </Card>
       </div>
 
-      <Card>
-        <p className="text-xs font-mono text-[var(--fg-faint)] mb-4">Data Flow ({edges.length} steps)</p>
+      <Card className="p-4">
+        <p className="eyebrow mb-4">Data Flow ({edges.length} steps)</p>
         <div className="space-y-1">
           {edges.map((e: { from: string; to: string; step?: string }, i: number) => (
             <div key={i} className="flex items-center gap-2 p-2 rounded bg-[var(--bg-2)] text-xs font-mono">

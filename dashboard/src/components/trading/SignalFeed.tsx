@@ -15,7 +15,7 @@ export function SignalFeed({ signals, maxHeight }: SignalFeedProps) {
       <CardHeader className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Zap className="h-4 w-4" />
-          <h2 className="font-mono text-sm font-medium">Signals</h2>
+          <h2 className="display text-sm font-medium">Signals</h2>
         </div>
         <span className="text-[10px] font-mono text-[var(--fg-faint)]">{signals?.length || 0} total</span>
       </CardHeader>
