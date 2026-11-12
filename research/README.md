@@ -10,6 +10,7 @@ keine Kontoänderungen. Die Werkzeuge bedienen ATAS ausschließlich als UI-Autom
 | `atas-session-collector-gui/` | WinForms-Oberfläche („ATAS Session Collector“): Datumsbereich + Session (New York 09:30–12:00 ET / London) wählen, Vorschau, Start/Fortsetzen/Kontrolliert stoppen/Not-Aus. Ruft die Probe je Tag auf. |
 | `data-bridge/` | Python-Bridge: prüft Recorder-Aufnahmen und hängt Trades atomar und wiederanlauffähig an `trades.csv` + `collection_manifest.json` an (Schema `atas-collection-trades-1`, keine Deduplizierung). |
 | `recorder-core/` | Kernlogik des ATAS-Indikators „OF Replay Recorder“ (Token-Handshake, Writer, Rückzug) mit Konsolentests. |
+| `atas-recorder/` | Quelltext des ATAS-Indikators selbst (aktueller Stand `proto-4-recheck` und Sicherung `proto-2-bufferfix`) mit Build-Skript. Die ausgelieferte DLL ist **nicht** aus dem aktuellen Stand gebaut; Einzelheiten und Nachweisstand in `atas-recorder/README.md`. |
 
 ## Bauen und testen
 
@@ -38,7 +39,10 @@ Aufnahmen, Collections, Caches und Pakete werden **nie** committet. Der Datenord
 (GUI: „Datenordner“, gespeichert in `collector-data.json` neben der EXE bzw. unter `%APPDATA%`); ohne Wahl wird
 `<Paketordner>\ATAS_Data` verwendet. Darunter:
 
-- `Recordings\` – Rohaufnahmen des Recorders (in ATAS beim Indikator als Output-Ordner eintragen; die GUI zeigt den Pfad über „Recorder-Ordner kopieren“).
+- `Recordings\` – Rohaufnahmen des Recorders. Achtung: Der Recorder schreibt standardmäßig fest nach
+  `F:\ATAS_Data\Recordings`. Den Output-Ordner in ATAS von Hand zu setzen ist kein bestätigter Weg zu einem anderen
+  Pfad (in früheren Tests Rückfall beim Instanzwechsel, siehe `atas-recorder/README.md`). Geprüft ist nur der
+  Datenordner `F:\ATAS_Data`.
 - `Collections\<Instrument>_<Session>_<Fenster>_<Von>_bis_<Bis>\` – `trades.csv`, `collection_manifest.json`, `coverage_report.txt`, `run_protocol.txt`.
 - `Logs\`
 
