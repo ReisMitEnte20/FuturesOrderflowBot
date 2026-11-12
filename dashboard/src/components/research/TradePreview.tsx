@@ -64,7 +64,7 @@ export function TradePreview() {
         <div className="ml-auto flex items-center gap-1">
           {data.strategies.map((s, i) => (
             <button key={s.name} onClick={() => { setStratIdx(i); setSelected(0); setFocusKey((k) => k + 1); }}
-              className={`h-[26px] px-2.5 rounded-md text-[11px] border ${i === stratIdx ? "bg-[var(--key)] text-black border-transparent font-semibold" : "border-[var(--line-2)] text-[var(--fg)]"}`}>
+              className={`h-[26px] px-2.5 rounded-md text-[11px] border ${i === stratIdx ? "bg-grad-brand text-[var(--bg)] border-transparent font-semibold" : "border-[var(--line-2)] text-[var(--fg)]"}`}>
               {s.name}{s.usesOrderflow ? " ·OF" : ""}
             </button>
           ))}
@@ -101,8 +101,8 @@ export function TradePreview() {
               </span>
             ) : <span className="text-[11px] text-[var(--fg-faint)]">Trade links wählen</span>}
             <div className="ml-auto inline-flex rounded-md border border-[var(--line-2)] overflow-hidden">
-              <button onClick={() => setView("candles")} className={`h-[24px] px-3 text-[10.5px] ${view === "candles" ? "bg-[var(--key)] text-black font-semibold" : "text-[var(--fg)]"}`}>Kerzen</button>
-              <button onClick={() => setView("footprint")} className={`h-[24px] px-3 text-[10.5px] border-l border-[var(--line-2)] ${view === "footprint" ? "bg-[var(--key)] text-black font-semibold" : "text-[var(--fg)]"}`}>Footprint</button>
+              <button onClick={() => setView("candles")} className={`h-[24px] px-3 text-[10.5px] ${view === "candles" ? "bg-grad-brand text-[var(--bg)] font-semibold" : "text-[var(--fg)]"}`}>Kerzen</button>
+              <button onClick={() => setView("footprint")} className={`h-[24px] px-3 text-[10.5px] border-l border-[var(--line-2)] ${view === "footprint" ? "bg-grad-brand text-[var(--bg)] font-semibold" : "text-[var(--fg)]"}`}>Footprint</button>
             </div>
           </div>
 

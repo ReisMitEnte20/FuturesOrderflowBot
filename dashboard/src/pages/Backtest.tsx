@@ -355,7 +355,7 @@ export function Backtest() {
               {busy === "load" ? "Lädt…" : "Daten laden"}
             </button>
             <button onClick={() => void runBacktest()} disabled={!!busy || !tb.dataSourceId}
-              className="h-7 px-3 rounded bg-[var(--key)] text-black text-xs font-bold disabled:opacity-40">
+              className="h-7 px-3 rounded bg-grad-brand text-[var(--bg)] text-xs font-bold disabled:opacity-40">
               {busy === "run" ? "Läuft…" : "▶ Backtest starten"}
             </button>
             <button onClick={() => setSettingsOpen((o) => !o)} aria-expanded={settingsOpen} title="Strategie, Parameter, Kosten und Datenumfang"
@@ -679,7 +679,7 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
 function NavBtn({ children, onClick, disabled, title, primary }: { children: React.ReactNode; onClick: () => void; disabled?: boolean; title?: string; primary?: boolean }) {
   return (
     <button onClick={onClick} disabled={disabled} title={title}
-      className={`h-6 px-2 rounded text-[11px] mono border disabled:opacity-40 disabled:cursor-not-allowed ${primary ? "bg-[var(--key)] text-black border-[var(--key)] font-bold" : "border-[var(--line-2)] text-[var(--fg)] hover:bg-[var(--bg-2)]"}`}>
+      className={`h-6 px-2 rounded text-[11px] mono border disabled:opacity-40 disabled:cursor-not-allowed ${primary ? "bg-grad-brand text-[var(--bg)] border-[var(--key)] font-bold" : "border-[var(--line-2)] text-[var(--fg)] hover:bg-[var(--bg-2)]"}`}>
       {children}
     </button>
   );

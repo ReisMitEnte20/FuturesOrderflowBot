@@ -50,13 +50,14 @@ export function Modal({ title, children, onClose }: ModalProps) {
 
   // Per Portal in <body>, damit kein Vorfahr (backdrop-filter, transform) das Overlay einschränkt.
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 overflow-y-auto" onClick={onClose || close}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(1,8,20,0.72)] backdrop-blur-sm p-4 overflow-y-auto" onClick={onClose || close}>
       <div
-        className="bg-[var(--panel)] border border-[var(--line)] rounded-lg w-[600px] max-w-[90vw]"
+        className="relative overflow-hidden bg-[var(--panel)] border border-[var(--line-2)] rounded-xl w-[600px] max-w-[90vw] shadow-[0_30px_80px_-30px_rgba(0,0,0,0.9),0_0_40px_-18px_rgba(60,240,160,0.5)]"
         onClick={(e) => e.stopPropagation()}
       >
+        <div className="hairline absolute inset-x-0 top-0" />
         <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--line)]">
-          <h3 className="text-sm font-mono font-medium">{title}</h3>
+          <h3 className="display text-sm">{title}</h3>
           <Button variant="default" size="sm" onClick={onClose || close}>
             <X className="h-4 w-4" />
           </Button>

@@ -49,7 +49,7 @@ export function SettingsPage() {
   return (
     <div className="p-4 space-y-4 max-w-xl mx-auto">
       <div className="flex items-center justify-between">
-        <h1 className="font-mono text-lg font-bold flex items-center gap-2">
+        <h1 className="display text-lg font-bold flex items-center gap-2">
           <Settings className="h-5 w-5" />
           Market Data
         </h1>

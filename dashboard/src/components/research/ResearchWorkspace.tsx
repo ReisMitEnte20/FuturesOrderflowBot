@@ -133,7 +133,7 @@ export function ResearchWorkspace() {
   if (!d || !strat) return <Box><p className="text-xs text-[var(--fg-faint)]">Lade Orderflow-Arbeitsfläche…</p></Box>;
 
   const tgl = (grp: "modules" | "ind", k: string) => setLay((p) => ({ ...p, [grp]: { ...p[grp], [k]: !p[grp][k] } }));
-  const Btn = ({ on, onClick, children }: any) => <button onClick={onClick} className={`h-[24px] px-2 rounded text-[10.5px] border ${on ? "bg-[var(--key)] text-black border-transparent font-semibold" : "border-[var(--line-2)] text-[var(--fg)]"}`}>{children}</button>;
+  const Btn = ({ on, onClick, children }: any) => <button onClick={onClick} className={`h-[24px] px-2 rounded text-[10.5px] border ${on ? "bg-grad-brand text-[var(--bg)] border-transparent font-semibold" : "border-[var(--line-2)] text-[var(--fg)]"}`}>{children}</button>;
 
   // Trade-Navigation (prev/next/gesamt) + Hilfen
   const tradeIdx = strat.trades.map((t) => t.index);
@@ -143,13 +143,13 @@ export function ResearchWorkspace() {
   const startBal = d.provenance?.startingBalance;
 
   const inner = (
-    <div className={`flex flex-col gap-2 ${lay.maximized ? "fixed inset-0 z-50 bg-[#05070b] p-3 overflow-auto" : ""}`}>
+    <div className={`flex flex-col gap-2 ${lay.maximized ? "fixed inset-0 z-50 bg-[#020d1e] p-3 overflow-auto" : ""}`}>
       {/* 1. Kompakte Kopfzeile: Lauf · Strategie · Trade-Navigation · Maximieren */}
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <span className="text-sm font-semibold text-[var(--fg)]">Orderflow · {d.meta.instrument}</span>
         <span className="text-[9px] px-1.5 py-0.5 rounded bg-[rgba(240,195,90,.14)] text-[var(--gold,#f0c35a)] border border-[rgba(240,195,90,.4)]" title="Technischer Test – keine Profitabilitätsaussage">TEST</span>
         {runs.length > 0 && (
-          <select value={runId} onChange={(e) => loadRun(e.target.value)} title="Gespeicherte Orderflow-Läufe" className="h-[26px] bg-[var(--panel-2,#13202e)] text-[var(--fg)] border border-[var(--line-2)] rounded text-[11px] px-1 max-w-[240px]">
+          <select value={runId} onChange={(e) => loadRun(e.target.value)} title="Gespeicherte Orderflow-Läufe" className="h-[26px] bg-[var(--panel-2,#0e2139)] text-[var(--fg)] border border-[var(--line-2)] rounded text-[11px] px-1 max-w-[240px]">
             {runs.map((r) => <option key={r.id} value={r.id} disabled={r.loadable === false}>{(r.generatedUtc || r.id).slice(0, 19).replace("T", " ")} · {r.instrument} · {r.ok ? "ok" : "⚠ " + r.status}{r.loadable === false ? " (nicht ladbar)" : ""}</option>)}
           </select>
         )}
@@ -160,7 +160,7 @@ export function ResearchWorkspace() {
         <span className="h-4 w-px bg-[var(--line-2)]" />
         <div className="flex items-center gap-1" title="Trade-Navigation">
           <Btn on={false} onClick={() => goTrade(-1)}>‹</Btn>
-          <select value={selected ?? ""} onChange={(e) => pick(e.target.value === "" ? null : +e.target.value)} className="h-[26px] bg-[var(--panel-2,#13202e)] text-[var(--fg)] border border-[var(--line-2)] rounded text-[11px] px-1 max-w-[200px]">
+          <select value={selected ?? ""} onChange={(e) => pick(e.target.value === "" ? null : +e.target.value)} className="h-[26px] bg-[var(--panel-2,#0e2139)] text-[var(--fg)] border border-[var(--line-2)] rounded text-[11px] px-1 max-w-[200px]">
             <option value="">Trade wählen…</option>
             {strat.trades.map((t) => <option key={t.index} value={t.index}>#{t.index + 1} {t.side} {t.entryTime}→{t.exitTime} {eur(t.netPnL)}</option>)}
           </select>
@@ -262,7 +262,7 @@ function Box({ children }: { children: React.ReactNode }) { return <div classNam
 
 function Panel({ title, children, resize, minH = 300 }: { title: string; children: React.ReactNode; resize?: boolean; minH?: number }) {
   return (
-    <div className="border border-[var(--line)] rounded-lg overflow-hidden flex flex-col bg-[#070b11]" style={resize ? { resize: "vertical", overflow: "hidden", minHeight: minH, height: minH } : undefined}>
+    <div className="border border-[var(--line)] rounded-lg overflow-hidden flex flex-col bg-[#051327]" style={resize ? { resize: "vertical", overflow: "hidden", minHeight: minH, height: minH } : undefined}>
       <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-[var(--fg-faint)] border-b border-[var(--line)] bg-[var(--bg-2)] flex-shrink-0">{title}</div>
       <div className="flex-1 min-h-0 relative">{children}</div>
     </div>

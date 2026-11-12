@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { useTradingStore } from "@/stores/tradingStore";
 import { Card } from "@/components/common/Card";
+import { StatTile } from "@/components/common/StatTile";
 import { CandlestickChart } from "@/components/charts/CandlestickChart";
 import { EmptyState } from "@/components/common/EmptyState";
 import { formatNumber } from "@/lib/utils";
@@ -42,15 +43,14 @@ export function MarketData() {
             <button
               key={r}
               onClick={() => setSelectedSymbol(r)}
-              className={`px-3 py-1 rounded-md border font-mono text-sm ${
-                r === selectedSymbol ? "border-[var(--key)] text-[var(--key)]" : "border-[var(--line)] text-[var(--fg-dim)]"
-              }`}
+              aria-pressed={r === selectedSymbol}
+              className={`chip ${r === selectedSymbol ? "chip-active" : ""}`}
             >
               {r}
             </button>
           ))}
         </div>
-        <span className="font-mono text-lg font-bold">{contract ?? selectedSymbol}</span>
+        <span className="display text-lg">{contract ?? selectedSymbol}</span>
         <span className="font-mono text-xs text-[var(--fg-faint)]">{exchange} · Rithmic</span>
         {quote && (
           <span className="font-mono text-sm">
@@ -69,34 +69,32 @@ export function MarketData() {
       </div>
 
       {!connected && (
-        <Card>
-          <p className="text-sm font-mono text-[var(--fg-dim)]">Rithmic nicht verbunden – oben rechts „Connect“.</p>
+        <Card className="px-4 py-2.5 flex items-center gap-2.5">
+          <span className="dot dot-warn" />
+          <p className="text-sm text-[var(--fg-dim)]">Rithmic nicht verbunden – oben rechts „Connect“.</p>
         </Card>
       )}
       {error && (
-        <Card>
+        <Card className="px-4 py-2.5 border-[rgba(240,86,106,0.4)]">
           <p className="text-sm font-mono text-[var(--red)]">{error}</p>
         </Card>
       )}
 
       <div className="grid grid-cols-4 gap-4">
         {[
-          { label: "Ask-Vol (Buy-Aggr.)", value: formatNumber(totalBuy), color: "text-[var(--key)]" },
-          { label: "Bid-Vol (Sell-Aggr.)", value: formatNumber(totalSell), color: "text-[var(--red)]" },
-          { label: "Delta", value: formatNumber(totalDelta), color: totalDelta >= 0 ? "text-[var(--key)]" : "text-[var(--red)]" },
-          { label: "CVD (Fenster)", value: formatNumber(latest?.cvd || 0), color: "text-[var(--cyan)]" },
-        ].map(({ label, value, color }) => (
-          <Card key={label}>
-            <p className="text-[10px] font-mono text-[var(--fg-faint)] uppercase tracking-wider">{label}</p>
-            <p className={`text-lg font-mono font-bold mt-1 ${color}`}>{value}</p>
-          </Card>
+          { label: "Ask-Vol (Buy-Aggr.)", value: formatNumber(totalBuy), color: "text-[var(--key)]", tone: "key" as const },
+          { label: "Bid-Vol (Sell-Aggr.)", value: formatNumber(totalSell), color: "text-[var(--red)]", tone: "red" as const },
+          { label: "Delta", value: formatNumber(totalDelta), color: totalDelta >= 0 ? "text-[var(--key)]" : "text-[var(--red)]", tone: totalDelta >= 0 ? ("key" as const) : ("red" as const) },
+          { label: "CVD (Fenster)", value: formatNumber(latest?.cvd || 0), color: "text-[var(--cyan)]", tone: "cyan" as const },
+        ].map(({ label, value, color, tone }) => (
+          <StatTile key={label} label={label} value={value} accent={color} tone={tone} />
         ))}
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-[1fr_340px] gap-4">
-        <Card>
+        <Card className="p-4">
           <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-sm font-mono font-medium">{contract ?? selectedSymbol} · 1-Minuten-Bars</h2>
+            <h2 className="display text-sm">{contract ?? selectedSymbol} · 1-Minuten-Bars</h2>
             <span className="text-[10px] font-mono text-[var(--fg-faint)]">
               {candles.length > 0 ? `${candles.length} Bars · letzte ${formatTime(candles[candles.length - 1].timestamp)}` : ""}
             </span>
