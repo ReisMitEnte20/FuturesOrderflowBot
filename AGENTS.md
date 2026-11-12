@@ -57,5 +57,5 @@ Das `dashboard/` Verzeichnis enthält eine separate Vite + React + TypeScript + 
 - **Dev-Server**: `npm run dev` im `dashboard/` → http://127.0.0.1:5899. Hintergrundprozesse werden zwischen Tool-Calls beendet — für Tests `vite build` verwenden.
 - **Build**: `cd dashboard && npm run build` (erzeugt `dist/`).
 - **TypeScript**: `cd dashboard && npx tsc -b` (prüft Typen).
-- **Haupt-Farben**: bg `#0a0a0a`, panel `#161513`, key `#a2e65d` (grün), gold `#e8c069`, red `#c1503f`, cyan `#7fc4b4`, purple `#c2b6d8`.
+- **Design (FutureOrderFlowBot-Banner)**: Tokens in `dashboard/src/index.css` — bg `#020d1e`, panel `#0a1a30`, key `#3cf0a0` (grün), mint `#9ff0d0`, cyan `#22b8f0`, blue `#2b8cf5`, gold `#f0c35a`, red `#f0566a`, purple `#9b8cff`; Marken-Verlauf `--grad-brand` (Grün → Cyan → Blau). Bausteine: `.panel`, `.chip`, `.eyebrow`, `.display`, `.hairline`, `.dot`; Schriften lokal via `@fontsource` (Sora = Display, Inter = Text, JetBrains Mono = Zahlen).
 - **Pfad-Alias**: `@/*` → `src/*` (in vite.config.ts und tsconfig.json konfiguriert).

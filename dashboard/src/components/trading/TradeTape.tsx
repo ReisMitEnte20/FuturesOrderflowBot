@@ -60,9 +60,9 @@ export function TradeTape({ symbol, exchange, enabled }: TradeTapeProps) {
   }, [symbol, exchange, enabled]);
 
   return (
-    <Card>
+    <Card className="p-4">
       <div className="mb-2 flex items-center justify-between">
-        <h2 className="text-sm font-mono font-medium">Tape · {symbol ?? "–"}</h2>
+        <h2 className="display text-sm">Tape · {symbol ?? "–"}</h2>
         <span className="text-[10px] font-mono text-[var(--fg-faint)]">{tape.length} Trades</span>
       </div>
       {error && <p className="text-xs font-mono text-[var(--red)] mb-2">{error}</p>}

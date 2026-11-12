@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useTradingStore } from "@/stores/tradingStore";
 import { Card } from "@/components/common/Card";
 import { Badge } from "@/components/common/Badge";
+import { StatTile } from "@/components/common/StatTile";
 import { Table } from "@/components/common/Table";
 import type { Position } from "@/types";
 import { formatCurrency, getPnLColor } from "@/lib/utils";
@@ -12,6 +13,8 @@ export function TradingDesk() {
   const orders = useTradingStore((s) => s.orders);
   const signals = useTradingStore((s) => s.signals);
   const trades = useTradingStore((s) => s.trades);
+  const selectedSymbol = useTradingStore((s) => s.selectedSymbol);
+  const setSelectedSymbol = useTradingStore((s) => s.setSelectedSymbol);
 
   const totals = useMemo(() => {
     const unrealized = positions.reduce((sum, p) => sum + (p.unrealizedPnL || 0), 0);
@@ -22,35 +25,19 @@ export function TradingDesk() {
   return (
     <div className="p-4 space-y-4">
       <div className="grid grid-cols-3 gap-4">
-        <Card className="border-l-2 border-l-[var(--key)]">
-          <p className="text-[10px] font-mono text-[var(--fg-faint)] uppercase tracking-wider">Unrealized PnL</p>
-          <p className={`text-2xl font-mono font-bold mt-1 ${getPnLColor(totals.unrealized)}`}>
-            {formatCurrency(totals.unrealized)}
-          </p>
-        </Card>
-        <Card className="border-l-2 border-l-[var(--cyan)]">
-          <p className="text-[10px] font-mono text-[var(--fg-faint)] uppercase tracking-wider">Realized PnL</p>
-          <p className={`text-2xl font-mono font-bold mt-1 ${getPnLColor(totals.realized)}`}>
-            {formatCurrency(totals.realized)}
-          </p>
-        </Card>
-        <Card className="border-l-2 border-l-[var(--gold)]">
-          <p className="text-[10px] font-mono text-[var(--fg-faint)] uppercase tracking-wider">Open Positions</p>
-          <p className="text-2xl font-mono font-bold mt-1">{totals.openPositions}</p>
-        </Card>
+        <StatTile label="Unrealized PnL" value={formatCurrency(totals.unrealized)} accent={getPnLColor(totals.unrealized)} tone="key" />
+        <StatTile label="Realized PnL" value={formatCurrency(totals.realized)} accent={getPnLColor(totals.realized)} tone="cyan" />
+        <StatTile label="Open Positions" value={totals.openPositions} tone="gold" />
       </div>
 
       <div className="flex items-center gap-2">
-        <span className="text-sm text-muted-foreground">Symbol:</span>
+        <span className="eyebrow mr-1">Symbol</span>
         {["NQ", "MNQ", "ES", "MES"].map((sym) => (
           <button
             key={sym}
-            onClick={() => useTradingStore.getState().setSelectedSymbol(sym)}
-            className={`px-3 py-1 rounded-md text-sm font-medium border transition-colors ${
-              false
-                ? "bg-primary text-primary-foreground border-primary"
-                : "bg-card text-foreground border-border hover:bg-muted"
-            }`}
+            onClick={() => setSelectedSymbol(sym)}
+            aria-pressed={sym === selectedSymbol}
+            className={`chip ${sym === selectedSymbol ? "chip-active" : ""}`}
           >
             {sym}
           </button>
@@ -58,18 +45,18 @@ export function TradingDesk() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <Card className="lg:col-span-2">
+        <Card className="lg:col-span-2 p-4">
           <SectionHeader title="Positions" icon={<Activity className="h-4 w-4" />} />
           <PositionTable positions={positions} />
         </Card>
 
-        <Card>
+        <Card className="p-4">
           <SectionHeader title="Signals" icon={<Zap className="h-4 w-4" />} />
           <SignalList signals={signals} />
         </Card>
       </div>
 
-      <Card>
+      <Card className="p-4">
         <SectionHeader title="Orders" icon={<TrendingUp className="h-4 w-4" />} />
         <OrderTable orders={orders} />
       </Card>
@@ -81,8 +68,8 @@ function SectionHeader({ title, icon }: { title: string; icon: React.ReactNode }
   return (
     <div className="flex items-center justify-between mb-4">
       <div className="flex items-center gap-2">
-        <span className="text-[var(--fg)]">{icon}</span>
-        <h2 className="text-sm font-mono font-medium text-[var(--fg)]">{title}</h2>
+        <span className="text-[var(--key)]">{icon}</span>
+        <h2 className="display text-sm text-[var(--fg)]">{title}</h2>
       </div>
     </div>
   );

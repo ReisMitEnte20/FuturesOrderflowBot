@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { useLocation } from "react-router";
+import { ShieldCheck } from "lucide-react";
 import { useTradingStore } from "@/stores/tradingStore";
 import { RithmicLoginModal } from "@/components/trading/RithmicLoginModal";
 import { Button } from "@/components/common/Button";
@@ -10,7 +12,20 @@ const API_BASE = RITHMIC_API;
 // und periodisch abgefragt, damit die Anzeige den echten Backend-Zustand zeigt (z. B. nach Reload/ForcedLogout).
 const STATUS_POLL_MS = 10_000;
 
+// Titel/Untertitel je Bereich (rein beschreibend).
+const PAGES: Record<string, { title: string; subtitle: string }> = {
+  "/": { title: "Live Desk", subtitle: "Positionen · Signale · Orders" },
+  "/signals": { title: "Signals", subtitle: "Signale der Strategien" },
+  "/backtest": { title: "Backtest", subtitle: "OHLC-Simulation" },
+  "/research": { title: "Research", subtitle: "Quant- und Orderflow-Auswertung" },
+  "/market": { title: "Market Data", subtitle: "Rithmic · nur Marktdaten" },
+  "/pipeline": { title: "Pipeline", subtitle: "Datenfluss der Strategien" },
+  "/settings": { title: "Settings", subtitle: "Datenquelle und Verbindung" },
+};
+
 export function Topbar() {
+  const { pathname } = useLocation();
+  const page = PAGES[pathname] ?? { title: "FutureOrderFlowBot", subtitle: "Trading Dashboard" };
   const [loginOpen, setLoginOpen] = useState(false);
   const connectionStatus = useTradingStore((s) => s.connectionStatus);
   const userId = useTradingStore((s) => s.rithmicCredentials?.userId);
@@ -54,15 +69,20 @@ export function Topbar() {
   };
 
   return (
-    <header className="h-12 flex items-center justify-between px-4 border-b border-[var(--line)] bg-[rgba(5,19,39,0.88)] backdrop-blur">
-      <div className="flex items-center gap-4">
-        <img src="/logo-wordmark.png" alt="FutureOrderFlowBot" className="h-9 w-auto rounded" />
-        <span className="text-[var(--fg-faint)] text-xs mono uppercase tracking-widest">
-          Trading Dashboard
-        </span>
+    <header className="relative z-20 h-14 flex-shrink-0 flex items-center justify-between gap-4 px-5 bg-[rgba(4,16,34,0.78)] backdrop-blur">
+      <div className="flex items-baseline gap-3 min-w-0">
+        <h1 className="display text-[17px] leading-none text-[var(--fg)] whitespace-nowrap">{page.title}</h1>
+        <span className="eyebrow truncate">{page.subtitle}</span>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-3 flex-shrink-0">
+        <span
+          title="Research / Simulation only – keine Live-Execution, keine Order-Übermittlung"
+          className="hidden md:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-[rgba(34,184,240,0.35)] bg-[rgba(34,184,240,0.08)] text-[var(--cyan)] font-mono text-[10px] uppercase tracking-[0.12em]"
+        >
+          <ShieldCheck className="h-3 w-3" strokeWidth={2} />
+          Simulation only
+        </span>
         <StatusIndicator
           status={connectionStatus}
           userId={userId}
@@ -71,7 +91,8 @@ export function Topbar() {
         />
       </div>
 
-      <div className="w-20" />
+      {/* Leuchtende Verlaufslinie wie die Chart-Linien im Banner. */}
+      <div className="hairline absolute inset-x-0 bottom-0" />
 
       <RithmicLoginModal
         open={loginOpen}
@@ -94,28 +115,28 @@ function StatusIndicator({
 }) {
   const dotColor =
     status === "connected"
-      ? "bg-[var(--key)] shadow-[0_0_6px_#3cf0a088]"
+      ? "dot-on"
       : status === "connecting"
-      ? "bg-[var(--gold)] animate-pulse"
+      ? "dot-warn animate-pulse"
       : status === "error"
-      ? "bg-[var(--red)]"
-      : "bg-[var(--fg-faint)]";
+      ? "dot-off"
+      : "";
 
   return (
-    <div className="flex items-center gap-2 px-2 py-1 rounded bg-[var(--panel)] border border-[var(--line)]">
-      <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
-      <span className="text-[10px] font-mono text-[var(--fg-faint)] uppercase">
+    <div className="flex items-center gap-2 pl-3 pr-1 py-1 rounded-full bg-[rgba(14,33,57,0.8)] border border-[var(--line-2)]">
+      <span className={`dot ${dotColor}`} />
+      <span className="text-[10px] font-mono text-[var(--fg-dim)] uppercase tracking-[0.12em]">
         {status}
       </span>
       {userId && (
         <span className="text-[10px] font-mono text-[var(--fg-dim)]">{userId}</span>
       )}
       {status === "connected" ? (
-        <Button variant="default" size="sm" onClick={onDisconnect} className="ml-1">
+        <Button variant="default" size="sm" onClick={onDisconnect} className="ml-1 rounded-full px-3">
           Disconnect
         </Button>
       ) : (
-        <Button variant="primary" size="sm" onClick={onConnectClick} className="ml-1">
+        <Button variant="primary" size="sm" onClick={onConnectClick} className="ml-1 rounded-full px-3">
           Connect
         </Button>
       )}

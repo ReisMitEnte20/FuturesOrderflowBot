@@ -79,7 +79,7 @@ export function OrderPanel({ symbol: propSymbol, compact }: OrderPanelProps) {
   return (
     <Card>
       <CardHeader className="flex items-center justify-between">
-        <h3 className="font-mono text-sm font-medium">Order Entry</h3>
+        <h3 className="display text-sm font-medium">Order Entry</h3>
         <Badge variant="info">{sym}</Badge>
       </CardHeader>
       <CardBody>

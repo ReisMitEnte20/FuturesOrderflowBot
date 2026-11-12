@@ -28,7 +28,7 @@ export function Table<T>({ columns, data, keyField, className }: TableProps<T>) 
     <div className={cn("overflow-x-auto", className)}>
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b border-[var(--line)]">
+          <tr className="border-b border-[var(--line-2)]">
             {columns.map((col) => (
               <th
                 key={col.key}
@@ -44,7 +44,7 @@ export function Table<T>({ columns, data, keyField, className }: TableProps<T>) 
         </thead>
         <tbody>
           {data.map((row, i) => (
-            <tr key={String(row[keyField])} className="border-b border-[var(--line)] hover:bg-[var(--bg-2)]">
+            <tr key={String(row[keyField])} className="border-b border-[var(--line)] last:border-b-0 transition-colors hover:bg-[rgba(60,240,160,0.05)]">
               {columns.map((col) => {
                 const value = row[col.key as keyof T];
                 return (

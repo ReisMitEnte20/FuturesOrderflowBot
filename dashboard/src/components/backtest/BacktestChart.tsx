@@ -250,7 +250,7 @@ export function BacktestChart(props: Props) {
             {st.kind === "loading" && <div className="mx-auto mb-2 h-1 w-40 overflow-hidden rounded bg-[var(--bg-2)]"><div className="h-full w-1/3 animate-[bt-indet_1.1s_ease-in-out_infinite] bg-[var(--key)]" /></div>}
             <p className={`text-xs mono ${st.kind === "error" ? "text-[var(--red)]" : "text-[var(--fg-dim,#a9c3cf)]"}`}>{st.text}</p>
             {st.actionLabel && st.onAction && (
-              <button onClick={st.onAction} className="mt-2 px-3 py-1 rounded bg-[var(--key)] text-black text-xs font-bold">{st.actionLabel}</button>
+              <button onClick={st.onAction} className="mt-2 px-3 py-1 rounded bg-grad-brand text-[var(--bg)] text-xs font-bold">{st.actionLabel}</button>
             )}
           </div>
         </div>

@@ -3,7 +3,7 @@
 @tailwind utilities;
 
 :root {
-  /* Palette aus dem FutureOrderFlowBot-Logo: Navy-Schwarz, Raster, Grün/Mint, Blau. */
+  /* Palette aus dem FutureOrderFlowBot-Banner: Navy-Schwarz, feines Raster, Neon-Grün → Cyan → Blau. */
   --bg: #020d1e;
   --bg-2: #051327;
   --panel: #0a1a30;
@@ -19,11 +19,23 @@
   --gold: #f0c35a;
   --red: #f0566a;
   --cyan: #22b8f0;
+  --blue: #2b8cf5;
   --purple: #9b8cff;
+
+  /* Verläufe wie im Banner: Kerzen/Linien Grün → Cyan → Blau, Schriftzug Weiß → Mint → Grün. */
+  --grad-brand: linear-gradient(90deg, #3cf0a0 0%, #2edcc4 52%, #22b8f0 100%);
+  --grad-brand-v: linear-gradient(180deg, #3cf0a0 0%, #22b8f0 100%);
+  --grad-wordmark: linear-gradient(90deg, #ffffff 0%, #d9fff0 38%, #7df5bd 100%);
+  --grad-panel: linear-gradient(180deg, rgba(15, 35, 60, 0.9) 0%, rgba(8, 23, 43, 0.9) 100%);
+
   --glow-key: 0 0 18px rgba(60, 240, 160, 0.28);
   --glow-cyan: 0 0 18px rgba(34, 184, 240, 0.25);
-  --mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, monospace;
-  --sans: ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --glow-brand: 0 0 0 1px rgba(60, 240, 160, 0.22), 0 6px 22px -6px rgba(46, 220, 196, 0.55);
+  --shadow-panel: inset 0 1px 0 rgba(159, 240, 208, 0.06), 0 14px 34px -20px rgba(0, 0, 0, 0.85);
+
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --display: "Sora", "Inter", ui-sans-serif, system-ui, sans-serif;
 }
 
 * { box-sizing: border-box; }
@@ -33,19 +45,23 @@
 html, body { height: 100% }
 body {
   margin: 0;
-  /* Wie im Logo: leichtes Grün/Blau-Leuchten und feines Raster auf Navy. */
+  /* Wie im Banner: Grün/Blau-Leuchten und feines Raster auf Navy. */
   background:
-    radial-gradient(1200px 600px at 85% -10%, rgba(34, 184, 240, 0.10), transparent 60%),
-    radial-gradient(900px 500px at 10% 110%, rgba(60, 240, 160, 0.08), transparent 60%),
-    linear-gradient(rgba(29, 54, 84, 0.22) 1px, transparent 1px) 0 0 / 32px 32px,
-    linear-gradient(90deg, rgba(29, 54, 84, 0.22) 1px, transparent 1px) 0 0 / 32px 32px,
+    radial-gradient(1100px 560px at 88% -12%, rgba(34, 184, 240, 0.13), transparent 62%),
+    radial-gradient(900px 520px at 6% 112%, rgba(60, 240, 160, 0.10), transparent 62%),
+    linear-gradient(rgba(34, 70, 110, 0.20) 1px, transparent 1px) 0 0 / 36px 36px,
+    linear-gradient(90deg, rgba(34, 70, 110, 0.20) 1px, transparent 1px) 0 0 / 36px 36px,
     var(--bg);
   color: var(--fg);
   font: 13px/1.55 var(--sans);
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
   overflow: hidden;
 }
-b { font-weight: 500 }
+b { font-weight: 600 }
 .mono { font-family: var(--mono) }
+::selection { background: rgba(60, 240, 160, 0.28); color: #fff }
+input, select, textarea { accent-color: var(--key) }
 
 ::-webkit-scrollbar { width: 6px; height: 6px }
 ::-webkit-scrollbar-track { background: transparent }
@@ -67,11 +83,117 @@ b { font-weight: 500 }
   outline-offset: 2px;
   border-radius: 2px;
 }
-/* Marken-Schriftzug „FutureOrderFlowBot“ im Farbverlauf des Logos (Weiß → Mint → Grün). */
-.brand-wordmark {
-  background: linear-gradient(90deg, #f2fff8 0%, #b9f7d9 45%, #5ee9a6 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  text-shadow: 0 0 12px rgba(94, 233, 166, 0.25);
+
+@layer components {
+  /* Marken-Schriftzug „FutureOrderFlowBot“ im Verlauf des Banners (Weiß → Mint → Grün) mit Leuchten. */
+  .brand-wordmark {
+    font-family: var(--display);
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    background: var(--grad-wordmark);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    filter: drop-shadow(0 0 10px rgba(94, 233, 166, 0.35));
+  }
+
+  /* Überschriften in der Display-Schrift des Schriftzugs. */
+  .display {
+    font-family: var(--display);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  /* Text im Marken-Verlauf Grün → Cyan → Blau (Kennzahlen, Hervorhebungen). */
+  .text-brand {
+    background: var(--grad-brand);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* Kleine Abschnitts-/Feldbeschriftung. */
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 10px;
+    line-height: 1.4;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--fg-faint);
+  }
+
+  /* Panel: leicht durchscheinende Fläche mit Lichtkante – das Raster bleibt dahinter sichtbar. */
+  .panel {
+    position: relative;
+    background: var(--grad-panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: var(--shadow-panel);
+  }
+  .panel-hover { transition: border-color 0.15s ease, box-shadow 0.15s ease }
+  .panel-hover:hover {
+    border-color: rgba(60, 240, 160, 0.35);
+    box-shadow: var(--shadow-panel), 0 0 22px -8px rgba(60, 240, 160, 0.35);
+  }
+
+  /* Leuchtende Verlaufslinie (Topbar-Unterkante, Kachel-Akzent). */
+  .hairline {
+    height: 1px;
+    background: linear-gradient(90deg, transparent 0%, rgba(60, 240, 160, 0.55) 22%, rgba(34, 184, 240, 0.55) 68%, transparent 100%);
+  }
+
+  /* Auswahl-Chips (Symbol-/Filterauswahl). */
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--line-2);
+    background: rgba(14, 33, 57, 0.7);
+    color: var(--fg-dim);
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.4;
+    transition: color 0.15s ease, border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  .chip:hover { color: var(--fg); border-color: rgba(34, 184, 240, 0.55) }
+  .chip-active,
+  .chip-active:hover {
+    color: var(--key);
+    border-color: rgba(60, 240, 160, 0.6);
+    background: linear-gradient(180deg, rgba(60, 240, 160, 0.16), rgba(34, 184, 240, 0.08));
+    box-shadow: 0 0 16px -6px rgba(60, 240, 160, 0.6);
+  }
+  .chip-long.chip-active { color: var(--key) }
+  .chip-short.chip-active,
+  .chip-short.chip-active:hover {
+    color: var(--red);
+    border-color: rgba(240, 86, 106, 0.6);
+    background: rgba(240, 86, 106, 0.12);
+    box-shadow: 0 0 16px -6px rgba(240, 86, 106, 0.6);
+  }
+
+  /* Status-Punkt mit Leuchten. */
+  .dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 9999px;
+    background: var(--fg-faint);
+    flex-shrink: 0;
+  }
+  .dot-on { background: var(--key); box-shadow: 0 0 8px rgba(60, 240, 160, 0.9) }
+  .dot-warn { background: var(--gold); box-shadow: 0 0 8px rgba(240, 195, 90, 0.8) }
+  .dot-off { background: var(--red); box-shadow: 0 0 8px rgba(240, 86, 106, 0.7) }
+}
+
+/* Dezentes Pulsieren der Banner-Linien im Hintergrund; ohne Bewegung, wenn der Nutzer das wünscht. */
+@keyframes brand-breathe {
+  0%, 100% { opacity: 0.85 }
+  50% { opacity: 1 }
+}
+.brand-breathe { animation: brand-breathe 7s ease-in-out infinite }
+@media (prefers-reduced-motion: reduce) {
+  .brand-breathe { animation: none }
 }
