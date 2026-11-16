@@ -3,8 +3,9 @@
 #
 #   powershell -ExecutionPolicy Bypass -File build.ps1                 # aktueller Quellstand (proto-4-recheck)
 #   powershell -ExecutionPolicy Bypass -File build.ps1 -Variant proto2 # Sicherung proto-2-bufferfix
+#   powershell -ExecutionPolicy Bypass -File build.ps1 -Variant proto2c # proto-2c-sharedroot (gemeinsamer Datenordner)
 param(
-    [ValidateSet('current', 'proto2')] [string]$Variant = 'current',
+    [ValidateSet('current', 'proto2', 'proto2c')] [string]$Variant = 'current',
     [string]$AtasDir = 'C:\Program Files (x86)\ATAS Platform',
     [string]$DotnetRoot = 'C:\Program Files\dotnet',
     [string]$OutDir = (Join-Path $PSScriptRoot 'out')
@@ -38,6 +39,10 @@ $refs += $atas
 if ($Variant -eq 'proto2') {
     $sources = @(Join-Path $PSScriptRoot 'proto-2-bufferfix-sicherung\OrderFlowReplayRecorder.cs')
     $extra = @()
+} elseif ($Variant -eq 'proto2c') {
+    $sources = @((Join-Path $PSScriptRoot 'proto-2c-sharedroot\OrderFlowReplayRecorder.cs'),
+                 (Join-Path $PSScriptRoot '..\recorder-core\SharedDataRoot.cs'))
+    $extra = @('-deterministic')
 } else {
     $coreDir = Join-Path $PSScriptRoot '..\recorder-core'
     $sources = @((Join-Path $PSScriptRoot 'OrderFlowReplayRecorder.cs'),

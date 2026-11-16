@@ -279,3 +279,20 @@ def test_source_change_during_read_aborts(tmp_path, monkeypatch):
     monkeypatch.setattr(c.b, "sha256_file", flaky)
     with pytest.raises(b.SourceChangedError):
         c.read_window_trades(r, START, END)
+
+def test_selfcheck_runs_with_isolated_interpreter(tmp_path):
+    """VM-Befund: Mit isolierter Laufzeit (private Python-Laufzeit mit ._pth, hier nachgestellt ueber -I) liegt der
+    Skriptordner NICHT im Suchpfad. Der Collector muss sein Schwestermodul atas_bridge trotzdem finden - aus einem
+    fremden Arbeitsverzeichnis und einem Pfad mit Leerzeichen."""
+    import os, shutil, subprocess, sys as _sys
+    here = os.path.dirname(os.path.abspath(__file__))
+    dst = tmp_path / "Ordner mit Leerzeichen" / "bridge"
+    dst.mkdir(parents=True)
+    for f in ("atas_collect.py", "atas_bridge.py"):
+        shutil.copy(os.path.join(here, f), dst / f)
+    r = subprocess.run([_sys.executable, "-I", str(dst / "atas_collect.py"), "selfcheck"],
+                       cwd=str(tmp_path), capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    assert out["result"] == "ok"
+    assert os.path.normcase(out["bridge"]) == os.path.normcase(str(dst / "atas_bridge.py"))

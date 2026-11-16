@@ -35,13 +35,29 @@ Das ist mit „gleicher Quelltext“ vereinbar, **beweist ihn aber nicht**: Der 
 hat nicht stattgefunden. Die Sicherung ist deshalb als *wahrscheinlicher, nicht nachgewiesener* Quellstand der
 ausgelieferten DLL zu lesen. Die DLL selbst liegt nicht im Repository, nur als Bestandteil der Release-Pakete.
 
+## Variante `proto-2c-sharedroot/` (wird ab Paket 1.3.0 ausgeliefert)
+
+`proto-2c-sharedroot/OrderFlowReplayRecorder.cs` ist die Sicherung `proto-2-bufferfix` mit genau diesen Aenderungen:
+
+- Der Ausgabeordner kommt bei jedem Instanzstart aus `../recorder-core/SharedDataRoot.cs`: zuerst die gemeinsame
+  Konfiguration `%APPDATA%/AtasSessionCollector/recorder-output-root.txt`, ersatzweise das Feld "Output-Ordner".
+  Kein eingebauter Standardpfad mehr; ohne Konfiguration oder bei fehlendem Laufwerk bricht der Recorder ab.
+- `meta.json` nennt zusaetzlich `capability`, `outputRoot` (mit Schraegstrichen) und `outputRootSource`;
+  die Kennung lautet `OrderFlowReplayRecorder/proto-2c-sharedroot`.
+
+Build: `build.ps1 -Variant proto2c` (deterministisch; zwei Laeufe ergeben dieselbe Pruefsumme). Geprueft: Build,
+Offline-Tests von `SharedDataRoot` (`../recorder-core/tests`), Erkennung der Kennung in der DLL.
+**Nicht geprueft: Diese DLL ist noch nie in ATAS geladen oder fuer eine Aufnahme benutzt worden.** Sie ist auch nicht
+die bisher ausgelieferte DLL; die Aussagen zur Herkunft von `proto-2-bufferfix` oben gelten unveraendert.
+
 ## Dateien
 
 | Datei | Inhalt |
 |---|---|
 | `OrderFlowReplayRecorder.cs` | aktueller Quellstand `proto-4-recheck`; braucht `../recorder-core/{RecorderCore,CoreGate,TokenHandshake}.cs` |
 | `proto-2-bufferfix-sicherung/OrderFlowReplayRecorder.cs` | Sicherung `proto-2-bufferfix`, eine Datei ohne weitere Quellen |
-| `build.ps1` | Build beider Varianten nach `out\` (gitignored) |
+| `proto-2c-sharedroot/OrderFlowReplayRecorder.cs` | ausgelieferte Variante ab 1.3.0; braucht `../recorder-core/SharedDataRoot.cs` |
+| `build.ps1` | Build aller Varianten nach `out\` (gitignored) |
 | `validate_recording.py` | Gegenprüfungen einer Aufnahme und Vergleich 1× gegen beschleunigt (nur Standardbibliothek) |
 
 Nicht übernommen aus `F:\ATAS_Data\Recorder`: die DLLs und `.bak`-Dateien (Binaries), `build.rsp`/`build_f.rsp`

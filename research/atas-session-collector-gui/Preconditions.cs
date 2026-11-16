@@ -22,6 +22,9 @@ public static class Preconditions
             FileCheck("Aufnahme-Steuerung (Probe)", t.ProbeExe),
             FileCheck("Collector-Skript", t.CollectorScript),
             CollectorImportable(t.Python, t.CollectorScript),
+            BridgeSelfcheck(t.Python, t.CollectorScript),
+            RecorderRootConfigured(outputRoot),
+            RecorderDllReady(outputRoot),
             OutputWritable(outputRoot),
             DiskSpace(outputRoot),
         };
@@ -84,6 +87,64 @@ public static class Preconditions
         {
             return new Check(false, "Collector-Bibliotheken", "Pruefung nicht moeglich: " + ex.Message);
         }
+    }
+
+    /// <summary>Startet den Collector GENAU so wie zur Laufzeit (python &lt;skript&gt; selfcheck, fremdes Arbeitsverzeichnis).
+    /// Deckt den VM-Befund ab, dass die isolierte Laufzeit den Skriptordner nicht im Suchpfad hat.</summary>
+    public static Check BridgeSelfcheck(string python, string script)
+    {
+        const string title = "Bridge-Selbsttest";
+        if (!File.Exists(script)) return new Check(false, title, "Collector-Skript fehlt: " + script);
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = python, RedirectStandardOutput = true, RedirectStandardError = true,
+                UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = Path.GetTempPath(),
+            };
+            psi.ArgumentList.Add(script);
+            psi.ArgumentList.Add("selfcheck");
+            using var p = Process.Start(psi)!;
+            string o = p.StandardOutput.ReadToEnd();
+            string e = p.StandardError.ReadToEnd();
+            p.WaitForExit(30000);
+            bool ok = p.HasExited && p.ExitCode == 0 && o.Contains("\"result\": \"ok\"");
+            return ok ? new Check(true, title, o.Trim())
+                      : new Check(false, title, "Collector startet nicht mit der vorgesehenen Python-Laufzeit" +
+                                                (e.Trim() == "" ? "." : ": " + e.Trim().Split((char)10)[^1].Trim()));
+        }
+        catch (Exception ex) { return new Check(false, title, "Pruefung nicht moeglich: " + ex.Message); }
+    }
+
+    /// <summary>Schreibt die gemeinsame Recorder-Konfiguration (idempotent) und liest sie zurueck.</summary>
+    public static Check RecorderRootConfigured(string dataDir)
+    {
+        const string title = "Recorder-Ausgabeordner";
+        try
+        {
+            string want = AppPaths.Recordings(dataDir);
+            OrderFlowTools.SharedDataRoot.Write(want);
+            string? got = OrderFlowTools.SharedDataRoot.Read();
+            return OrderFlowTools.SharedDataRoot.SamePath(got, want)
+                ? new Check(true, title, $"{want}  (gemeinsame Konfiguration: {OrderFlowTools.SharedDataRoot.ConfigPath})")
+                : new Check(false, title, $"Gemeinsame Konfiguration enthaelt '{got ?? "(nichts)"}' statt '{want}'.");
+        }
+        catch (Exception ex) { return new Check(false, title, "Gemeinsame Konfiguration nicht schreibbar: " + ex.Message); }
+    }
+
+    /// <summary>Installierte Recorder-DLL vorhanden und faehig, die gemeinsame Konfiguration zu lesen? Eine aeltere DLL
+    /// (fester Standardpfad) ist nur zulaessig, wenn der Datenordner genau diesem alten Standard entspricht.</summary>
+    public static Check RecorderDllReady(string dataDir)
+    {
+        const string title = "Recorder in ATAS";
+        string dll = OrderFlowTools.SharedDataRoot.InstalledRecorderDll;
+        if (!File.Exists(dll)) return new Check(false, title, "Recorder-DLL nicht installiert: " + dll + ". Bitte Setup ausfuehren (ATAS geschlossen).");
+        if (OrderFlowTools.SharedDataRoot.DllSupportsSharedRoot(dll)) return new Check(true, title, "Recorder mit gemeinsamem Datenordner installiert.");
+        string legacy = Path.Combine("F:" + Path.DirectorySeparatorChar, "ATAS_Data", "Recordings");
+        return OrderFlowTools.SharedDataRoot.SamePath(legacy, AppPaths.Recordings(dataDir))
+            ? new Check(true, title, "Aeltere Recorder-DLL (fester Pfad) passt zum gewaehlten Datenordner " + legacy + ".")
+            : new Check(false, title, "Installierte Recorder-DLL ist eine aeltere Version mit festem Ausgabepfad " + legacy +
+                                      " und wuerde NICHT in den gewaehlten Datenordner schreiben. Bitte Setup ausfuehren (ATAS geschlossen).");
     }
 
     private static Check FileCheck(string title, string path)

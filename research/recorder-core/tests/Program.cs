@@ -248,6 +248,9 @@ internal static class Program
             c1.Finish(); c2.Finish();
         }
 
+        Console.WriteLine("\n[SharedDataRoot]");
+        SharedDataRootTests.Run((n, ok, d) => Check(n, ok, d));
+
         Console.WriteLine(_fail == 0 ? "\nRECORDERCORE: ALLE BESTANDEN" : $"\nRECORDERCORE: {_fail} FEHLGESCHLAGEN");
         return _fail == 0 ? 0 : 1;
     }

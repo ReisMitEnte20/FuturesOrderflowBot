@@ -227,7 +227,7 @@ public sealed class MainForm : Form
         _summary.Text =
             $"Session: {s.DisplayName}  |  Zeitzone: {s.TzIana}  |  Geschwindigkeit: {_speed.SelectedItem}  |  Instrument: {_instrument.Text}\n" +
             $"Geplante Aufnahme-Tage: {planned}   (kalendarisch uebersprungen: {skipped})   |   Ausgabe-Collection: {collName}\n" +
-            $"Recorder-Ordner (einmalig in ATAS als 'Output-Ordner' setzen): {recPath}";
+            $"Recorder-Ordner (wird dem Recorder automatisch uebergeben, keine Eingabe in ATAS noetig): {recPath}";
     }
 
     private void BrowseOutput() => ChooseDataDir();
@@ -248,7 +248,7 @@ public sealed class MainForm : Form
     {
         if (string.IsNullOrWhiteSpace(_output.Text)) { MessageBox.Show(this, "Noch kein Datenordner gewaehlt."); return; }
         var rec = AppPaths.Recordings(_output.Text);
-        try { Clipboard.SetText(rec); MessageBox.Show(this, "Recorder-Ordner in die Zwischenablage kopiert:\n\n" + rec + "\n\nDiesen Pfad in ATAS beim Indikator 'OF Replay Recorder' als 'Output-Ordner' eintragen (einmalige Einrichtung).", "Recorder-Ordner", MessageBoxButtons.OK, MessageBoxIcon.Information); }
+        try { Clipboard.SetText(rec); MessageBox.Show(this, "Recorder-Ordner in die Zwischenablage kopiert:\n\n" + rec + "\n\nDer Recorder erhaelt diesen Ordner automatisch ueber die gemeinsame Konfiguration; in ATAS ist keine Eingabe noetig.", "Recorder-Ordner", MessageBoxButtons.OK, MessageBoxIcon.Information); }
         catch (Exception ex) { MessageBox.Show(this, "Kopieren fehlgeschlagen: " + ex.Message); }
     }
 

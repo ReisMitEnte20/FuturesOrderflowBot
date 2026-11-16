@@ -31,6 +31,13 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
+# Skriptordner explizit in den Suchpfad: Eine isolierte Laufzeit (python313._pth der mitgelieferten privaten
+# Python-Laufzeit, ebenso 'python -I') nimmt den Ordner des Skripts NICHT automatisch auf. Ohne diese Zeile
+# scheitert der Import unten dort mit "No module named 'atas_bridge'" (VM-Befund).
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
 import atas_bridge as b   # Wiederverwendung der geprueften reinen Helfer (keine Duplizierung)
 
 COLLECTION_SCHEMA = "atas-collection-trades-1"
@@ -451,6 +458,13 @@ def _fmt_cmp(t):
 # ---------------------------------------------------------------------------
 
 def main(argv=None):
+    # Ausgabe immer als UTF-8: Pfade mit Zeichen ausserhalb der Windows-Codepage (Benutzer-/Ordnernamen) duerfen
+    # die JSON-Ausgabe nicht mit UnicodeEncodeError abbrechen lassen. Die aufrufende Steuerung liest UTF-8.
+    for _st in (sys.stdout, sys.stderr):
+        try:
+            _st.reconfigure(encoding="utf-8", errors="backslashreplace")
+        except Exception:
+            pass
     ap = argparse.ArgumentParser(description="ATAS-Sammellauf: Abschnitt -> gemeinsame Trade-CSV (append/status/compare/recover)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -477,7 +491,14 @@ def main(argv=None):
     pc.add_argument("--start", required=True)
     pc.add_argument("--end", required=True)
 
+    sub.add_parser("selfcheck", help="Importe und Laufzeit pruefen (vor jeder ATAS-Aktion aufrufen)")
+
     a = ap.parse_args(argv)
+    if a.cmd == "selfcheck":
+        import pyarrow
+        print(json.dumps({"result": "ok", "python": sys.version.split()[0], "pyarrow": pyarrow.__version__,
+                          "bridge": os.path.abspath(b.__file__), "schema": COLLECTION_SCHEMA}, ensure_ascii=False))
+        return 0
     if a.cmd == "append":
         r = append_job(a.collection, a.recording, a.job_id, a.start, a.end,
                        session=a.session, year=a.year, timezone_name=a.tz, allow_check_status=a.allow_check)

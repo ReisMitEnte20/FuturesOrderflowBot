@@ -1,3 +1,4 @@
+using OrderFlowTools;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -1182,6 +1183,18 @@ internal static class Program
         Check("Watchdog 60s@1x = 200+60 = 260", PlayWatchdogSeconds(60, 1.0, 200) == 260);
         Check("Watchdog 60s@100x = 200+1 = 201 (NICHT ~0.6s)", PlayWatchdogSeconds(60, 100.0, 200) == 201);
         Check("Watchdog 100x NICHT gleich naiver Division 60/100", PlayWatchdogSeconds(60, 100.0, 200) != (int)Math.Ceiling(60 / 100.0));
+
+        // ---- Vorpruefungen des Sammellaufs (VM-Befunde): Bridge-Selbsttest + Recorder-Ausgabeordner ----
+        Check("Bridge-Selbsttest: rc=0 + result ok -> ok", BridgeSelfcheckOk(0, "{\"result\": \"ok\", \"python\": \"3.13.9\"}"));
+        Check("Bridge-Selbsttest: ModuleNotFoundError (rc=1, leere Ausgabe) -> NICHT ok", !BridgeSelfcheckOk(1, ""));
+        Check("Bridge-Selbsttest: rc=0 ohne result -> NICHT ok", !BridgeSelfcheckOk(0, "irgendwas"));
+        string vmRec = @"C:\Daten mit Leerzeichen\Aufnahmen Überprüfung\Recordings";
+        Check("Pfad: neue DLL + Konfiguration zeigt auf Lauf-Ordner -> ok", RecorderPathVerdict(vmRec, true, true, vmRec + "\\", out _));
+        Check("Pfad: neue DLL + Konfiguration fehlt -> BLOCKER", !RecorderPathVerdict(vmRec, true, true, null, out _));
+        Check("Pfad: neue DLL + Konfiguration zeigt woandershin -> BLOCKER", !RecorderPathVerdict(vmRec, true, true, @"D:\Anders\Recordings", out _));
+        Check("Pfad: alte DLL (fester F:-Pfad) + anderer Datenordner -> BLOCKER (VM-Fall)", !RecorderPathVerdict(vmRec, true, false, vmRec, out var legacyMsg) && legacyMsg.Contains("aeltere Version"));
+        Check("Pfad: alte DLL + Lauf nutzt genau den alten festen Pfad -> ok (bestehender lokaler Betrieb)", RecorderPathVerdict(LegacyRecorderRoot, true, false, null, out _));
+        Check("Pfad: keine DLL installiert -> BLOCKER", !RecorderPathVerdict(vmRec, false, false, vmRec, out _));
         Check("Watchdog Boden geschwindigkeitsunabhaengig (>= 200)", PlayWatchdogSeconds(180, 100.0, 200) >= 200);
 
         // ---- SAMMELLAUF: stabile Job-ID + Wiederanlauf-Auswahl (keine Doppelaufnahme erledigter Auftraege) ----
@@ -1580,6 +1593,37 @@ internal static class Program
     }
 
     // Eigenständiges, kontrolliertes Entfernen des Recorders am Zielchart (Cleanup). Verifiziert per Dateisystem.
+    // Entfernt nach einem fruehen Abbruch den von diesem Auftrag angehaengten Recorder. Nutzt dieselben Bausteine wie der
+    // regulaere Abschluss (Replay-Ansicht verlassen -> Indikator-Dialog -> Zeile entfernen -> Uebernehmen) und handelt nur,
+    // wenn der Dialog den Recorder unter 'Hinzugefuegt' tatsaechlich zeigt. true = danach kein Recorder mehr angehaengt.
+    private static bool RemoveRecorderAfterAbort(Action<string> W)
+    {
+        W("  [abbruch-cleanup] angehaengten Recorder entfernen …");
+        CloseDateDialogIfOpen(W);
+        if (ReplayOpen() || !IndicatorsEnabled()) ExitReplayView(W);
+        for (int i = 0; i < 10 && !IndicatorsEnabled(); i++) Thread.Sleep(1000);
+        if (!OpenIndicatorDialog(W)) { W("  [abbruch-cleanup] Indikator-Dialog nicht zugaenglich."); return false; }
+        var dlg = IndicatorDialog();
+        if (dlg == null) return false;
+        var st = AddedState(dlg);
+        if (!st.hasRecorder)
+        {
+            W("  [abbruch-cleanup] kein Recorder unter 'Hinzugefuegt' -> nichts zu entfernen.");
+            var ap = FindBtnIn(dlg, "Übernehmen"); if (ap != null) Invoke(ap);
+            return LockedCount() == 0;
+        }
+        RemoveSelectedRecorderRelative(W);
+        for (int i = 0; i < 20 && LockedCount() > 0; i++) Thread.Sleep(1000);
+        Thread.Sleep(800);
+        bool stillThere = false;
+        if (OpenIndicatorDialog(W))
+        {
+            var d2 = IndicatorDialog();
+            if (d2 != null) { stillThere = AddedState(d2).hasRecorder; var ap2 = FindBtnIn(d2, "Übernehmen"); if (ap2 != null) Invoke(ap2); }
+        }
+        return !stillThere && LockedCount() == 0;
+    }
+
     private static int RemoveRecorderStandalone()
     {
         void W(string s) => Console.WriteLine(s);
@@ -1867,6 +1911,7 @@ internal static class Program
         if (Process.GetProcessesByName("OFT.Platform").Length == 0) { W("BLOCKER: ATAS laeuft nicht."); return 3; }
 
         string? attrFolder = null; string attrRunId = ""; int rc = -1; bool cleanupOk = false;
+        bool recorderAddedByJob = false;  // dieser Auftrag hat einen Recorder angehaengt -> bei fruehem Abbruch wieder entfernen
         // GETRENNTE Teilergebnisse (Erfolg nur, wenn ALLE erforderlichen erfuellt sind):
         bool endProven = false;          // unabhaengiges, verdrahtetes Replay-ENDSIGNAL erreicht? (sonst Unproven)
         bool dataWindowRecorded = false; // Daten-KORROBORATION: Fortschritt bis Ende waehrend Abspielen (KEIN Endbeweis)
@@ -1897,6 +1942,9 @@ internal static class Program
             }
             if (editSeen < 2) throw new AbortRun(4, "BLOCKER: Chart nicht stabil editierbar ('Indikatoren' inaktiv) nach Replay-Verlassen.");
             W("[2] Chart editierbar ('Indikatoren' aktiv, stabil).");
+            // Replay-Oeffner VOR dem Hinzufuegen pruefen: fehlt er, wird gar nicht erst ein Recorder angehaengt
+            // (VM-Befund: frueher Abbruch in Phase 4 liess einen Recorder am Chart zurueck).
+            if (FindIdAny("RibbonReplayButton") == null) throw new AbortRun(4, "BLOCKER: RibbonReplayButton fehlt (vor dem Hinzufuegen geprueft; kein Recorder angehaengt).");
             // ---- Phase 3: Recorder pruefen, bei Bedarf hinzufuegen (Verifikation per Dateisystem) ----
             if (LockedCount() >= 1) W($"[3] Recorder bereits aktiv ({LockedCount()} gesperrte Instanz) -> kein Hinzufuegen noetig.");
             else
@@ -1904,10 +1952,19 @@ internal static class Program
                 W("[3] Kein aktiver Recorder -> hinzufuegen (UIA-Dialog, favoritenunabhaengig: Kategorie 'All' + Suche + exakter Treffer)");
                 var before = FolderSet();
                 if (!AddRecorderViaDialog(W)) throw new AbortRun(6, "BLOCKER: Recorder-Hinzufuegen (UIA) fehlgeschlagen.");
+                recorderAddedByJob = true;
                 bool added = false;
                 for (int i = 0; i < 15 && !added; i++) { Thread.Sleep(1000); added = FolderSet().Except(before).Any(f => IsMetaLocked(Path.Combine(RecordingsDir, f, "meta.json"))); }
-                if (!added) throw new AbortRun(6, "BLOCKER: Recorder-Hinzufuegen nicht per Dateisystem bestaetigt (kein neuer gesperrter Ordner).");
+                if (!added) throw new AbortRun(6, $"BLOCKER: Recorder-Hinzufuegen nicht per Dateisystem bestaetigt (kein neuer gesperrter Ordner unter '{RecordingsDir}'). " +
+                    "Der Recorder schreibt nicht in den erwarteten Ordner oder ist beim Start abgebrochen.");
                 W("[3] Recorder hinzugefuegt + aktiv (neuer gesperrter Ordner).");
+                // Tatsaechlichen Schreibpfad belegen: neuer Ordner liegt unter RecordingsDir; der Recorder nennt zusaetzlich
+                // seine Quelle in meta.json (ab proto-2c). Aeltere DLLs schreiben diese Felder nicht.
+                foreach (var nf in FolderSet().Except(before))
+                {
+                    var mp0 = Path.Combine(RecordingsDir, nf, "meta.json");
+                    W($"[3] Schreibpfad: {Path.Combine(RecordingsDir, nf)}  recorder='{ReadMetaField(mp0, "recorder")}' outputRoot='{ReadMetaField(mp0, "outputRoot")}' quelle='{ReadMetaField(mp0, "outputRootSource")}'");
+                }
             }
             tBed += swB.Elapsed.TotalSeconds;
 
@@ -2245,6 +2302,14 @@ internal static class Program
             // Cleanup: Replay sicher verlassen (layout-robuster Cluster-Finder, nicht nur Fenstertitel); Status protokollieren.
             try { if (ReplayOpen()) { var rb = FindIdAny("RibbonReplayButton"); if (rb != null) Invoke(rb); for (int i = 0; i < 8 && ReplayOpen(); i++) Thread.Sleep(1000); } } catch { }
             cleanupOk = !ReplayOpen();
+            // Frueher Abbruch NACH dem Anhaengen (VM-Befund 'Recorder bleibt zurueck'): den von DIESEM Auftrag angehaengten
+            // Recorder ueber den bewaehrten Dialogweg wieder entfernen. Nur im Abbruchfall, einmal, ohne Wiederholungsschleife.
+            if (rc != -1 && recorderAddedByJob && !recorderRemoved)
+            {
+                try { recorderRemoved = RemoveRecorderAfterAbort(W); }
+                catch (Exception ex) { W($"  [abbruch-cleanup] Fehler beim Entfernen: {ex.GetType().Name}: {ex.Message}"); }
+                W($"  [abbruch-cleanup] Recorder nach Abbruch entfernt: {recorderRemoved}{(recorderRemoved ? "" : "  -> BITTE in ATAS pruefen und den Indikator 'OF Replay Recorder' von Hand entfernen.")}");
+            }
         }
 
         // ---- Phase 12: Finalisierung der zugeordneten Aufnahme pruefen ----
@@ -2362,6 +2427,20 @@ internal static class Program
         if (!DriveReadyWritable(collDir, out var crs)) { W("BLOCKER: " + crs); Flush(sb, outFile); return 3; }
         if (!DriveReadyWritable(RecordingsDir, out var rrs)) { W("BLOCKER: " + rrs); Flush(sb, outFile); return 3; }
         if (!File.Exists(script)) { W($"BLOCKER: Collector-Skript fehlt: {script}"); Flush(sb, outFile); return 3; }
+        // ---- Vorpruefungen OHNE jede ATAS-Aktion (VM-Befunde): Bridge startfaehig? Recorder schreibt in DIESEN Ordner? ----
+        // Frueher fiel ein nicht importierbares atas_bridge erst NACH der Aufnahme beim Anhaengen auf.
+        var (scCode, scOut, scErr) = RunPython(py, new[] { script, "selfcheck" });
+        if (!BridgeSelfcheckOk(scCode, scOut))
+        {
+            W($"BLOCKER: Bridge-Selbsttest fehlgeschlagen (rc={scCode}): {(scErr.Trim() == "" ? scOut.Trim() : scErr.Trim())}");
+            W("  -> keine ATAS-Aktion ausgefuehrt. Python-Laufzeit/Bridge pruefen (Setup erneut ausfuehren).");
+            Flush(sb, outFile); return 3;
+        }
+        W($"# Bridge-Selbsttest ok: {scOut.Trim()}");
+        var pathVerdict = RecorderPathVerdict(RecordingsDir, File.Exists(SharedDataRoot.InstalledRecorderDll),
+            SharedDataRoot.DllSupportsSharedRoot(SharedDataRoot.InstalledRecorderDll), SharedDataRoot.Read(), out var pathMsg);
+        W((pathVerdict ? "# Recorder-Ausgabeordner ok: " : "BLOCKER: ") + pathMsg);
+        if (!pathVerdict) { W("  -> keine ATAS-Aktion ausgefuehrt."); Flush(sb, outFile); return 3; }
         if (Process.GetProcessesByName("OFT.Platform").Length == 0) { W("BLOCKER: ATAS laeuft nicht."); Flush(sb, outFile); return 3; }
         if (keepAttached) W("# HINWEIS: keepRecorderAttached=true ist eine noch nicht live-verifizierte Variante. Dieser Lauf nutzt weiterhin den bewaehrten add/remove-Pfad je Fenster (saubere, finalisierte Ordnertrennung; Voraussetzung fuer das sichere Anhaengen).");
 
@@ -2419,10 +2498,35 @@ internal static class Program
         return (stopReason == "" && allDone) ? 0 : 8;
     }
 
+    internal static bool BridgeSelfcheckOk(int code, string stdout) => code == 0 && ExtractJsonField(stdout, "result") == "ok";
+
+    // Alter fest eingebauter Standardpfad der Recorder-DLL 'proto-2-bufferfix' (nur noch zur Erkennung, kein Schreibziel).
+    internal static readonly string LegacyRecorderRoot = Path.Combine("F:" + Path.DirectorySeparatorChar, "ATAS_Data", "Recordings");
+
+    // Schreibt der in ATAS installierte Recorder in den Ordner, in dem dieser Lauf die Aufnahme sucht?
+    //  - DLL mit gemeinsamer Konfiguration: die Konfiguration muss GENAU auf den Recordings-Ordner dieses Laufs zeigen.
+    //  - aeltere DLL (fester Pfad): nur zulaessig, wenn der Lauf genau diesen festen Pfad benutzt.
+    internal static bool RecorderPathVerdict(string recordingsDir, bool dllInstalled, bool dllSupportsSharedRoot, string? sharedConfig, out string msg)
+    {
+        if (!dllInstalled) { msg = $"Recorder-DLL nicht installiert ({SharedDataRoot.InstalledRecorderDll})."; return false; }
+        if (dllSupportsSharedRoot)
+        {
+            if (SharedDataRoot.SamePath(sharedConfig, recordingsDir)) { msg = $"{recordingsDir} (gemeinsame Konfiguration stimmt)"; return true; }
+            msg = $"gemeinsame Recorder-Konfiguration zeigt auf '{sharedConfig ?? "(nicht gesetzt)"}', dieser Lauf erwartet '{recordingsDir}'. " +
+                  "Datenordner in der Oberflaeche neu waehlen oder Setup erneut ausfuehren.";
+            return false;
+        }
+        if (SharedDataRoot.SamePath(LegacyRecorderRoot, recordingsDir)) { msg = $"{recordingsDir} (aeltere Recorder-DLL mit festem Pfad, passt)"; return true; }
+        msg = $"installierte Recorder-DLL ist eine aeltere Version mit festem Ausgabepfad '{LegacyRecorderRoot}' und wuerde NICHT nach " +
+              $"'{recordingsDir}' schreiben. Setup bei geschlossenem ATAS erneut ausfuehren.";
+        return false;
+    }
+
     // Python-Collector ausfuehren -> (ExitCode, stdout, stderr). Keine Shell; Argumente einzeln (kein Quoting-Risiko).
     private static (int code, string stdout, string stderr) RunPython(string py, string[] args)
     {
-        var psi = new ProcessStartInfo { FileName = py, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+        var psi = new ProcessStartInfo { FileName = py, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8 };   // Collector schreibt UTF-8 (Pfade mit Umlauten)
         foreach (var a in args) psi.ArgumentList.Add(a);
         try
         {

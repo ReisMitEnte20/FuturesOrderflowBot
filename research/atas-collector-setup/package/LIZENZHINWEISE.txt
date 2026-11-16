@@ -1,0 +1,36 @@
+LIZENZHINWEISE - ATAS Session Collector (All-in-one-Paket)
+===========================================================
+
+Dieses Paket buendelt Fremdkomponenten. Deren Lizenzen gelten unveraendert fort.
+
+1) Python (private Laufzeit im Ordner "python\")
+   - CPython 3.13.9, (c) Python Software Foundation.
+   - Lizenz: PSF License Agreement. Volltext: python\LICENSE.txt.
+   - Enthalten sind die Standardbibliothek und das unten genannte Paket; Teile wie
+     tkinter/tests/idle wurden entfernt.
+
+2) PyArrow 26.0.0 (python\Lib\site-packages\pyarrow\)
+   - Apache License, Version 2.0 (Apache Software Foundation / Apache Arrow).
+   - Volltext und Hinweise: python\Lib\site-packages\pyarrow-26.0.0.dist-info\licenses\LICENSE.txt
+     und NOTICE.txt (dort auch die Lizenzen der gebuendelten Bibliotheken in pyarrow\ und pyarrow.libs\).
+
+3) .NET 8 Laufzeit (in Setup.exe, AtasSessionCollector.exe und AtasReplayProbe.exe self-contained gebuendelt)
+   - (c) .NET Foundation und Mitwirkende / Microsoft Corporation. Lizenz: MIT License.
+   - Volltext: https://github.com/dotnet/runtime/blob/main/LICENSE.TXT
+   - Hinweise zu Drittkomponenten: https://github.com/dotnet/runtime/blob/main/THIRD-PARTY-NOTICES.TXT
+   - Microsoft Visual C++ Runtime (python\vcruntime140*.dll) unter den Microsoft-Weitergabebedingungen.
+
+4) Projekteigene Komponenten ("FuturesOrderflowBot" / ATAS Session Collector)
+   - Setup.exe, AtasSessionCollector.exe, AtasReplayProbe.exe, bridge\*.py und OrderFlowReplayRecorder.dll:
+     Quelltext im Repository ReisMitEnte20/FuturesOrderflowBot unter research\
+     (Quellstand siehe VERSION-UND-HASHES.txt).
+   - OrderFlowReplayRecorder.dll ist ein projekteigener ATAS-Indikator, gegen die ATAS-Indikator-API gebaut.
+     Die DLL enthaelt keine ATAS-Bibliotheken und laeuft nur in einer eigenen ATAS-Installation.
+   - Das Repository enthaelt keine Lizenzdatei; es wird keine Open-Source-Lizenz eingeraeumt.
+
+5) ATAS
+   - ATAS ist NICHT Teil dieses Pakets und wird separat unter der eigenen ATAS-Lizenz installiert.
+     Es werden keine ATAS-Binaries, -Lizenzen oder -Kontodaten mitgeliefert.
+
+Keine Gewaehr; Nutzung auf eigenes Risiko im Rahmen der jeweiligen Lizenzen.
+Research-/Simulation-Only: keine Live-Ausfuehrung, keine Broker-Anbindung, keine Orders.

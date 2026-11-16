@@ -44,6 +44,9 @@ public static class AppPaths
     /// <summary>Datenordner dauerhaft speichern (portabel neben der EXE; sonst %APPDATA%).</summary>
     public static void SaveDataDir(string dir)
     {
+        // Gemeinsame Recorder-Konfiguration mitschreiben: Der Recorder (in ATAS) liest sie bei jedem Instanzstart.
+        // Fehler hier werden nicht verschluckt-und-vergessen: die Voraussetzungspruefung liest die Datei zurueck.
+        try { OrderFlowTools.SharedDataRoot.Write(Recordings(dir)); } catch { }
         var json = JsonSerializer.Serialize(new Cfg { dataDir = dir }, new JsonSerializerOptions { WriteIndented = true });
         try
         {
