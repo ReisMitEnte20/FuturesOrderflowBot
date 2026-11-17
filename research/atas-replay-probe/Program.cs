@@ -17,7 +17,7 @@ namespace AtasReplayProbe;
 ///                (AutomationId/Name/ControlType/Patterns) des Replay-Bereichs.
 /// Es wird NICHTS in ATAS gepatcht/injiziert und NICHTS geklickt. Reine Analyse.
 /// </summary>
-internal static class Program
+internal static partial class Program
 {
     private const string AtasDir = @"C:\Program Files (x86)\ATAS Platform";
 
@@ -30,6 +30,7 @@ internal static class Program
             {
                 "api-scan" => ApiScan(args.Length > 1 ? args[1] : null),
                 "uia-dump" => UiaDump(args.Length > 1 ? args[1] : null),
+                "chartdiag" => ChartDiag(args.Skip(1).FirstOrDefault(a => !a.StartsWith("-"))),
                 "drive" => Drive(args.Contains("--go"), args.FirstOrDefault(a => a.EndsWith(".txt"))),
                 "inspect2" => Inspect2(),
                 "inspect-date" => InspectDate(args.FirstOrDefault(a => a.EndsWith(".txt"))),
@@ -93,6 +94,7 @@ internal static class Program
         Console.WriteLine("AtasReplayProbe <api-scan|uia-dump> [outFile]");
         Console.WriteLine("  api-scan : oeffentliche ATAS/OFT-API auf Replay-/Playback-/Status-Steuerung pruefen");
         Console.WriteLine("  uia-dump : laufendes ATAS-Fenster per UI Automation inventarisieren");
+        Console.WriteLine("  chartdiag [datei.txt] : Zielchart-Erkennung pruefen (nur lesen): Prozesse, Fenster, UIA, Chart-Kandidaten, Recorder");
         return 1;
     }
 
@@ -1185,6 +1187,24 @@ internal static class Program
         Check("Watchdog 100x NICHT gleich naiver Division 60/100", PlayWatchdogSeconds(60, 100.0, 200) != (int)Math.Ceiling(60 / 100.0));
 
         // ---- Vorpruefungen des Sammellaufs (VM-Befunde): Bridge-Selbsttest + Recorder-Ausgabeordner ----
+        // ---- Zielchart-Erkennung (VM-Befund 'VulkanChartWpf-Treffer=0'): reine Auswahlfunktion ----
+        ChartCand Cc(string name, string cls = "", string aid = "", string type = "Pane", double x = 100, double y = 100, double w = 900, double h = 600, bool off = false, bool min = false)
+            => new(name, cls, aid, type, "WPF", x, y, w, h, off, "ATAS - Test", min);
+        { var v = SelectChart(new[] { Cc("VulkanChartWpf") }); Check("Chart: genau eine Vulkan-Flaeche -> Unique (bisheriges Verhalten)", v.Kind == ChartVerdictKind.Unique && v.Signal.Contains("VulkanChartWpf")); }
+        { var v = SelectChart(new[] { Cc("VulkanChartWpf", type: "Custom") }); Check("Chart: Vulkan-Flaeche als Custom statt Pane -> Unique", v.Kind == ChartVerdictKind.Unique); }
+        { var v = SelectChart(new[] { Cc("VulkanChartWpf", x: 100), Cc("VulkanChartWpf", x: 1100) }); Check("Chart: zwei Vulkan-Flaechen -> Multiple (keine Groesste-Flaeche-Wahl)", v.Kind == ChartVerdictKind.Multiple && v.Chosen == null); }
+        { var v = SelectChart(new[] { Cc("VulkanChartWpf", x: 100), Cc("VulkanChartWpf", x: 100) }); Check("Chart: dieselbe Flaeche doppelt im UIA-Baum -> Unique", v.Kind == ChartVerdictKind.Unique); }
+        { var v = SelectChart(new[] { Cc("", cls: "DxChartWpf") }); Check("Chart: andere Renderflaeche (Klasse mit 'Chart') ohne Vulkan -> Unique ueber Klasse", v.Kind == ChartVerdictKind.Unique && v.Signal.StartsWith("Klasse")); }
+        { var v = SelectChart(new[] { Cc("ChartControl", w: 1000, h: 700, x: 90, y: 90), Cc("", aid: "ChartSurface", x: 100, y: 120, w: 900, h: 600) }); Check("Chart: Container + innere Flaeche -> innerste gewaehlt, Unique", v.Kind == ChartVerdictKind.Unique && v.Chosen!.AutomationId == "ChartSurface"); }
+        { var v = SelectChart(new[] { Cc("", cls: "DxChartWpf", x: 100), Cc("", cls: "DxChartWpf", x: 1100) }); Check("Chart: zwei andere Renderflaechen -> Multiple", v.Kind == ChartVerdictKind.Multiple); }
+        { var v = SelectChart(new[] { Cc("ChartTrader"), Cc("Chart toolbar", w: 900, h: 400), Cc("", cls: "ChartTabItem") }); Check("Chart: nur Chart-Bedienelemente (Trader/Toolbar/Tab) -> NoneFound", v.Kind == ChartVerdictKind.NoneFound); }
+        { var v = SelectChart(new[] { Cc("ChartTrader", x: 1100), Cc("VulkanChartWpf") }); Check("Chart: Vulkan-Flaeche + ChartTrader -> Unique (Vulkan)", v.Kind == ChartVerdictKind.Unique && v.Chosen!.Name == "VulkanChartWpf"); }
+        { var v = SelectChart(new[] { Cc("VulkanChartWpf", min: true) }); Check("Chart: Fenster minimiert -> OnlyHidden (nicht 'kein Chart')", v.Kind == ChartVerdictKind.OnlyHidden); }
+        { var v = SelectChart(new[] { Cc("VulkanChartWpf", off: true) }); Check("Chart: Flaeche offscreen/verdeckt -> OnlyHidden", v.Kind == ChartVerdictKind.OnlyHidden); }
+        { var v = SelectChart(new[] { Cc("VulkanChartWpf", w: 250, h: 150) }); Check("Chart: zu kleine Flaeche -> OnlyHidden", v.Kind == ChartVerdictKind.OnlyHidden); }
+        { var v = SelectChart(Array.Empty<ChartCand>()); Check("Chart: nichts gefunden -> NoneFound", v.Kind == ChartVerdictKind.NoneFound); }
+        { var v = SelectChart(new[] { Cc("VulkanChartWpf", x: 100), Cc("VulkanChartWpf", x: 1100, min: true) }); Check("Chart: ein sichtbarer + ein minimierter Chart -> Unique (sichtbarer)", v.Kind == ChartVerdictKind.Unique && v.Chosen!.X == 100); }
+
         Check("Bridge-Selbsttest: rc=0 + result ok -> ok", BridgeSelfcheckOk(0, "{\"result\": \"ok\", \"python\": \"3.13.9\"}"));
         Check("Bridge-Selbsttest: ModuleNotFoundError (rc=1, leere Ausgabe) -> NICHT ok", !BridgeSelfcheckOk(1, ""));
         Check("Bridge-Selbsttest: rc=0 ohne result -> NICHT ok", !BridgeSelfcheckOk(0, "irgendwas"));
@@ -2337,9 +2357,11 @@ internal static class Program
         W($"   - Aufnahme gespeichert (Writer beendet + Summary clean + runId-Match): {recordingSaved}");
         W($"   - Replay-ENDE unabhaengig bestaetigt: {endProven} (Status {endStatus}; Daten-Korroboration={dataWindowRecorded} = KEIN Endbeweis)");
         W($"   - Cleanup abgeschlossen (Replay-Ansicht verlassen={replayViewLeft} UND Recorder entfernt={recorderRemoved}): {cleanupDone}");
-        W($"  Zielchart: ein VulkanChartWpf-Pane | Instanz: {attrFolder ?? "-"} runId={attrRunId}");
+        W($"  Zielchart: {_chartDesc} | Instanz: {attrFolder ?? "-"} runId={attrRunId}");
+        string recMeta = attrFolder != null ? ReadMetaField(Path.Combine(RecordingsDir, attrFolder, "meta.json"), "recorder") : "";
+        W($"  Recorder dieser Aufnahme (meta.json): '{(recMeta == "" ? "-" : recMeta)}' | {RecorderIdentity()}");
         W($"  HERKUNFT-GRENZE: ein sichtbarer Chart + neuer gesperrter Ordner ist KEINE vollstaendige Herkunft;");
-        W($"   installierte DLL 'proto-2-bufferfix' bindet KEIN Token (GUID-runId) -> keine token-gebundene Chart/Instanz-Zuordnung.");
+        W($"   die ausgelieferten Recorder-Varianten binden KEIN Lauf-Token (GUID-runId) -> keine token-gebundene Chart/Instanz-Zuordnung.");
         W($"  aufgezeichnete Marktzeit(ticks): {span}; ticks={ticksBytes}B; tz-offset={offMin}min");
         W($"  Replay-Transport geschlossen (cleanup-Teil): {cleanupOk} | aktive gesperrte Instanzen jetzt: {LockedCount()}");
         W($"  [timing] gesamt {swAll.Elapsed.TotalSeconds:F0}s = Bedienung {tBed:F0}s + Laden {tLoad:F0}s + Wiedergabe {tPlay:F0}s");
@@ -2825,30 +2847,6 @@ internal static class Program
         ClickScreen((int)(r.X + r.Width / 2), (int)(r.Y + r.Height / 2)); Thread.Sleep(settleMs);
     }
 
-    // Zielchart eindeutig bestimmen. Mit ATAS_TARGET_CHART: eindeutiger Header-Treffer. Ohne (Default): GENAU EIN
-    // Chart-Pane (VulkanChartWpf) im Prozess -> dieser ist der eindeutige Zielchart (kein Größte-Flächen-Fallback,
-    // da nur ein Chart existiert). Mehrere Charts ohne konfigurierten Namen -> Abbruch.
-    private static bool VerifyTargetChartUnique(Action<string> W)
-    {
-        var roots = AtasRoots();
-        string targetName = Environment.GetEnvironmentVariable("ATAS_TARGET_CHART") ?? "";
-        if (!string.IsNullOrWhiteSpace(targetName))
-        {
-            var headers = FindInRoots(roots, ControlType.Button)
-                .Where(b => Safe(() => b.Current.Name).StartsWith(targetName, StringComparison.OrdinalIgnoreCase))
-                .Select(b => { System.Windows.Rect r; try { r = b.Current.BoundingRectangle; } catch { r = System.Windows.Rect.Empty; } return r; })
-                .Where(r => !r.IsEmpty).ToList();
-            if (headers.Count != 1) { W($"[1] Zielchart '{targetName}' nicht eindeutig (Header-Treffer={headers.Count}) -> Abbruch."); return false; }
-            W($"[1] Zielchart '{targetName}' eindeutig."); return true;
-        }
-        var charts = FindInRoots(roots, ControlType.Pane)
-            .Where(p => Safe(() => p.Current.Name) == "VulkanChartWpf")
-            .Select(p => { System.Windows.Rect r; try { r = p.Current.BoundingRectangle; } catch { r = System.Windows.Rect.Empty; } return r; })
-            .Where(r => !r.IsEmpty && r.Width > 300 && r.Height > 200).ToList();
-        if (charts.Count != 1) { W($"[1] Chart-Pane nicht eindeutig (VulkanChartWpf-Treffer={charts.Count}) -> Abbruch (Zielchart via ATAS_TARGET_CHART konfigurieren)."); return false; }
-        W("[1] Genau ein Chart-Pane (VulkanChartWpf) -> eindeutiger Zielchart."); return true;
-    }
-
     // Stellt Replay auf DATUM-basiert + Zielchart als Modul, sodass 'Datum auswählen' aktiv ist.
     // Transportklicks erfordern aktives Fenster (erster Klick wird sonst verschluckt) -> ForceForeground des Transports.
     private static bool EnsureModule(Action<string> W)
@@ -2871,20 +2869,31 @@ internal static class Program
                 for (int k = 0; k < 3; k++) { if (!mr0.IsEmpty) FgClick(mr0); var m2 = FindBtnAny("Modul auswählen"); try { if (m2 != null) { var tg = m2.GetCurrentPropertyValue(AutomationElement.ControlTypeProperty); } } catch { } if (FindBtnAny("Bar auswählen") != null || FindBtnAny("Datum auswählen") != null) break; }
                 // A4 (Finding 4): KEIN Größte-Fläche-Fallback (ein fremder Chart könnte der größte sein). Stattdessen
                 // den AUSDRÜCKLICH benannten Zielchart über seinen Header identifizieren und bei Mehrdeutigkeit abbrechen.
-                string targetName = Environment.GetEnvironmentVariable("ATAS_TARGET_CHART") ?? "MNQ 4RXV";
-                var roots = AtasRoots();
-                var headers = FindInRoots(roots, ControlType.Button)
-                    .Where(b => Safe(() => b.Current.Name).StartsWith(targetName, StringComparison.OrdinalIgnoreCase))
-                    .Select(b => { System.Windows.Rect r; try { r = b.Current.BoundingRectangle; } catch { r = System.Windows.Rect.Empty; } return r; })
-                    .Where(r => !r.IsEmpty).ToList();
-                if (headers.Count != 1) { W($"[3] Zielchart '{targetName}' nicht eindeutig (Header-Treffer={headers.Count}) -> Abbruch (keine Größte-Fläche-Auswahl)."); return false; }
-                var hx = headers[0].X;
-                var panes = FindInRoots(roots, ControlType.Pane)
-                    .Where(p => Safe(() => p.Current.Name) == "VulkanChartWpf")
-                    .Select(p => { System.Windows.Rect r; try { r = p.Current.BoundingRectangle; } catch { r = System.Windows.Rect.Empty; } return (p, r); })
-                    .Where(t => !t.r.IsEmpty && t.r.Y > 0 && t.r.Width > 300 && t.r.Height > 200 && Math.Abs(t.r.X - hx) < 60).ToList();
-                if (panes.Count != 1) { W($"[3] Zielchart-Pane zu '{targetName}' nicht eindeutig (Pane-Treffer={panes.Count}) -> Abbruch."); return false; }
-                var pr = panes[0].r;
+                // Zielchart-Flaeche zum Anklicken: mit ATAS_TARGET_CHART ueber dessen Header (wie bisher), sonst dieselbe
+                // eindeutige Erkennung wie in Phase 1 (kein fester Chartname, kein fester Renderer-Name, keine Groesste-Flaeche-Wahl).
+                System.Windows.Rect pr;
+                string targetName = Environment.GetEnvironmentVariable("ATAS_TARGET_CHART") ?? "";
+                if (!string.IsNullOrWhiteSpace(targetName))
+                {
+                    var roots = AtasRoots();
+                    var headers = FindInRoots(roots, ControlType.Button)
+                        .Where(b => Safe(() => b.Current.Name).StartsWith(targetName, StringComparison.OrdinalIgnoreCase))
+                        .Select(b => { System.Windows.Rect r; try { r = b.Current.BoundingRectangle; } catch { r = System.Windows.Rect.Empty; } return r; })
+                        .Where(r => !r.IsEmpty).ToList();
+                    if (headers.Count != 1) { W($"[3] Zielchart '{targetName}' nicht eindeutig (Header-Treffer={headers.Count}) -> Abbruch (keine Größte-Fläche-Auswahl)."); return false; }
+                    var hx = headers[0].X;
+                    var cands = ScanChartCandidates().Candidates.Where(c => IsUsable(c) && c.Y > 0 && Math.Abs(c.X - hx) < 60).ToList();
+                    var v3 = SelectChart(cands);
+                    if (v3.Kind != ChartVerdictKind.Unique) { W($"[3] Zielchart-Flaeche zu '{targetName}' nicht eindeutig ({v3.Reason}) -> Abbruch."); return false; }
+                    pr = new System.Windows.Rect(v3.Chosen!.X, v3.Chosen.Y, v3.Chosen.W, v3.Chosen.H);
+                }
+                else
+                {
+                    var v3 = SelectChart(ScanChartCandidates().Candidates);
+                    if (v3.Kind != ChartVerdictKind.Unique) { W($"[3] Zielchart-Flaeche nicht eindeutig ({v3.Reason}) -> Abbruch."); return false; }
+                    pr = new System.Windows.Rect(v3.Chosen!.X, v3.Chosen.Y, v3.Chosen.W, v3.Chosen.H);
+                    targetName = v3.Signal;
+                }
                 W($"[3] Zielchart '{targetName}' rect={(int)pr.X},{(int)pr.Y},{(int)pr.Width}x{(int)pr.Height} -> klicken.");
                 FgClick(pr); Thread.Sleep(900);
             }

@@ -1,4 +1,4 @@
-# ATAS Session Collector 1.3.0 – All-in-one-Paket (Vorabversion)
+# ATAS Session Collector 1.3.1 – All-in-one-Paket (Vorabversion)
 
 Zeichnet ATAS-Replay-Trades lokal auf (Research/Simulation-only: keine Orders, keine Broker-Anbindung, keine
 Kontoänderungen). Dieses Paket enthält alles, was der Collector braucht – außer ATAS selbst.
@@ -52,6 +52,30 @@ fiel er trotzdem auf `F:\ATAS_Data\Recordings` zurück. Das ist in diesem Paket 
 - Vor jeder ATAS-Aktion prüft die Steuerung, dass Bridge und Python starten, dass der installierte Recorder diese
   Datei unterstützt und dass sie auf den Ordner des Laufs zeigt. Sonst bricht sie ab, ohne ATAS anzufassen.
 
+## Wie der Zielchart erkannt wird (neu in 1.3.1)
+
+1.3.0 brach auf einer VM mit „VulkanChartWpf-Treffer=0 / Zielchart nicht eindeutig identifizierbar“ ab: Die Erkennung
+verlangte genau eine UI-Automation-Fläche mit dem Namen `VulkanChartWpf`, also den Namen der Vulkan-Renderfläche von
+ATAS. Ab 1.3.1:
+
+- Zuerst wie bisher die Vulkan-Fläche; gibt es keine, zählt eine sichtbare Fläche, deren Name, Klasse oder
+  AutomationId sie als Chart-Renderfläche ausweist (z. B. bei einer anderen Render-Engine). Bedienelemente wie
+  Chart-Trader, Symbolleisten oder Reiter zählen nicht.
+- Weiter geht es nur bei **genau einem** sichtbaren Chart. Keine Auswahl nach Größe oder Reihenfolge.
+- Schlägt die Erkennung fehl, steht im Protokoll, warum: kein ATAS-Prozess, ATAS-Fenster für UI Automation
+  unsichtbar (z. B. ATAS als Administrator gestartet), kein Chart, mehrere Charts oder Chart minimiert/verdeckt –
+  dazu die vollständige Diagnose. Es wird kein Recorder angehängt.
+
+**Diagnose ohne Aufnahme** (ATAS offen, Chart geöffnet; liest nur, klickt nichts):
+
+```
+"%LOCALAPPDATA%\Programs\ATAS Session Collector\AtasReplayProbe.exe" chartdiag "%USERPROFILE%\Desktop\chartdiag.txt"
+```
+
+Die Datei `chartdiag.txt` auf dem Desktop enthält Prozesse, Fenster, Sitzung und Rechte, Render-Engine laut
+ATAS-Protokoll, alle Chart-Kandidaten mit Name/Klasse/AutomationId/Sichtbarkeit sowie die tatsächlich installierte
+Recorder-DLL (Kennung und SHA-256). Sie enthält keine Zugangsdaten.
+
 ## Was geprüft ist und was nicht
 
 **Geprüft** (Entwicklungsrechner, mit dem frisch entpackten ZIP, Skript `test-package.ps1` im Repository):
@@ -71,10 +95,12 @@ fiel er trotzdem auf `F:\ATAS_Data\Recordings` zurück. Das ist in diesem Paket 
 - **Der neue Recorder ist noch nie in ATAS gelaufen.** Dass ATAS ihn lädt und dass er tatsächlich in den gewählten
   Ordner schreibt, ist nur über Tests außerhalb von ATAS belegt. Gleiches gilt für Entfernen/Hinzufügen,
   Replay-Neuladen und ATAS-Neustart.
-- Kein Aufnahmelauf mit Version 1.3.0. Der Aufnahmeablauf selbst ist gegenüber 1.2.x unverändert, aber die
+- Kein Aufnahmelauf mit Version 1.3.x. Der Aufnahmeablauf selbst ist gegenüber 1.2.x unverändert, aber die
   Kombination ist ungetestet.
 - Betrieb in einer VM, RDP-Trennung, gesperrter Bildschirm, andere Auflösung/Skalierung.
 - Das automatische Entfernen des Recorders nach einem frühen Abbruch ist neu und nur außerhalb von ATAS übersetzt, nicht live erprobt.
+- Die neue Chart-Erkennung ist mit synthetischen Fällen getestet, aber nicht mit dem UI-Baum der VM. Ob die VM-Ursache
+  ein anderer Renderer-Name ist, ist eine Vermutung; die Diagnose oben zeigt es.
 
 **Bekannte, hier nicht behobene Punkte aus früheren VM-Läufen** (dafür lagen keine Protokolle vor):
 

@@ -13,7 +13,7 @@
 # .NET-10-Laufzeit inkl. Windows Desktop. Nichts davon wird auf dem Zielrechner benoetigt.
 param(
     [Parameter(Mandatory = $true)] [string]$PythonDir,
-    [string]$Version = '1.3.0',
+    [string]$Version = '1.3.1',
     [string]$OutDir = '',
     [switch]$AllowDirty
 )
@@ -120,7 +120,7 @@ Alle Installationsdateien einzeln: payload\manifest.json (Setup prueft sie vor u
 
 Herkunft
 --------
-- Setup.exe, AtasSessionCollector.exe (1.3.0), AtasReplayProbe.exe (1.3.0): mit 'dotnet publish' aus dem oben genannten
+- Setup.exe, AtasSessionCollector.exe ($Version), AtasReplayProbe.exe ($Version): mit 'dotnet publish' aus dem oben genannten
   Commit gebaut (self-contained .NET 8, eine Datei je Programm). Die Programme tragen den Commit als Produktversion.
 - bridge\*.py: unveraenderte Kopien aus research\data-bridge\ dieses Commits.
 - Recorder-DLL: Variante 'proto-2c-sharedroot', deterministisch gebaut aus
