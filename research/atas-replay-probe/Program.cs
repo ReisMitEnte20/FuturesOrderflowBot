@@ -21,8 +21,13 @@ internal static partial class Program
 {
     private const string AtasDir = @"C:\Program Files (x86)\ATAS Platform";
 
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool SetProcessDpiAwarenessContext(IntPtr ctx);
+
     private static int Main(string[] args)
     {
+        // Per-Monitor-DPI (V2): UIA-Rechtecke, Screenshots und Mausposition liegen dann im selben physischen Pixelraum,
+        // auch bei 125/150 % Skalierung oder RDP. Schlaegt es fehl (aelteres Windows), bleibt die Voreinstellung.
+        try { SetProcessDpiAwarenessContext(new IntPtr(-4)); } catch { }
         var cmd = args.Length > 0 ? args[0].ToLowerInvariant() : "help";
         try
         {
@@ -61,7 +66,7 @@ internal static partial class Program
                 "twojobs" => TwoJobs(args.FirstOrDefault(a => a.EndsWith(".txt"))),
                 "collect" => Collect(args.Skip(1).FirstOrDefault(a => a.EndsWith(".json")), args.FirstOrDefault(a => a.EndsWith(".txt"))),
                 "speedprobe" => SpeedProbe(args.FirstOrDefault(a => a.EndsWith(".txt"))),
-                "rmrec" => RemoveRecorderStandalone(),
+                "rmrec" => RemoveRecorderCommand(args.Skip(1).FirstOrDefault(a => !a.StartsWith("-"))),
                 "playerprobe" => PlayerProbe(args.FirstOrDefault(a => a.EndsWith(".txt"))),
                 "replaymenu" => ReplayMenu(args.FirstOrDefault(a => a.EndsWith(".txt"))),
                 "exitview" => ExitViewCmd(),
@@ -392,7 +397,7 @@ internal static partial class Program
     // (<ExeDir>\ATAS_Data\Recordings). Fehlt das Ziel oder ist es nicht beschreibbar, bricht DriveReadyWritable
     // mit klarer Meldung ab (kein stilles Umlenken auf C:).
     private static readonly string RecordingsDir =
-        Environment.GetEnvironmentVariable("ATAS_RECORDINGS_DIR") ?? Path.Combine(AppContext.BaseDirectory, "ATAS_Data", "Recordings");
+        Environment.GetEnvironmentVariable("ATAS_RECORDINGS_DIR") ?? SharedDataRoot.Read() ?? Path.Combine(AppContext.BaseDirectory, "ATAS_Data", "Recordings");
 
     // Laufwerk vorhanden + Ordner beschreibbar? Klarer Fehler statt stillem Fallback (portabel, kein festes F:).
     private static bool DriveReadyWritable(string dir, out string reason)
@@ -1187,6 +1192,37 @@ internal static partial class Program
         Check("Watchdog 100x NICHT gleich naiver Division 60/100", PlayWatchdogSeconds(60, 100.0, 200) != (int)Math.Ceiling(60 / 100.0));
 
         // ---- Vorpruefungen des Sammellaufs (VM-Befunde): Bridge-Selbsttest + Recorder-Ausgabeordner ----
+        // ---- Recorder entfernen: Wirkungspruefung + Symbolsuche im Zeilenbild (VM-Befund: Papierkorb verfehlt) ----
+        AddedRow Row(int i, string txt, string ocr = "") => new(i, new System.Windows.Rect(600, 450 + 22 * i, 580, 21), txt, ocr);
+        {
+            var b0 = new[] { Row(0, "Big trades"), Row(1, "OF Replay Recorder (read-only)"), Row(2, "Volume Profile & TPO") };
+            Check("Entfernen: genau Recorder weg, Rest gleich -> bestaetigt", OnlyRecorderRemoved(b0, new[] { Row(0, "Big trades"), Row(1, "Volume Profile & TPO") }, out _));
+            Check("Entfernen: falsche Zeile entfernt -> NICHT bestaetigt", !OnlyRecorderRemoved(b0, new[] { Row(0, "OF Replay Recorder (read-only)"), Row(1, "Volume Profile & TPO") }, out _));
+            Check("Entfernen: nichts passiert -> NICHT bestaetigt", !OnlyRecorderRemoved(b0, b0, out _));
+            Check("Entfernen: Recorder + weiterer Indikator weg -> NICHT bestaetigt", !OnlyRecorderRemoved(b0, new[] { Row(0, "Big trades") }, out _));
+            Check("Entfernen: Recorder nur per OCR lesbar -> erkannt und bestaetigt",
+                  OnlyRecorderRemoved(new[] { Row(0, "", "Big trades"), Row(1, "", "OF Replay Recorder (read-only)") }, new[] { Row(0, "", "Big trades") }, out _));
+            Check("Entfernen: zwei Recorder-Zeilen -> NICHT bestaetigt (nicht eindeutig)",
+                  !OnlyRecorderRemoved(new[] { Row(0, "OF Replay Recorder (read-only)"), Row(1, "OF Replay Recorder (read-only)") }, new[] { Row(0, "OF Replay Recorder (read-only)") }, out _));
+        }
+        {
+            using var bmp = new System.Drawing.Bitmap(580, 22);
+            using (var g = System.Drawing.Graphics.FromImage(bmp))
+            {
+                g.Clear(System.Drawing.Color.FromArgb(37, 37, 38));
+                g.FillRectangle(System.Drawing.Brushes.White, 10, 6, 180, 10);      // Text
+                g.FillRectangle(System.Drawing.Brushes.LightGray, 500, 4, 14, 14);  // Symbol 1
+                g.FillRectangle(System.Drawing.Brushes.LightGray, 530, 4, 14, 14);  // Symbol 2
+                g.FillRectangle(System.Drawing.Brushes.IndianRed, 556, 4, 14, 14);  // Symbol 3 (Papierkorb)
+            }
+            var blobs = FindIconBlobs(bmp, new List<(int, int)> { (10, 190) });
+            Check("Symbolsuche: drei Symbole rechts, Text ausgeschlossen", blobs.Count == 3 && blobs.All(b => b.cx > 400), string.Join(",", blobs.Select(b => b.cx)));
+            Check("Symbolsuche: Mittelpunkte innerhalb der Symbole", blobs.Any(b => Math.Abs(b.cx - 563) <= 2 && Math.Abs(b.cy - 11) <= 2));
+            using var empty = new System.Drawing.Bitmap(580, 22);
+            using (var g = System.Drawing.Graphics.FromImage(empty)) { g.Clear(System.Drawing.Color.FromArgb(37, 37, 38)); g.FillRectangle(System.Drawing.Brushes.White, 10, 6, 180, 10); }
+            Check("Symbolsuche: ohne Symbole -> keine Kandidaten (kein Blindklick)", FindIconBlobs(empty, new List<(int, int)> { (10, 190) }).Count == 0);
+        }
+
         // ---- Zielchart-Erkennung (VM-Befund 'VulkanChartWpf-Treffer=0'): reine Auswahlfunktion ----
         ChartCand Cc(string name, string cls = "", string aid = "", string type = "Pane", double x = 100, double y = 100, double w = 900, double h = 600, bool off = false, bool min = false)
             => new(name, cls, aid, type, "WPF", x, y, w, h, off, "ATAS - Test", min);
@@ -1402,7 +1438,6 @@ internal static partial class Program
     private const int IND_ROW_X = 770, IND_ROW_Y = 586;          // Hinzugefuegt-Zeile
     private const int IND_TRASH_X = 1074, IND_TRASH_Y = 586;     // Entfernen (Papierkorb)
     private const int IND_APPLY_X = 1402, IND_APPLY_Y = 762;     // Uebernehmen
-    private const int CHART_TAB_X = 1255, CHART_TAB_Y = 174;     // 'Chart'-Reiter (aus Replay-Ansicht zurueck)
 
     private static AutomationElement? MainWin()
         => AtasRoots().FirstOrDefault(w => Safe(() => w.Current.Name).StartsWith("ATAS", StringComparison.OrdinalIgnoreCase));
@@ -1440,17 +1475,6 @@ internal static partial class Program
     // Recorder-Zeile entfernen GEOMETRIE-UNABHAENGIG: Klickpunkte relativ zum aktuellen Dialog-Rect
     // (fester Dialog 997x532). Offsets live gegen ATAS verifiziert; ersetzt die bildschirmfesten IND_*-Koordinaten,
     // die nur bei 1920x1080-maximiert trafen. Zeile waehlen -> Papierkorb -> Uebernehmen.
-    private static bool RemoveSelectedRecorderRelative(Action<string> W)
-    {
-        var dlg = IndicatorDialog();
-        if (dlg == null) { W("  [rm] Dialog nicht gefunden."); return false; }
-        System.Windows.Rect r; try { r = dlg.Current.BoundingRectangle; } catch { W("  [rm] Dialog ohne Rect."); return false; }
-        ClickMain((int)(r.X + 300), (int)(r.Y + 331));   // 'Hinzugefuegt'-Zeile selektieren
-        ClickMain((int)(r.X + 613), (int)(r.Y + 331));   // Papierkorb der Zeile
-        ClickMain((int)(r.X + 941), (int)(r.Y + 508));   // Uebernehmen
-        return true;
-    }
-
     private static int LockedCount() => Directory.Exists(RecordingsDir)
         ? Directory.GetDirectories(RecordingsDir).Count(d => IsMetaLocked(Path.Combine(d, "meta.json"))) : 0;
 
@@ -1468,24 +1492,33 @@ internal static partial class Program
             .Select(b => { System.Windows.Rect r; try { r = b.Current.BoundingRectangle; } catch { r = System.Windows.Rect.Empty; } return (b, r); })
             .Where(t => !t.r.IsEmpty && t.r.Y >= 0).OrderBy(t => t.r.Y).Select(t => t.b).FirstOrDefault();
 
+    // 'Chart'-Reiter des Menuebands per UIA (SelectionItem/Invoke) statt fester Koordinaten.
+    private static void SelectChartRibbonTab(Action<string> W)
+    {
+        var tab = FindInRoots(AtasRoots(), ControlType.TabItem).FirstOrDefault(t => Safe(() => t.Current.Name).Trim().Equals("Chart", StringComparison.OrdinalIgnoreCase));
+        if (tab == null) { W("  [ind] 'Chart'-Reiter per UIA nicht gefunden."); return; }
+        try { if (tab.TryGetCurrentPattern(SelectionItemPattern.Pattern, out var p)) { ((SelectionItemPattern)p).Select(); return; } } catch { }
+        if (!Invoke(tab)) ClickElement(tab);
+    }
+
     private static bool OpenIndicatorDialog(Action<string> W)
     {
         if (IndicatorDialog() != null) return true;   // bereits offen
         for (int attempt = 0; attempt < 3; attempt++)
         {
             // Falls der Chart in Replay-Ansicht ist, zuerst 'Chart'-Reiter aktivieren (sonst oeffnet die Toolbar den Datum-Dialog).
-            if (attempt > 0) { ClickMain(CHART_TAB_X, CHART_TAB_Y); Thread.Sleep(500); }
+            if (attempt > 0) { SelectChartRibbonTab(W); Thread.Sleep(500); }
             var btn = FindIndicatorsButton();
             bool invoked = false;
             if (IsEnabledSafe(btn)) { try { invoked = Invoke(btn!); } catch { invoked = false; } }   // UIA-Invoke (zuverlaessig)
             if (!invoked && btn != null) { ClickElement(btn); invoked = true; }                        // sonst echter Klick am Button
-            if (!invoked) ClickMain(722, 174);
+            if (!invoked) W("  [ind] 'Indikatoren'-Schaltflaeche per UIA nicht gefunden (kein Klick auf feste Koordinaten).");
             Thread.Sleep(1300);
             if (FindIdAny("StartEdit") != null)   // versehentlich Datum-Dialog -> Chart-Ansicht noetig
             {
                 W("  [ind] Datum-Dialog statt Indikatoren -> schließen + 'Chart'-Reiter aktivieren");
                 CloseDateDialogIfOpen(W);
-                ClickMain(CHART_TAB_X, CHART_TAB_Y);
+                SelectChartRibbonTab(W);
                 Thread.Sleep(600);
                 continue;
             }
@@ -1622,42 +1655,10 @@ internal static partial class Program
         CloseDateDialogIfOpen(W);
         if (ReplayOpen() || !IndicatorsEnabled()) ExitReplayView(W);
         for (int i = 0; i < 10 && !IndicatorsEnabled(); i++) Thread.Sleep(1000);
-        if (!OpenIndicatorDialog(W)) { W("  [abbruch-cleanup] Indikator-Dialog nicht zugaenglich."); return false; }
-        var dlg = IndicatorDialog();
-        if (dlg == null) return false;
-        var st = AddedState(dlg);
-        if (!st.hasRecorder)
-        {
-            W("  [abbruch-cleanup] kein Recorder unter 'Hinzugefuegt' -> nichts zu entfernen.");
-            var ap = FindBtnIn(dlg, "Übernehmen"); if (ap != null) Invoke(ap);
-            return LockedCount() == 0;
-        }
-        RemoveSelectedRecorderRelative(W);
-        for (int i = 0; i < 20 && LockedCount() > 0; i++) Thread.Sleep(1000);
-        Thread.Sleep(800);
-        bool stillThere = false;
-        if (OpenIndicatorDialog(W))
-        {
-            var d2 = IndicatorDialog();
-            if (d2 != null) { stillThere = AddedState(d2).hasRecorder; var ap2 = FindBtnIn(d2, "Übernehmen"); if (ap2 != null) Invoke(ap2); }
-        }
-        return !stillThere && LockedCount() == 0;
+        var res = RemoveRecorderFromChart(W);
+        return res == RemovalOutcome.Removed || (res == RemovalOutcome.NoRecorder && LockedCount() == 0);
     }
 
-    private static int RemoveRecorderStandalone()
-    {
-        void W(string s) => Console.WriteLine(s);
-        CloseDateDialogIfOpen(W);
-        if (ReplayOpen()) { W("[rmrec] Replay verlassen"); var rb = FindIdAny("RibbonReplayButton"); if (rb != null) Invoke(rb); for (int i = 0; i < 10 && ReplayOpen(); i++) Thread.Sleep(1000); }
-        int before = LockedCount();
-        if (before == 0) { W("[rmrec] keine aktive Instanz -> nichts zu entfernen."); return 0; }
-        if (!OpenIndicatorDialog(W)) { W("[rmrec] BLOCKER: Indikator-Dialog nicht zugaenglich."); return 4; }
-        RemoveSelectedRecorderRelative(W);
-        int after = before;
-        for (int i = 0; i < 15; i++) { Thread.Sleep(1000); after = LockedCount(); if (after < before) break; }
-        W($"[rmrec] aktive gesperrte Instanzen: {before} -> {after}  ({(after < before ? "entfernt/finalisiert" : "unveraendert")})");
-        return after < before ? 0 : 8;
-    }
 
     // Chart-gebundener 'Indikatoren'-Button. Im historischen Wiedergabemodus ist er enabled=False
     // ("alle Handelsverbindungen deaktiviert"); nach echtem Verlassen der Replay-Ansicht wieder enabled=True.
@@ -1866,7 +1867,7 @@ internal static partial class Program
         var dlg = IndicatorDialog();
         if (dlg != null) { var list = FindByAutomationId(dlg, "IndicatorsList"); if (list != null) { W("-- 'Hinzugefügt'-Liste (UIA) --"); int n = 0; DumpDialog(list, 0, W, ref n); } }
         // REMOVE (bestehender Pfad)
-        int rc = RemoveRecorderStandalone();
+        int rc = RemoveRecorderCommand(null);
         int after = LockedCount();
         W($"[test] REMOVE rc={rc}; gesperrte Instanzen jetzt={after}");
         bool ok = rc == 0 && after <= before;
@@ -2305,15 +2306,15 @@ internal static partial class Program
             replayViewLeft = ExitReplayView(W);   // beendet die Chart-Replay-ANSICHT (verifiziert)
             // ---- Phase 11: Recorder am Zielchart entfernen + Uebernehmen (finalisiert die zugeordnete Instanz) ----
             W("[11] Recorder am Zielchart entfernen");
-            if (replayViewLeft && OpenIndicatorDialog(W))
+            RemovalOutcome removal = RemovalOutcome.Failed;
+            if (replayViewLeft)
             {
-                RemoveSelectedRecorderRelative(W);        // dialog-relativ: Zeile -> Papierkorb -> Uebernehmen
+                // Zeile -> Papierkorb (UIA/Screenshot, geprueft) -> Wirkung pruefen -> erst dann Uebernehmen.
                 // Writer-Flush beim Dispose: grosse Sessionfenster brauchen laenger bis meta.json entsperrt ist (1-Min bleibt 15s).
-                int flushWait = Math.Max(15, windowSec / 60);
-                for (int i = 0; i < flushWait && IsMetaLocked(Path.Combine(dir, "meta.json")); i++) Thread.Sleep(1000);
+                removal = RemoveRecorderFromChart(W, writerWaitSec: Math.Max(15, windowSec / 60));
             }
             else W("  [11] Entfernen uebersprungen: Indikator-Dialog ist waehrend/kurz nach Replay-Ansicht gesperrt (Replay-Ansicht nicht verlassen).");
-            recorderRemoved = LockedCount() == 0;
+            recorderRemoved = removal == RemovalOutcome.Removed && LockedCount() == 0;
         }
         catch (AbortRun ab) { W(ab.Message); rc = ab.Code; }
         catch (Exception ex) { W($"BLOCKER: Exception {ex.GetType().Name}: {ex.Message}"); rc = 2; }

@@ -1,4 +1,4 @@
-# ATAS Session Collector 1.3.1 – All-in-one-Paket (Vorabversion)
+# ATAS Session Collector 1.3.2 – All-in-one-Paket (Vorabversion)
 
 Zeichnet ATAS-Replay-Trades lokal auf (Research/Simulation-only: keine Orders, keine Broker-Anbindung, keine
 Kontoänderungen). Dieses Paket enthält alles, was der Collector braucht – außer ATAS selbst.
@@ -76,6 +76,30 @@ Die Datei `chartdiag.txt` auf dem Desktop enthält Prozesse, Fenster, Sitzung un
 ATAS-Protokoll, alle Chart-Kandidaten mit Name/Klasse/AutomationId/Sichtbarkeit sowie die tatsächlich installierte
 Recorder-DLL (Kennung und SHA-256). Sie enthält keine Zugangsdaten.
 
+## Wie der Recorder wieder entfernt wird (neu in 1.3.2)
+
+Bis 1.3.1 klickte die Steuerung im Indikator-Dialog auf feste Abstände zur Dialogecke (Zeile, Papierkorb,
+„Übernehmen“). Je nach Dialoggröße, Anzahl Indikatoren und Skalierung wurde der Papierkorb verfehlt, „Übernehmen“
+lief trotzdem. Ab 1.3.2:
+
+1. Die Zeilen unter „Hinzugefügt“ werden per UI Automation gelesen; die Recorder-Zeile wird über ihren Text erkannt
+   (UIA, sonst Texterkennung eines frischen Bildschirmfotos genau dieser Zeile). Genau eine Recorder-Zeile, sonst Abbruch.
+2. Die Zeile wird ausgewählt und der Mauszeiger darauf gelegt, damit die Symbole erscheinen.
+3. Der Papierkorb wird innerhalb dieser Zeile gesucht: als UIA-Schaltfläche mit Löschen-/Entfernen-Bezeichnung, sonst
+   als Symbol im frischen Bildschirmfoto, das per Tooltip als Löschen bestätigt wird. Ohne bestätigtes Ziel kein Klick.
+4. Danach wird geprüft, dass genau die Recorder-Zeile fehlt und alle anderen Indikatoren unverändert sind. Sonst
+   „Abbrechen“ (nichts wird übernommen), Bildschirmfoto und Klickziel landen in `<Datenordner>\Logs`.
+5. Erst dann „Übernehmen“; anschließend werden Writer-Abschluss (`summary.json`, sauber) und „kein Recorder mehr am
+   Chart“ bestätigt.
+
+Feste Bildschirmkoordinaten gibt es im Indikator-Dialog nicht mehr; die Steuerung arbeitet DPI-bewusst (Per-Monitor).
+
+**Nur den vorhandenen Recorder entfernen** (ATAS offen, keine Aufnahme; Protokoll auf dem Desktop):
+
+```
+"%LOCALAPPDATA%\Programs\ATAS Session Collector\AtasReplayProbe.exe" rmrec "%USERPROFILE%\Desktop\rmrec.txt"
+```
+
 ## Was geprüft ist und was nicht
 
 **Geprüft** (Entwicklungsrechner, mit dem frisch entpackten ZIP, Skript `test-package.ps1` im Repository):
@@ -99,6 +123,9 @@ Recorder-DLL (Kennung und SHA-256). Sie enthält keine Zugangsdaten.
   Kombination ist ungetestet.
 - Betrieb in einer VM, RDP-Trennung, gesperrter Bildschirm, andere Auflösung/Skalierung.
 - Das automatische Entfernen des Recorders nach einem frühen Abbruch ist neu und nur außerhalb von ATAS übersetzt, nicht live erprobt.
+- Die neue Entfernen-Routine ist nur mit synthetischen Fällen getestet (Wirkungsprüfung, Symbolsuche), nicht im
+  echten ATAS-Dialog. Ob ATAS für den Papierkorb eine UIA-Schaltfläche oder einen Tooltip anbietet, ist unbekannt;
+  fehlt beides, bricht die Routine ohne Klick ab und hinterlässt ein Bildschirmfoto.
 - Die neue Chart-Erkennung ist mit synthetischen Fällen getestet, aber nicht mit dem UI-Baum der VM. Ob die VM-Ursache
   ein anderer Renderer-Name ist, ist eine Vermutung; die Diagnose oben zeigt es.
 
