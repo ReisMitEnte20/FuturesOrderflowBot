@@ -1,4 +1,4 @@
-# ATAS Session Collector 1.3.3 – All-in-one-Paket (Vorabversion)
+# ATAS Session Collector 1.3.4 – All-in-one-Paket (Vorabversion)
 
 Zeichnet ATAS-Replay-Trades lokal auf (Research/Simulation-only: keine Orders, keine Broker-Anbindung, keine
 Kontoänderungen). Das Paket enthält alles außer ATAS selbst.
@@ -31,6 +31,30 @@ Recorder hinzufügen → Zeitraum laden → Ladebereich prüfen → abspielen �
 sofort stoppen → Recorder entfernen → Writer-Abschluss prüfen → Daten prüfen und an die gemeinsame CSV anhängen →
 nächster Tag. Ein nicht vollständig abgeschlossener Tag stoppt den Lauf; abgeschlossene Tage bleiben erhalten,
 „Fortsetzen“ überspringt sie.
+
+## Was in 1.3.4 geändert ist (Stoppen nach dem Replay-Ende)
+
+1.3.3 erkannte das Ende, blieb danach aber im Stop-/Exit-Pfad hängen, während ATAS im Auto-Rewind weiterlief. Der alte
+Pfad suchte „Zur Echtzeit wechseln“ nur per UI Automation (beim custom-gerenderten Transport nicht vorhanden) und
+nutzte ungebremste UIA-Suchen über alle ATAS-Fenster, die während „Module laden“ blockieren können.
+
+- **Stoppen:** über das ATAS-Tastenkürzel **„StopMarketReplay“** (Standard Strg+Alt+D, aus der ATAS-Konfiguration
+  gelesen; ein Stop, kein Umschalter). Bestätigt nur, wenn das ATAS-Protokoll danach „→ Stopped“ zeigt **und** in den
+  folgenden 7 s kein neuer Durchlauf beginnt; startet ATAS doch neu, wird erneut gestoppt (höchstens dreimal).
+- **Replay verlassen:** UIA-Schaltfläche, sonst per Tooltip bestätigtes Transportsymbol „Zur Echtzeit“, sonst einmal
+  das Kürzel „DisableEnableMarketReplay“ – nur bei frisch bestätigtem Replay-Zustand; bestätigt über das Protokoll
+  bzw. wieder aktive „Indikatoren“.
+- **Begrenzt und protokolliert:** jeder Schritt nach „Wiedergabe jetzt beenden“ mit Beginn, Ende, Dauer und Ergebnis;
+  UIA-Aufrufe mit Zeitgrenze; Transportzustand über den Fenstertitel (blockiert nicht). Gesamtdauer begrenzt; danach
+  Abbruch mit Bildschirmfoto statt Endlosschleife.
+- **Kontrolliert stoppen** (Oberfläche) wirkt jetzt sofort, auch während der Wiedergabe: Stop, Replay verlassen,
+  Recorder entfernen, Writer abschließen; danach kein weiterer Tag.
+- **Geschwindigkeit:** wird zusätzlich aus der Aufnahme gemessen (Marktzeit/Empfangszeit). Weicht sie mehr als 30 % vom
+  angeforderten Wert ab, steht das im Protokoll.
+- **Auto-Wiederholung:** ATAS speichert sie im Replay-Player als „IsLoopEnabled“. Die Steuerung schaltet sie nur aus,
+  wenn ihr Zustand per UI Automation lesbar ist, und liest ihn zurück; sonst wird sie nur gemeldet und nicht verändert.
+- **Neuer Befehl `stoptest`:** beobachtet 10 s den aktuellen Zustand (nur lesen), beendet dann die Wiedergabe über den
+  neuen Stop-Pfad und bestätigt, dass kein weiterer Durchlauf beginnt. Keine Aufnahme, kein Laden, kein Play.
 
 ## Was in 1.3.3 geändert ist
 
@@ -71,7 +95,8 @@ Indikator-Dialogs (wird nur geöffnet und mit „Abbrechen“ geschlossen), List
 Recorder-Metadaten der letzten Aufnahmen und die letzten Laufprotokolle. Konto-IDs und E-Mail-Adressen werden
 maskiert; ATAS-Konfigurationsdateien werden nicht kopiert.
 
-Einzelbefehle: `chartdiag <datei>` (nur Chart-Erkennung), `rmrec <datei>` (nur den vorhandenen Recorder entfernen).
+Einzelbefehle: `chartdiag <datei>` (nur Chart-Erkennung), `rmrec <datei>` (nur den vorhandenen Recorder entfernen),
+`stoptest` (laufende Wiedergabe/Loop bestätigt beenden; Protokoll auf dem Desktop).
 
 ## Deinstallieren
 

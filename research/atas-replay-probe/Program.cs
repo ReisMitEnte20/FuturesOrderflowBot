@@ -37,6 +37,7 @@ internal static partial class Program
                 "uia-dump" => UiaDump(args.Length > 1 ? args[1] : null),
                 "chartdiag" => ChartDiag(args.Skip(1).FirstOrDefault(a => !a.StartsWith("-"))),
                 "diagpack" => DiagPack(args.Skip(1).FirstOrDefault(a => !a.StartsWith("-"))),
+                "stoptest" => StopTest(args.Skip(1).FirstOrDefault(a => !a.StartsWith("-"))),
                 "drive" => Drive(args.Contains("--go"), args.FirstOrDefault(a => a.EndsWith(".txt"))),
                 "inspect2" => Inspect2(),
                 "inspect-date" => InspectDate(args.FirstOrDefault(a => a.EndsWith(".txt"))),
@@ -1193,6 +1194,28 @@ internal static partial class Program
         Check("Watchdog 100x NICHT gleich naiver Division 60/100", PlayWatchdogSeconds(60, 100.0, 200) != (int)Math.Ceiling(60 / 100.0));
 
         // ---- Vorpruefungen des Sammellaufs (VM-Befunde): Bridge-Selbsttest + Recorder-Ausgabeordner ----
+        // ---- 1.3.4: Stop-Pfad (VM-Befund: nach erkanntem Ende Auto-Rewind-Loop, Exit-Pfad ohne Protokoll) ----
+        {
+            var hk = Path.Combine(baseDir, "GlobalHotKeys_test.cnf");
+            File.WriteAllText(hk, "{\"StopMarketReplay\":[\"LeftCtrl\",\"LeftAlt\",\"D\"],\"DisableEnableMarketReplay\":[\"LeftCtrl\",\"LeftAlt\",\"R\"],\"Odd\":[\"LeftCtrl\",\"OemTilde\"]}");
+            var stop = ReadAtasHotkey("StopMarketReplay", hk);
+            Check("Stop: ATAS-Kuerzel StopMarketReplay aus Konfiguration gelesen", stop != null && string.Join("+", stop) == "LeftCtrl+LeftAlt+D");
+            var vk = stop == null ? null : HotkeyToVk(stop);
+            Check("Stop: Kuerzel -> Tastencodes Strg(0x11)+Alt(0x12)+D(0x44)", vk != null && vk.SequenceEqual(new byte[] { 0x11, 0x12, 0x44 }));
+            Check("Stop: nicht sicher abbildbare Taste -> nicht senden", HotkeyToVk(ReadAtasHotkey("Odd", hk)!) == null);
+            Check("Stop: nicht belegtes Kuerzel -> null (kein Raten)", ReadAtasHotkey("GibtEsNicht", hk) == null && ReadAtasHotkey("StopMarketReplay", Path.Combine(baseDir, "fehlt.cnf")) == null);
+            File.Delete(hk);
+        }
+        {
+            var swb = Stopwatch.StartNew();
+            var r = Bounded("Test blockiert", () => { Thread.Sleep(5000); return true; }, 300, false);
+            Check("Stop: blockierender Aufruf wird nach Zeitgrenze abgebrochen (Ersatzwert)", !r && swb.ElapsedMilliseconds < 1500, $"{swb.ElapsedMilliseconds} ms");
+            Check("Stop: Ausnahme im Aufruf -> Ersatzwert", Bounded<int>("Test Ausnahme", () => throw new InvalidOperationException("x"), 1000, -1) == -1);
+            Check("Stop: normaler Aufruf liefert Wert", Bounded("Test ok", () => 42, 1000, 0) == 42);
+        }
+        Check("Stop: Titel 'Module laden' = Ladezustand, 'Historienwiedergabe' = spielt",
+              TitleLoading("Replay - Module laden...") && !TitleLoading("Replay - Historienwiedergabe...") && TitlePlaying("Replay - Historienwiedergabe...") && !TitlePlaying("Replay - Wiedergabe gestoppt"));
+
         // ---- 1.3.3: Ende/Fehler-Klassifikation aus ATAS-Protokollzeilen (Format wie im echten app_*.log) ----
         string Ln(string t, string th, string lvl, string src, string msg) => $"2026-11-12 {t} [{th,-10}] {lvl,-5} {src,-15}: {msg}";
         string PF(string t, string d = "26.10.2026") => Ln(t, "2", "INFO", "Replay DS", $"Playing from {d} 13:30:00 to {d} 16:00:00 type CandlesAndGeneratedBestPrices.");
@@ -1782,16 +1805,19 @@ internal static partial class Program
     // (Indikatoren bleibt dann enabled=False). Erfolg wird UNABHAENGIG verifiziert: 'Indikatoren' wird wieder aktiv.
     private static bool ExitReplayView(Action<string> W)
     {
-        if (IndicatorsEnabled() && !ReplayOpen()) { W("[view] bereits ausserhalb Replay (Indikatoren aktiv, Transport zu) -> nichts zu tun."); return true; }
+        // Alle UIA-Abfragen begrenzt (waehrend 'Module laden' kann der ATAS-UI-Thread lange nicht antworten).
+        bool IE() => Bounded("Indikatoren aktiv?", IndicatorsEnabled, 3000, false, W);
+        bool RO() => Bounded("Replay offen?", ReplayOpen, 3000, true, W);
+        if (IE() && !RO()) { W("[view] bereits ausserhalb Replay (Indikatoren aktiv, Transport zu) -> nichts zu tun."); return true; }
 
         // 'Zur Echtzeit wechseln' liegt im Transport. Ist der Transport zu, zuerst wieder oeffnen.
         // Layout-robust ueber den Cluster-Finder (nicht nur Fenstertitel) -> angedockter Transport wird NICHT faelschlich geoeffnet/geschlossen.
-        if (!ReplayOpen())
+        if (!RO())
         {
             W("[view] Transport zu -> oeffne ihn (RibbonReplayButton), um 'Zur Echtzeit wechseln' zu erreichen.");
             var rb = FindIdAny("RibbonReplayButton");
             if (rb != null) { try { Invoke(rb); } catch { } }
-            for (int i = 0; i < 8 && !ReplayOpen(); i++) Thread.Sleep(600);
+            for (int i = 0; i < 8 && !RO(); i++) Thread.Sleep(600);
         }
 
         // WICHTIG: Am natuerlichen Ende REWINDET ATAS automatisch (Stopped -> LoadingModules -> Initializing -> Play).
@@ -1801,14 +1827,14 @@ internal static partial class Program
         var swView = Stopwatch.StartNew();
         for (int i = 0; i < 160 && !ok; i++)   // 250-ms-Schritte, bis ~40s: deckt Rewind (~11s) + Settle ab
         {
-            if (IndicatorsEnabled()) { ok = true; break; }
-            var toLive = FindBtnByHelpAny("Zur Echtzeit wechseln");
+            if (IE()) { ok = true; break; }
+            var toLive = Bounded("UIA 'Zur Echtzeit wechseln'", () => FindBtnByHelpAny("Zur Echtzeit wechseln"), 3000, null, W);
             if (toLive != null) toLiveSeen = true;
             if (IsEnabledSafe(toLive))
             {
                 W($"[view] 'Zur Echtzeit wechseln' aktiv -> Invoke (rect={Rect(toLive!)})");
                 try { Invoke(toLive!); invoked = true; } catch (Exception ex) { W($"[view] Invoke-Fehler: {ex.Message}"); }
-                for (int k = 0; k < 20 && !ok; k++) { Thread.Sleep(250); if (IndicatorsEnabled()) ok = true; }
+                for (int k = 0; k < 20 && !ok; k++) { Thread.Sleep(250); if (IE()) ok = true; }
             }
             else { Thread.Sleep(250); if (!toLiveSeen && i >= 48) break; }   // custom-gerendert: Button existiert gar nicht in UIA -> Fallback unten
         }
@@ -1819,10 +1845,10 @@ internal static partial class Program
             W("[view] 'Zur Echtzeit wechseln' nicht ueber UIA erreichbar -> Fallback: RibbonReplayButton (Replay-Modus AUS).");
             var rb = FindIdAny("RibbonReplayButton");
             if (rb != null) { try { Invoke(rb); } catch (Exception ex) { W($"[view] Ribbon-Invoke-Fehler: {ex.Message}"); } }
-            for (int k = 0; k < 100 && !ok; k++) { Thread.Sleep(250); if (IndicatorsEnabled()) ok = true; }
+            for (int k = 0; k < 100 && !ok; k++) { Thread.Sleep(250); if (IE()) ok = true; }
         }
         if (!invoked && !ok) W("[view] BLOCKER: Replay-Ansicht weder ueber 'Zur Echtzeit wechseln' noch ueber die Ribbon-Umschaltung verlassen.");
-        bool transportClosed = !ReplayOpen();
+        bool transportClosed = !RO();
         W($"[view] Ergebnis: Indikatoren aktiv={ok}  Transport {(transportClosed ? "zu" : "offen")}  -> Replay-Ansicht {(ok ? "VERLASSEN (verifiziert)" : "NICHT verlassen")}  ({swView.ElapsedMilliseconds} ms)");
         return ok;
     }
@@ -2273,6 +2299,11 @@ internal static partial class Program
                     W($"[8] (visuell) frische OCR-Leiste nach Laden nicht erkannt ({vpd}) -> Play aus {playSrc}.");
                 }
                 if (!OcrReadyToPlay(barY, out var sw0)) throw new AbortRun(8, $"BLOCKER: (visuell) nicht ladebereit vor Play (Statuszeile '{sw0}', erwartet 'Play').");
+                // Vor Play: Transportsymbole per Tooltip zuordnen (nur Hover) - 'Zur Echtzeit wechseln' wird spaeter zum Stoppen gebraucht.
+                var fwp = ReplayFloatWin32();
+                if (_transportMap == null || fwp == null || _transportMap.Hwnd != fwp.Hwnd || _transportMap.WinRect != fwp.Rect) _transportMap = ScanTransportTooltips(W);
+                W($"[8] Stop-Bedienelement 'Zur Echtzeit' per Tooltip: {(_transportMap?.Find(RxToRealtime) is { } tr ? $"({tr.x},{tr.y})" : "NICHT gefunden (Stopp dann ueber Ersatzwege, begrenzt)")}");
+                W("[8] Auto-Wiederholung: " + EnsureLoopOff(W, visualMode: true));
                 playInvoke = DateTime.UtcNow;
                 W($"[8] (visuell) Play @{playPt.Value.x},{playPt.Value.y} [{playSrc}] …");
                 ClickFloat(playPt.Value.x, playPt.Value.y);
@@ -2297,6 +2328,7 @@ internal static partial class Program
                 speedVerified = true;
                 W($"[8] Speed angefordert='{speedName}' zurueckgelesen='{sp}' (verifiziert)");
                 if (!IsEnabledSafe(FindIdAny("PlayButton"))) throw new AbortRun(8, "BLOCKER: PlayButton nicht bereit.");
+                W("[8] Auto-Wiederholung: " + EnsureLoopOff(W, visualMode: false));
                 // Play per PHYSISCHEM Klick auf die UIA-Button-Position (UIA-Invoke startet die Wiedergabe hier NICHT).
                 playInvoke = DateTime.UtcNow; W("[8] Play (physischer Klick auf UIA-Button-Position) …");
                 if (!PlayByPhysicalClick(W)) throw new AbortRun(8, "BLOCKER: Play-Klick nicht ausfuehrbar.");
@@ -2355,6 +2387,7 @@ internal static partial class Program
                     }
                 }
                 if (exec.State == ReplayEnd.NaturalEnd) { stopCause = "natuerliches Ende"; break; }
+                if (StopRequested()) { stopCause = "Kontrollierter Stopp von der Oberflaeche angefordert"; break; }
                 if (exec.State is ReplayEnd.Errored or ReplayEnd.OnlineExit or ReplayEnd.OtherRangeRestart or ReplayEnd.StoppedByUs or ReplayEnd.StoppedOther) { stopCause = exec.Rule; break; }
                 if (exec.Started && !exec.DataReachedEnd && stallMs >= 30000) { stopCause = $"Stillstand {stallMs / 1000:0}s ohne Ende (letzte Marktzeit {(lastMt?.ToString("HH:mm:ss") ?? "-")})"; break; }
                 if (exec.DataReachedEnd && stallMs >= 24000) { stopCause = "Daten am Fensterende, aber kein Abschluss von ATAS innerhalb 24 s (keine Endbestaetigung)"; break; }
@@ -2369,9 +2402,11 @@ internal static partial class Program
             var swStop = Stopwatch.StartNew();
             exec.MarkOurStop(DateTime.Now);
             W($"[9] Stopp-Grund: {stopCause}  -> Wiedergabe jetzt beenden ({DateTime.Now:HH:mm:ss.fff})");
-            replayViewLeft = ExitReplayView(W);
-            W($"[9] Wiedergabe beendet: Replay-Ansicht verlassen={replayViewLeft} nach {swStop.ElapsedMilliseconds} ms");
-            exec.Feed(alog.ReadNew());
+            // Stop-Pfad: begrenzt, jeder Schritt mit Zeit; Erfolg nur mit ATAS-Bestaetigung + kein weiterer Durchlauf.
+            var stopRes = StopReplayConfirmed(W, alog, visualMode);
+            replayViewLeft = stopRes.Stopped && (stopRes.LeftReplayView || WaitChartEditable(W, 30));
+            W($"[9] Wiedergabe beendet: bestaetigt={stopRes.Stopped} keinWeitererDurchlauf={stopRes.NoFurtherPass} Replay-Ansicht verlassen={replayViewLeft} nach {swStop.ElapsedMilliseconds} ms (Weg: {stopRes.How})");
+            if (!stopRes.Stopped) throw new AbortRun(9, "BLOCKER: Wiedergabe nach dem Ende NICHT bestaetigt gestoppt (siehe [stop]). Keine Veroeffentlichung; bitte in ATAS 'Zur Echtzeit wechseln'.");
 
             // Entscheidung mit Belegen (Originalzeilen, Regel, Zuordnung zur eigenen Ausfuehrung)
             endProven = exec.State == ReplayEnd.NaturalEnd && !rangeMismatch;
@@ -2389,6 +2424,15 @@ internal static partial class Program
             span = fv?.FirstMt != null ? $"{fv.FirstMt:yyyy-MM-dd HH:mm:ss}->{fv.LastMt:HH:mm:ss}Z" : "-";
             mpStr = lastMt != null ? lastMt.Value.ToString("HH:mm:ss") + "Z" : "-"; ticksBytes = fv?.Bytes ?? 0;
             W($"[9] Datenbereich der zugeordneten Instanz (Recorder, UTC): {span}; Soll [{sUtc:HH:mm:ss}Z, {eUtc:HH:mm:ss}Z)");
+            var measured = MeasuredSpeed(dir);
+            double reqF = SpeedToFactor(speedName);
+            if (measured is double mf)
+            {
+                bool speedOk = reqF > 0 && mf >= reqF * 0.7 && mf <= reqF * 1.3;
+                if (speedVerified != true) speedVerified = speedOk;
+                W($"[9] Gemessene Geschwindigkeit (Recorder tMarket/tRecv): {mf:0.0}x bei angefordert {speedName} -> {(speedOk ? "im Rahmen (+-30 %)" : "ABWEICHEND")}");
+            }
+            else W("[9] Geschwindigkeit nicht messbar (zu wenige Daten).");
             var loopFolders = FolderSet().Except(beforeLoad).Where(f => f != attrFolder).ToList();
             if (loopFolders.Count > 0) W($"[9] Weitere Instanzen seit dem Laden (Auto-Loop/Echtzeit, werden NICHT angehaengt): {string.Join(", ", loopFolders)}");
 
@@ -2399,7 +2443,12 @@ internal static partial class Program
             W("[10] Replay-Transport verlassen");
             // ExitReplayView nutzt den Transport-Button 'Zur Echtzeit wechseln' (Transport muss OFFEN sein) und
             // verifiziert das Verlassen UNABHAENGIG daran, dass der chart-gebundene 'Indikatoren'-Button wieder aktiv wird.
-            replayViewLeft = ExitReplayView(W);   // beendet die Chart-Replay-ANSICHT (verifiziert)
+            if (!replayViewLeft)
+            {
+                var r10 = StopReplayConfirmed(W, alog, visualMode, deadlineSec: 45, observeSec: 5);
+                replayViewLeft = r10.Stopped && (r10.LeftReplayView || WaitChartEditable(W, 30));
+            }
+            else W("[10] Replay-Ansicht bereits verlassen (bestaetigt in [9]).");
             // ---- Phase 11: Recorder am Zielchart entfernen + Uebernehmen (finalisiert die zugeordnete Instanz) ----
             W("[11] Recorder am Zielchart entfernen");
             RemovalOutcome removal = RemovalOutcome.Failed;
@@ -2417,8 +2466,7 @@ internal static partial class Program
         finally
         {
             // Cleanup: Replay sicher verlassen (layout-robuster Cluster-Finder, nicht nur Fenstertitel); Status protokollieren.
-            try { if (ReplayOpen()) { var rb = FindIdAny("RibbonReplayButton"); if (rb != null) Invoke(rb); for (int i = 0; i < 8 && ReplayOpen(); i++) Thread.Sleep(1000); } } catch { }
-            cleanupOk = !ReplayOpen();
+            cleanupOk = !Bounded("Replay offen? (Abschluss)", ReplayOpen, 4000, true, W) || replayViewLeft;
             // Frueher Abbruch NACH dem Anhaengen (VM-Befund 'Recorder bleibt zurueck'): den von DIESEM Auftrag angehaengten
             // Recorder ueber den bewaehrten Dialogweg wieder entfernen. Nur im Abbruchfall, einmal, ohne Wiederholungsschleife.
             if (rc != -1 && recorderAddedByJob && !recorderRemoved)
@@ -2605,6 +2653,7 @@ internal static partial class Program
         {
             var j = jobs[i];
             if (committed.Contains(j.jobId)) { skipped++; W($"\n[SKIP] {j.jobId} bereits committed -> nicht erneut aufnehmen/anhaengen."); continue; }
+            if (StopRequested()) { stopReason = "Kontrolliert gestoppt (Anforderung der Oberflaeche) vor dem naechsten Fenster"; break; }
             W($"\n===== Fenster-Auftrag {i + 1}/{jobs.Count}: {j.jobId} =====");
             int rc = RunRecordingJob(outFile, j.sUtc, j.eUtc, i + 1, jobs.Count, sb, speed);
             if (rc != 0) { stopReason = $"Aufnahme-Auftrag {j.jobId} nicht bestanden (rc={rc})"; break; }

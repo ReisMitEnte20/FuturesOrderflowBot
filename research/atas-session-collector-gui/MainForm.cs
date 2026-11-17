@@ -387,8 +387,8 @@ public sealed class MainForm : Form
     {
         _runner?.RequestStop();
         _stop.Enabled = false;
-        _stop.Text = "Stoppe nach aktuellem Fenster \u2026";
-        _stepLabel.Text = "Kontrollierter Stopp angefordert \u2013 der laufende Tag wird sauber beendet.";
+        _stop.Text = "Stoppe \u2026";
+        _stepLabel.Text = "Kontrollierter Stopp angefordert \u2013 Wiedergabe wird beendet, Recorder entfernt, Writer abgeschlossen; kein weiterer Tag.";
         AppendDetail("[Bedienung] Kontrolliert stoppen angefordert (kein Prozess-Kill).");
     }
 

@@ -64,8 +64,16 @@ public sealed class CollectorRunner
     private Process? _current;
     private volatile bool _stopRequested;
 
-    /// <summary>Kontrolliert stoppen: wirkt nach dem aktuell laufenden Fenster. KEIN Prozess-Kill.</summary>
-    public void RequestStop() => _stopRequested = true;
+    private string? _stopFile;
+
+    /// <summary>Kontrolliert stoppen: die laufende Aufnahme-Steuerung erhaelt die Anforderung ueber eine Datei
+    /// (ATAS_COLLECTOR_STOPFILE) und beendet die Wiedergabe sofort mit sauberem Abschluss (Replay verlassen, Recorder
+    /// entfernen, Writer abschliessen); danach startet kein weiteres Fenster. KEIN Prozess-Kill.</summary>
+    public void RequestStop()
+    {
+        _stopRequested = true;
+        try { if (_stopFile != null) File.WriteAllText(_stopFile, DateTime.Now.ToString("o")); } catch { }
+    }
 
     /// <summary>Not-Aus: toetet den laufenden Probe-Prozess SAMT Kindprozessen (Python) sofort.
     /// KEIN sauberes Finalisieren. ATAS (OFT.Platform) ist NICHT Teil dieses Prozessbaums und bleibt unberuehrt.</summary>
@@ -81,11 +89,13 @@ public sealed class CollectorRunner
     {
         _stopRequested = false;
         Directory.CreateDirectory(plan.CollectionDir);
+        _stopFile = Path.Combine(Path.GetDirectoryName(plan.RecordingsDir) ?? plan.CollectionDir, "Logs", "stop.request");
+        try { Directory.CreateDirectory(Path.GetDirectoryName(_stopFile)!); if (File.Exists(_stopFile)) File.Delete(_stopFile); } catch { }
         string combined = Path.Combine(plan.CollectionDir, "run_protocol.txt");
         AppendCombined(combined, $"\n================ GUI-SAMMELLAUF  {DateTime.Now:yyyy-MM-dd HH:mm:ss} ================\n" +
             $"Instrument={plan.Instrument}  Session={plan.Session.Name} ({plan.Session.TzIana})  Speed={plan.Speed}\n" +
             $"Angeforderter Bereich (Soll): {plan.From:yyyy-MM-dd} bis {plan.To:yyyy-MM-dd} (inklusive)\n" +
-            $"Aufnahmefenster (Session-Lokalzeit): {plan.Session.LocalStart:hh\\:mm}–{plan.Session.LocalEnd:hh\\:mm} {plan.Session.TzIana}\n" +
+            $"Aufnahmefenster (Session-Lokalzeit): {plan.Session.LocalStart:hh\\:mm\\:ss}–{plan.Session.LocalEnd:hh\\:mm\\:ss} {plan.Session.TzIana}\n" +
             $"Collection: {plan.CollectionDir}\n");
 
         long csvBefore = CsvBytes(plan);
@@ -232,6 +242,7 @@ public sealed class CollectorRunner
         };
         // Portabel: Rohaufnahme-Ordner unter dem gewaehlten Datenordner an die Probe uebergeben (kein festes F:).
         psi.Environment["ATAS_RECORDINGS_DIR"] = recordingsDir;
+        if (_stopFile != null) psi.Environment["ATAS_COLLECTOR_STOPFILE"] = _stopFile;
         psi.ArgumentList.Add("collect");
         psi.ArgumentList.Add(cfgPath);
         psi.ArgumentList.Add(protoPath);
@@ -342,7 +353,7 @@ public sealed class CollectorRunner
         sb.AppendLine("== Angefordert (Soll) ==");
         sb.AppendLine($"Instrument : {plan.Instrument}");
         sb.AppendLine($"Session    : {plan.Session.Name} ({plan.Session.DisplayName}) / {plan.Session.TzIana}");
-        sb.AppendLine($"Fenster    : {plan.Session.LocalStart:hh\\:mm}–{plan.Session.LocalEnd:hh\\:mm} Session-Lokalzeit");
+        sb.AppendLine($"Fenster    : {plan.Session.LocalStart:hh\\:mm\\:ss}–{plan.Session.LocalEnd:hh\\:mm\\:ss} Session-Lokalzeit");
         sb.AppendLine($"Bereich    : {plan.From:yyyy-MM-dd} bis {plan.To:yyyy-MM-dd} (inklusive)");
         sb.AppendLine($"Geschw.    : {plan.Speed}");
         int planned = plan.RecordDays.Count, skipped = plan.AllDays.Count - planned;

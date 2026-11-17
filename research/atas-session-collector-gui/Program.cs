@@ -7,7 +7,7 @@ namespace AtasSessionCollector;
 
 internal static class Program
 {
-    public const string AppVersion = "1.3.3";
+    public const string AppVersion = "1.3.4";
 
     [STAThread]
     private static int Main(string[] args)

@@ -14,7 +14,7 @@
     <AssemblyName>Setup</AssemblyName>
     <RootNamespace>AtasCollectorSetup</RootNamespace>
     <LangVersion>latest</LangVersion>
-    <Version>1.3.3</Version>
+    <Version>1.3.4</Version>
     <Product>ATAS Session Collector Setup</Product>
     <Deterministic>true</Deterministic>
     <ApplicationHighDpiMode>SystemAware</ApplicationHighDpiMode>
