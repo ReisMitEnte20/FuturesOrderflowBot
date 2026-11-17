@@ -38,6 +38,8 @@ public sealed class InstallState
     public string dataDir { get; set; } = "";
     public string installedUtc { get; set; } = "";
     public string recorderSha256 { get; set; } = "";
+    /// <summary>Vom Setup gesicherte FREMDE Vorgaenger-DLL (wird bei der Deinstallation zurueckkopiert).</summary>
+    public string recorderBackup { get; set; } = "";
 }
 
 /// <summary>Benutzerbezogene Orte; im Testmodus in einen Testordner umgeleitet.</summary>
@@ -72,6 +74,10 @@ public sealed class SetupEnv
     public string IndicatorsDir => Path.Combine(AtasUserDir, "Indicators");
     public string RecorderTarget => Path.Combine(IndicatorsDir, Installer.RecorderDllName);
     public string RecorderBackupDir => Path.Combine(CollectorAppData, "recorder-backup");
+    /// <summary>Registrierungsschluessel unter HKCU fuer 'Installierte Apps' (im Testmodus ein separater Testschluessel).</summary>
+    public string UninstallKey => IsTest
+        ? @"Software\AtasSessionCollector-Test\Uninstall\" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(AppData))).Substring(0, 12)
+        : @"Software\Microsoft\Windows\CurrentVersion\Uninstall\AtasSessionCollector";
 
     public InstallState? LoadState()
     {
@@ -91,6 +97,7 @@ public sealed class Installer
     private readonly SetupEnv _env;
     private readonly Action<string> _log;
     private PayloadManifest _manifest = new();
+    private string _recorderBackup = "";
     public List<string> Errors { get; } = new();
 
     public Installer(SetupOptions options, Action<string> log)
@@ -158,7 +165,7 @@ public sealed class Installer
             if (bad >= 10) { Fail("... weitere Abweichungen nicht einzeln aufgefuehrt."); break; }
         }
         if (bad > 0) return false;
-        foreach (var need in new[] { "app/" + GuiExe, "app/" + ProbeExe, "app/bridge/atas_collect.py", "app/bridge/atas_bridge.py", "app/python/python.exe", "recorder/" + RecorderDllName })
+        foreach (var need in new[] { "app/" + GuiExe, "app/" + ProbeExe, "app/Uninstall.exe", "app/bridge/atas_collect.py", "app/bridge/atas_bridge.py", "app/python/python.exe", "recorder/" + RecorderDllName })
             if (!_manifest.files.Any(f => f.path.Equals(need, StringComparison.OrdinalIgnoreCase))) return Fail("Paket unvollstaendig: " + need + " ist nicht Teil des Pakets.");
         Info($"{_manifest.files.Count} Dateien vollstaendig und unbeschaedigt. Version {_manifest.version}, Quellstand {_manifest.commit}.");
         return true;
@@ -304,6 +311,8 @@ public sealed class Installer
         {
             Directory.CreateDirectory(_env.IndicatorsDir);
             var dst = _env.RecorderTarget;
+            var prev = _env.LoadState();
+            _recorderBackup = prev?.recorderBackup ?? "";
             if (File.Exists(dst))
             {
                 var have = Sha256(dst);
@@ -311,7 +320,10 @@ public sealed class Installer
                 Directory.CreateDirectory(_env.RecorderBackupDir);
                 var bak = Path.Combine(_env.RecorderBackupDir, $"OrderFlowReplayRecorder_{have.Substring(0, 12)}.dll");
                 if (!File.Exists(bak)) File.Copy(dst, bak, false);
-                Info("Vorhandene Recorder-DLL gesichert: " + bak);
+                // Nur eine FREMDE DLL (nicht von einer frueheren Version dieses Setups) gilt als wiederherzustellende Vorgaengerin.
+                bool ownPrevious = prev != null && have.Equals(prev.recorderSha256, StringComparison.OrdinalIgnoreCase);
+                if (!ownPrevious) _recorderBackup = bak;
+                Info($"Vorhandene Recorder-DLL gesichert: {bak}{(ownPrevious ? " (fruehere Version dieser Installation)" : " (fremde Vorgaengerin, wird bei Deinstallation wiederhergestellt)")}");
             }
             File.Copy(src, dst, true);
             Info("Recorder installiert: " + dst);
@@ -354,10 +366,28 @@ public sealed class Installer
             {
                 version = _manifest.version, programDir = _o.ProgramDir, dataDir = _o.DataDir,
                 installedUtc = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"), recorderSha256 = Sha256(_env.RecorderTarget),
+                recorderBackup = _recorderBackup,
             };
             File.WriteAllText(_env.StatePath, JsonSerializer.Serialize(st, new JsonSerializerOptions { WriteIndented = true }));
             File.Copy(Path.Combine(_o.PayloadDir, "manifest.json"), Path.Combine(_o.ProgramDir, "install-manifest.json"), true);
             Info(_env.StatePath);
+            // Eintrag unter 'Installierte Apps' (pro Benutzer, keine Administratorrechte)
+            using (var k = Registry.CurrentUser.CreateSubKey(_env.UninstallKey))
+            {
+                var un = Path.Combine(_o.ProgramDir, "Uninstall.exe");
+                k.SetValue("DisplayName", ProductName);
+                k.SetValue("DisplayVersion", _manifest.version);
+                k.SetValue("Publisher", "FuturesOrderflowBot (Research)");
+                k.SetValue("InstallLocation", _o.ProgramDir);
+                k.SetValue("DisplayIcon", Path.Combine(_o.ProgramDir, GuiExe) + ",0");
+                k.SetValue("UninstallString", "\"" + un + "\"");
+                k.SetValue("QuietUninstallString", "\"" + un + "\" /silent");
+                k.SetValue("NoModify", 1, RegistryValueKind.DWord);
+                k.SetValue("NoRepair", 1, RegistryValueKind.DWord);
+                long kb = _manifest.files.Where(f => f.path.StartsWith("app/", StringComparison.OrdinalIgnoreCase)).Sum(f => f.size) / 1024;
+                k.SetValue("EstimatedSize", (int)Math.Min(int.MaxValue, kb), RegistryValueKind.DWord);
+            }
+            Info("Eintrag 'Installierte Apps': HKCU\\" + _env.UninstallKey);
             return true;
         }
         catch (Exception ex) { return Fail("Installationsstand nicht speicherbar: " + ex.Message); }
@@ -425,7 +455,12 @@ public sealed class Installer
         Check("Recorder-DLL installiert", recOk, _env.RecorderTarget);
         Check("Recorder unterstuetzt gemeinsamen Datenordner", SharedDataRoot.DllSupportsSharedRoot(_env.RecorderTarget), "Kennung " + SharedDataRoot.RecorderCapabilityMarker);
 
-        // g) Verknuepfungen
+        // g) Deinstallation vorhanden und registriert
+        Check("Uninstall.exe", File.Exists(Path.Combine(_o.ProgramDir, "Uninstall.exe")), Path.Combine(_o.ProgramDir, "Uninstall.exe"));
+        string? us = null; try { using var k = Registry.CurrentUser.OpenSubKey(_env.UninstallKey); us = k?.GetValue("UninstallString") as string; } catch { }
+        Check("Eintrag 'Installierte Apps'", us != null && us.Contains("Uninstall.exe", StringComparison.OrdinalIgnoreCase), us ?? "(fehlt)");
+
+        // h) Verknuepfungen
         if (_o.Shortcuts)
             foreach (var dir in new[] { _env.StartMenuPrograms, _env.Desktop })
             { var lnk = Path.Combine(dir, ProductName + ".lnk"); Check("Verknuepfung", File.Exists(lnk), lnk); }
@@ -475,6 +510,8 @@ public sealed class Installer
         }
         catch (Exception ex) { why = ex.Message; return false; }
     }
+
+    public static bool IsUnderPublic(string path, string dir) => IsUnder(path, dir);
 
     private static bool IsUnder(string path, string dir)
     {

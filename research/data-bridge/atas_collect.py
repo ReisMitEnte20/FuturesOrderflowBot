@@ -41,6 +41,8 @@ if _HERE not in sys.path:
 import atas_bridge as b   # Wiederverwendung der geprueften reinen Helfer (keine Duplizierung)
 
 COLLECTION_SCHEMA = "atas-collection-trades-1"
+REWIND_TOLERANCE_NS = 1_000_000_000        # Marktzeit faellt um mehr als 1 s zurueck -> neuer Durchlauf
+END_REACHED_TOLERANCE_NS = 2_000_000_000   # erster Durchlauf gilt als bis zum Fensterende gespielt
 
 # Spaltenreihenfolge der gemeinsamen CSV (stabil; Header wird einmalig geschrieben).
 CSV_COLUMNS = [
@@ -115,6 +117,12 @@ def read_window_trades(recording_dir, start, end):
     n_total = n_window = n_before = n_after = n_bad = n_nontrade = n_lines = 0
     tot = buy = sell = 0
     first_ns = last_ns = None
+    # Ausfuehrungsgrenze: ATAS spult am Fensterende zurueck und spielt erneut (Auto-Loop). Landet ein zweiter Durchlauf
+    # in DERSELBEN Aufnahme, faellt die Marktzeit in Dateireihenfolge deutlich zurueck. Nur der erste Durchlauf zaehlt.
+    # KEINE Deduplizierung ueber Inhalte: identische echte Trades (gleiche Zeit/Preis/Menge) bleiben erhalten.
+    max_tm = None
+    rewind = None          # {"srcSeq", "atUtc", "maxBeforeUtc", "firstPassComplete"}
+    after_rewind = 0
 
     for file_idx, obj in _iter_trades_ns(ticks_path):
         if obj is None:
@@ -126,6 +134,14 @@ def read_window_trades(recording_dir, start, end):
             continue
         n_total += 1
         tm_ns = b.parse_iso_ns(obj["tMarket"])
+        if rewind is None and max_tm is not None and tm_ns < max_tm - REWIND_TOLERANCE_NS:
+            rewind = {"srcSeq": file_idx, "atUtc": b.ns_to_iso(tm_ns), "maxBeforeUtc": b.ns_to_iso(max_tm),
+                      "firstPassComplete": max_tm >= end_ns - END_REACHED_TOLERANCE_NS}
+        if rewind is not None:
+            after_rewind += 1
+            continue
+        if max_tm is None or tm_ns > max_tm:
+            max_tm = tm_ns
         if tm_ns < start_ns:
             n_before += 1
             continue
@@ -169,6 +185,9 @@ def read_window_trades(recording_dir, start, end):
             f"Quelle hat sich waehrend des Lesens geaendert ({', '.join(changed)}); kein verlaesslicher Snapshot.")
 
     summ_ticks = ((summary.get("perStream") or {}).get("ticks.ndjson") or {}).get("events")
+    loop = {"detected": rewind is not None, "tradesAfterBoundary": after_rewind}
+    if rewind is not None:
+        loop.update(rewind)
     summ_clean = summary.get("clean")
     stats = {
         "rows": n_window, "tradesTotalInFile": n_total,
@@ -176,6 +195,7 @@ def read_window_trades(recording_dir, start, end):
         "badJsonLines": n_bad, "nonTradeEventsInTicksStream": n_nontrade,
         "totalVolume": tot, "buyVolume": buy, "sellVolume": sell, "unknownVolume": tot - buy - sell,
         "firstTradeInWindowUtc": b.ns_to_iso(first_ns), "lastTradeInWindowUtc": b.ns_to_iso(last_ns),
+        "loopBoundary": loop,
         "reconciliation": {
             "ndjson_lines_total": n_lines, "ndjson_trade_events_total": n_total,
             "csv_data_rows": csv_rows, "summary_ticks_events": summ_ticks,
@@ -194,6 +214,9 @@ def read_window_trades(recording_dir, start, end):
         reasons.append("csv_trade_count_discrepancy")
     if stats["reconciliation"]["summary_eq_ndjson_lines"] is False:
         reasons.append("summary_ndjson_line_discrepancy")
+    if rewind is not None and not rewind["firstPassComplete"]:
+        # Ruecksprung, bevor das Fensterende erreicht war: kein belegter vollstaendiger erster Durchlauf.
+        reasons.append("market_time_rewind_before_window_end")
     status = "empty_window" if n_window == 0 else ("check" if reasons else "complete")
     stats["status"] = status
     stats["statusReasons"] = reasons

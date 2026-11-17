@@ -13,7 +13,7 @@
 # .NET-10-Laufzeit inkl. Windows Desktop. Nichts davon wird auf dem Zielrechner benoetigt.
 param(
     [Parameter(Mandatory = $true)] [string]$PythonDir,
-    [string]$Version = '1.3.2',
+    [string]$Version = '1.3.3',
     [string]$OutDir = '',
     [switch]$AllowDirty
 )
@@ -56,6 +56,8 @@ foreach ($p in @(
     Run 'dotnet' (@('publish', (Join-Path $research $p.proj), '-o', $o) + $pub)
     Copy-Item -LiteralPath (Join-Path $o $p.exe) -Destination (Join-Path $p.dst $p.exe)
 }
+# Uninstall.exe = dieselbe Setup-Datei; als 'Uninstall.exe' gestartet arbeitet sie im Deinstallationsmodus.
+Copy-Item -LiteralPath (Join-Path $stage 'Setup.exe') -Destination (Join-Path $app 'Uninstall.exe')
 
 # ---- 2) Bridge ----
 foreach ($f in 'atas_collect.py', 'atas_bridge.py') { Copy-Item -LiteralPath (Join-Path $research "data-bridge\$f") -Destination (Join-Path $app "bridge\$f") }
@@ -111,6 +113,7 @@ Komponenten und SHA-256
 $(Line 'Setup.exe')
 $(Line 'payload\app\AtasSessionCollector.exe')
 $(Line 'payload\app\AtasReplayProbe.exe')
+$(Line 'payload\app\Uninstall.exe')
 $(Line 'payload\app\bridge\atas_collect.py')
 $(Line 'payload\app\bridge\atas_bridge.py')
 $(Line 'payload\recorder\OrderFlowReplayRecorder.dll')

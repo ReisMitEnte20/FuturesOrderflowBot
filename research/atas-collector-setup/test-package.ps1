@@ -148,6 +148,31 @@ if ($missing) {
     Check 'Fehlgeschlagener Lauf laesst die Konfiguration unveraendert' ($shared3 -ieq $shared2)
 }
 
+# ---- 8) Deinstallation (isolierte Testinstallation): Programm weg, Daten unveraendert ----
+$state = Get-Content -LiteralPath (Join-Path $user 'Roaming\AtasSessionCollector\install.json') -Raw | ConvertFrom-Json
+$regPath = 'HKCU:\Software\AtasSessionCollector-Test\Uninstall'
+$regBefore = @(Get-ChildItem $regPath -ErrorAction SilentlyContinue).Count
+Check 'Registrierung (Testschluessel) vorhanden' ($regBefore -ge 1)
+$foreign = Join-Path $prog 'eigene_notiz.txt'; [IO.File]::WriteAllText($foreign, 'nicht von der Installation')
+$keep2 = Join-Path $data2 'Collections\Daten nach Wechsel\trades.csv'
+New-Item -ItemType Directory -Force -Path (Split-Path $keep2 -Parent) | Out-Null; [IO.File]::WriteAllText($keep2, "x,y`r`n")
+$log = Join-Path $WorkDir 't8.log'
+$rc = Setup (Join-Path $prog 'Uninstall.exe') @('/silent', '/testroot', $user) $log
+$t = LogText $log
+Start-Sleep -Seconds 6     # Uninstall.exe loescht sich nach Prozessende selbst
+Check 'Deinstallation erfolgreich (rc=0)' (($rc -eq 0) -and ($t -match 'DEINSTALLATION ABGESCHLOSSEN')) "rc=$rc"
+if ($rc -ne 0) { Write-Host $t }
+Check 'Programmdateien entfernt' (-not (Test-Path -LiteralPath (Join-Path $prog 'AtasSessionCollector.exe')) -and -not (Test-Path -LiteralPath (Join-Path $prog 'python\python.exe')) -and -not (Test-Path -LiteralPath (Join-Path $prog 'Uninstall.exe')))
+Check 'Fremde Datei im Programmordner bleibt' (Test-Path -LiteralPath $foreign)
+Check 'Verknuepfungen entfernt' (-not (Test-Path -LiteralPath (Join-Path $user 'Desktop\ATAS Session Collector.lnk')) -and -not (Test-Path -LiteralPath (Join-Path $user 'Startmenue\ATAS Session Collector.lnk')))
+Check 'Fremde Vorgaenger-DLL wiederhergestellt' ((Test-Path -LiteralPath $old) -and ((Get-FileHash -LiteralPath $old -Algorithm SHA256).Hash -eq $oldHash))
+Check 'Eintrag Installierte Apps entfernt' (@(Get-ChildItem $regPath -ErrorAction SilentlyContinue).Count -eq ($regBefore - 1))
+Check 'Daten unveraendert (beide Datenordner)' ((Test-Path -LiteralPath $keep) -and (Test-Path -LiteralPath $keepRec) -and (Test-Path -LiteralPath $keep2) -and ([IO.File]::ReadAllText($keep) -eq "bestehende,daten`r`n"))
+Check 'Installationsstand entfernt' (-not (Test-Path -LiteralPath (Join-Path $user 'Roaming\AtasSessionCollector\install.json')))
+$log = Join-Path $WorkDir 't9.log'
+$rc = Setup $setup @('/silent', '/testroot', $user, '/uninstall') $log
+Check 'Erneute Deinstallation ohne Installation -> verstaendlicher Abbruch, nichts entfernt' (($rc -eq 1) -and ((LogText $log) -match 'Keine Installation gefunden'))
+
 Write-Host ''
 Write-Host $(if ($script:fail -eq 0) { 'PAKETTEST: ALLE BESTANDEN' } else { "PAKETTEST: $($script:fail) FEHLGESCHLAGEN" })
 Write-Host "Protokolle: $WorkDir\t*.log"

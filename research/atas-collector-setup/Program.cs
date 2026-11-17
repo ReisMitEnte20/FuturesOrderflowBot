@@ -32,6 +32,31 @@ internal static class Program
             TestRoot = testRoot == "" ? null : testRoot,
         };
 
+        // Deinstallationsmodus: als Uninstall.exe gestartet (Eintrag 'Installierte Apps') oder mit /uninstall.
+        bool uninstall = Has("/uninstall") || Path.GetFileNameWithoutExtension(Environment.ProcessPath ?? "").StartsWith("Uninstall", StringComparison.OrdinalIgnoreCase);
+        if (uninstall)
+        {
+            var sbu = new StringBuilder();
+            string logU = Get("/log");
+            void LogU(string s) { sbu.AppendLine(s); if (logU != "") { try { File.WriteAllText(logU, sbu.ToString(), new UTF8Encoding(false)); } catch { } } }
+            if (!Has("/silent"))
+            {
+                ApplicationConfiguration.Initialize();
+                var st = env.LoadState();
+                var q = MessageBox.Show(Installer.ProductName + " deinstallieren?\n\nProgramm: " + (st?.programDir ?? "(nicht gefunden)") + "\n" +
+                                        "Aufnahmen, Collections und Logs bleiben erhalten:\n" + (st?.dataDir ?? "-") + "\n\nATAS und der Collector muessen geschlossen sein.",
+                                        "Deinstallation", MessageBoxButtons.OKCancel, MessageBoxIcon.Question);
+                if (q != DialogResult.OK) return 1;
+            }
+            bool okU;
+            var un = new Uninstaller(env, LogU);
+            try { okU = un.Run(); } catch (Exception ex) { LogU("FEHLER: " + ex); okU = false; }
+            if (!Has("/silent"))
+                MessageBox.Show(okU ? "Deinstallation abgeschlossen. Ihre Daten wurden nicht veraendert." : "Deinstallation NICHT vollstaendig:\n\n" + string.Join("\n", un.Errors),
+                                "Deinstallation", MessageBoxButtons.OK, okU ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+            return okU ? 0 : 1;
+        }
+
         if (Has("/silent"))
         {
             var sb = new StringBuilder();

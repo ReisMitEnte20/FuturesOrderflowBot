@@ -209,7 +209,12 @@ public sealed class CollectorRunner
             python = plan.Python,
             collectorScript = plan.CollectorScript,
             keepRecorderAttached = false,
-            windows = new[] { new { startBerlin = day.BerlinStartString, endBerlin = day.BerlinEndString } },
+            // UTC-Grenzen sind verbindlich; die Probe rechnet sie selbst in die Zeitzone des ATAS-Datumsdialogs um und prueft
+            // den von ATAS bestaetigten Ladebereich. Session-Lokalzeit nur zur Nachvollziehbarkeit.
+            windows = new[] { new {
+                startUtc = day.UtcStart.ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture),
+                endUtc = day.UtcEnd.ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture),
+                sessionLocal = $"{day.LocalStart:yyyy-MM-dd HH:mm:ss}..{day.LocalEnd:HH:mm:ss} {plan.Session.TzIana}" } },
         };
         File.WriteAllText(path, JsonSerializer.Serialize(cfg, new JsonSerializerOptions { WriteIndented = true }));
     }

@@ -6,6 +6,7 @@ privater Python-Laufzeit und Recorder-DLL. Nicht Teil von `TradingBot.sln`.
 | Datei | Inhalt |
 |---|---|
 | `Installer.cs` | Installationslogik ohne Oberfläche: Paket prüfen, ATAS erkennen, kopieren, gemeinsamen Datenordner konfigurieren, Recorder installieren (mit Sicherung), Verknüpfungen, Abschlussprüfungen. Erfolg nur, wenn alles bestanden ist. |
+| `Uninstaller.cs` | Deinstallation (`Uninstall.exe` = Setup im Deinstallationsmodus): nur Dateien laut Installationsmanifest, eigene Verknuepfungen, Registrierung; Recorder nur bei unveraendertem Hash, fremde Vorgaenger-DLL wird zurueckkopiert; Daten bleiben. |
 | `SetupForm.cs`, `Program.cs` | Assistent (eine Seite) und unbeaufsichtigter Modus. |
 | `build-package.ps1` | Frischer Build aller Komponenten aus dem aktuellen Commit, Manifest, ZIP, SHA-256. |
 | `test-package.ps1` | Prüft ein fertiges ZIP frisch entpackt, ohne ATAS und ohne den echten Benutzerordner anzufassen. |
@@ -15,7 +16,7 @@ privater Python-Laufzeit und Recorder-DLL. Nicht Teil von `TradingBot.sln`.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File research\atas-collector-setup\build-package.ps1 -PythonDir <Ordner der privaten Python-Laufzeit>
-powershell -ExecutionPolicy Bypass -File research\atas-collector-setup\test-package.ps1 -Zip artifacts\collector-package\ATAS-Session-Collector-Setup-v1.3.2.zip
+powershell -ExecutionPolicy Bypass -File research\atas-collector-setup\test-package.ps1 -Zip artifacts\collector-package\ATAS-Session-Collector-Setup-v1.3.3.zip
 ```
 
 `build-package.ps1` verlangt einen sauberen Git-Stand unter `research\` (sonst `-AllowDirty`, was im Paket vermerkt

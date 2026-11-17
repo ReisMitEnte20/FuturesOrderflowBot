@@ -1,170 +1,105 @@
-# ATAS Session Collector 1.3.2 – All-in-one-Paket (Vorabversion)
+# ATAS Session Collector 1.3.3 – All-in-one-Paket (Vorabversion)
 
 Zeichnet ATAS-Replay-Trades lokal auf (Research/Simulation-only: keine Orders, keine Broker-Anbindung, keine
-Kontoänderungen). Dieses Paket enthält alles, was der Collector braucht – außer ATAS selbst.
+Kontoänderungen). Das Paket enthält alles außer ATAS selbst.
 
-## In drei Schritten
+## Installieren oder aktualisieren
 
-1. **ZIP vollständig entpacken** (nicht aus dem ZIP heraus starten).
-2. **ATAS schließen** und **`Setup.exe` starten**; Ordner bestätigen oder ändern, „Installieren“ klicken.
-3. Wenn „Fertig eingerichtet“ erscheint: ATAS starten, anmelden, **genau einen MNQ-Chart** öffnen und den Collector
-   über die Verknüpfung **„ATAS Session Collector“** starten.
+1. ZIP vollständig entpacken (nicht aus dem ZIP heraus starten).
+2. **ATAS schließen**, `Setup.exe` starten, „Installieren“. Bei einem Update schlägt das Setup die bisherigen Ordner
+   vor; Einstellungen, Collections und Aufnahmen bleiben erhalten.
+3. ATAS starten, genau einen MNQ-Chart öffnen, Collector über die Verknüpfung „ATAS Session Collector“ starten.
 
-Es sind keine Downloads, kein Python, kein .NET, keine DLL-Kopien und keine Eingaben in ATAS nötig.
+Keine Downloads, kein Python, kein .NET, keine DLL-Kopien, keine Eingaben in ATAS. Keine Administratorrechte nötig.
 
-## Voraussetzungen
+## Kurzer Test mit eigenem Zeitraum
 
-- Windows 10/11 x64 (für die Texterkennung der Steuerung mindestens Windows 10 Build 19041).
-- **ATAS ist installiert** und wurde einmal gestartet. ATAS-Lizenz und Datenanmeldung bleiben beim Benutzer und sind
-  nicht Teil dieses Pakets. Fehlt ATAS, meldet das Setup das und installiert nichts.
-- Keine Administratorrechte nötig (Installation pro Benutzer). Windows SmartScreen kann warnen, weil die Programme
-  nicht signiert sind.
+1. Session **„Benutzerdefiniert (Uhrzeit + Zeitzone)“** wählen.
+2. Von = Bis = gewünschtes Datum, z. B. 26.10.2026; Start `14:30:00`, Ende `14:32:00`, Zeitzone `Europe/Berlin`;
+   Geschwindigkeit `100x`.
+3. Vorschau prüfen (Spalten Lokal, Berlin, UTC), dann **Start**.
 
-## Was das Setup tut
+Ergebnis: `<Datenordner>\Collections\MNQ_Custom_143000-143200_Europe-Berlin_2026-10-26_bis_2026-10-26\`
+mit `trades.csv`, `collection_manifest.json`, `coverage_report.txt`, `run_protocol.txt`. Rohaufnahmen liegen unter
+`<Datenordner>\Recordings\`. Uhrzeiten gelten je Kalendertag; Wochenenden werden übersprungen, einen Feiertagskalender
+gibt es für benutzerdefinierte Fenster nicht. Das Ende muss am selben Tag nach dem Start liegen; Ortszeiten, die wegen
+der Zeitumstellung nicht existieren oder doppelt vorkommen, werden abgelehnt.
 
-| Schritt | Ergebnis |
-|---|---|
-| Paket prüfen | Jede Installationsdatei wird gegen `payload\manifest.json` (Größe, SHA-256) geprüft. |
-| ATAS erkennen | Programmordner und der Indikator-Ordner des angemeldeten Benutzers (`%APPDATA%\ATAS\Indicators`). |
-| Ordner | Vorschlag Programm: `%LOCALAPPDATA%\Programs\ATAS Session Collector`; Daten: `%USERPROFILE%\ATAS Collector Daten`. Beides änderbar, kein bestimmter Laufwerksbuchstabe nötig. |
-| Programme | Oberfläche, Aufnahme-Steuerung, Bridge und private Python-Laufzeit (mit pyarrow) in den Programmordner. |
-| Gemeinsamer Datenordner | Oberfläche, Steuerung, Bridge **und Recorder** werden auf denselben Datenordner eingestellt. |
-| Recorder | `OrderFlowReplayRecorder.dll` in den ATAS-Indikator-Ordner; eine vorhandene DLL wird vorher nach `%APPDATA%\AtasSessionCollector\recorder-backup\` gesichert. |
-| Verknüpfungen | Startmenü und Desktop. |
-| Abschlussprüfung | Dateivollständigkeit, Python-Laufzeit, alle Bridge-Importe, Start von Oberfläche und Steuerung, Schreibrechte, Recorder-Konfiguration. |
+## Ablauf je Tag
 
-Schlägt irgendetwas fehl, zeigt das Setup die genaue Meldung rot an und meldet **nicht** „Fertig eingerichtet“.
+Recorder hinzufügen → Zeitraum laden → Ladebereich prüfen → abspielen → ersten vollständigen Durchlauf erkennen →
+sofort stoppen → Recorder entfernen → Writer-Abschluss prüfen → Daten prüfen und an die gemeinsame CSV anhängen →
+nächster Tag. Ein nicht vollständig abgeschlossener Tag stoppt den Lauf; abgeschlossene Tage bleiben erhalten,
+„Fortsetzen“ überspringt sie.
 
-**Erneut ausführen / aktualisieren:** Das Setup erkennt die vorhandene Installation, schlägt dieselben Ordner vor und
-ersetzt nur geänderte Programmdateien. Einstellungen, Collections und Aufnahmen bleiben erhalten; es wird nichts
-gelöscht. Den Datenordner kann man so auch nachträglich ändern (alte Daten bleiben am alten Ort liegen).
+## Was in 1.3.3 geändert ist
 
-## Wie der Recorder seinen Ordner bekommt
+- **Zeitbezüge:** Die Soll-Grenzen werden in UTC geführt. Die Eingabe im ATAS-Datumsdialog wird aus der Zeitzone
+  berechnet, die ATAS verwendet (ATAS-Einstellung bzw. Windows-Zeitzone, mit Sommerzeit). Der von ATAS bestätigte
+  Ladebereich wird vor bzw. sofort bei Play gegen das Soll geprüft; bei Abweichung Abbruch ohne Veröffentlichung.
+  Keine feste Berlin-Annahme, keine ±1-Stunden-Korrektur.
+- **Replay-Ende:** Aus dem ATAS-Protokoll wird der Abschluss der eigenen Wiedergabe erkannt (Stopp + „Data processing
+  finished“ + Auto-Rewind) und festgehalten; der anschließende Auto-Loop löscht ihn nicht. Abfrage alle 200 ms statt
+  alle 3 s, danach wird die Wiedergabe sofort beendet. Das Protokoll nennt die auslösenden Originalzeilen und die Regel.
+- **Fehlerklassifikation:** Nur Fehler der Replay-Quellen gelten als Replay-Fehler. Fehler- und Disconnect-Zeilen
+  anderer Module (Konto, Websocket, Cache) erscheinen nur als Hinweis. Stillstands- und Gesamtzeitlimits bleiben.
+- **Loop-Duplikate:** ATAS legt für den Auto-Loop eine neue Recorder-Instanz an; nur die zugeordnete Instanz wird
+  angehängt. Fällt die Marktzeit innerhalb einer Aufnahme dennoch zurück, wird nur der erste Durchlauf übernommen bzw.
+  bei unvollständigem erstem Durchlauf nichts veröffentlicht. Identische echte Trades werden nicht dedupliziert.
+- **Recorder entfernen:** Die Kopfzahl „Hinzugefügt (N)“ ist maßgeblich. Liefert UI Automation weniger Zeilen, wird
+  die Liste per Texterkennung eines frischen Bildschirmfotos gelesen; „Liste nicht lesbar“ wird nie als „leer“
+  gewertet. Papierkorb nur innerhalb der Recorder-Zeile (UIA oder Symbol mit Löschen-Tooltip), danach Prüfung, dass
+  genau diese Zeile fehlt, erst dann „Übernehmen“; sonst „Abbrechen“ mit Bildschirmfoto und Klickziel in `Logs`.
+  Bleibt eine Instanz aktiv, nennt das Protokoll Ordner, runId und Kennung.
+- **Tempo:** Feste Wartezeiten beim Hinzufügen, Dialogöffnen und Replay-Verlassen durch zustandsabhängiges Warten ersetzt.
+- **Geschwindigkeit:** Kann 100× nicht zurückgelesen werden, steht im Protokoll „NICHT verifiziert“.
+- **Startprotokoll:** Programmversion mit Commit und Kennung/SHA-256 der installierten Recorder-DLL.
+- **Deinstallation:** `Uninstall.exe` im Programmordner und Eintrag unter „Installierte Apps“.
 
-Frühere Pakete verlangten, den Ausgabeordner in ATAS von Hand zu setzen; beim Hinzufügen einer neuen Recorder-Instanz
-fiel er trotzdem auf `F:\ATAS_Data\Recordings` zurück. Das ist in diesem Paket anders gelöst:
+## Diagnose ohne Aufnahme
 
-- Setup und Oberfläche schreiben den Ordner in **eine** Datei: `%APPDATA%\AtasSessionCollector\recorder-output-root.txt`.
-- Der mitgelieferte Recorder (`proto-2c-sharedroot`) liest diese Datei bei **jedem Start einer Instanz**, bevor er die
-  erste Datei anlegt. Sie gilt damit auch nach Entfernen/Hinzufügen, erneutem Laden eines Replays und ATAS-Neustart.
-- Der Recorder hat keinen eingebauten Standardpfad mehr. Fehlt die Datei oder das Laufwerk, bricht er mit einer
-  klaren Meldung ab, statt woandershin zu schreiben.
-- Vor jeder ATAS-Aktion prüft die Steuerung, dass Bridge und Python starten, dass der installierte Recorder diese
-  Datei unterstützt und dass sie auf den Ordner des Laufs zeigt. Sonst bricht sie ab, ohne ATAS anzufassen.
-
-## Wie der Zielchart erkannt wird (neu in 1.3.1)
-
-1.3.0 brach auf einer VM mit „VulkanChartWpf-Treffer=0 / Zielchart nicht eindeutig identifizierbar“ ab: Die Erkennung
-verlangte genau eine UI-Automation-Fläche mit dem Namen `VulkanChartWpf`, also den Namen der Vulkan-Renderfläche von
-ATAS. Ab 1.3.1:
-
-- Zuerst wie bisher die Vulkan-Fläche; gibt es keine, zählt eine sichtbare Fläche, deren Name, Klasse oder
-  AutomationId sie als Chart-Renderfläche ausweist (z. B. bei einer anderen Render-Engine). Bedienelemente wie
-  Chart-Trader, Symbolleisten oder Reiter zählen nicht.
-- Weiter geht es nur bei **genau einem** sichtbaren Chart. Keine Auswahl nach Größe oder Reihenfolge.
-- Schlägt die Erkennung fehl, steht im Protokoll, warum: kein ATAS-Prozess, ATAS-Fenster für UI Automation
-  unsichtbar (z. B. ATAS als Administrator gestartet), kein Chart, mehrere Charts oder Chart minimiert/verdeckt –
-  dazu die vollständige Diagnose. Es wird kein Recorder angehängt.
-
-**Diagnose ohne Aufnahme** (ATAS offen, Chart geöffnet; liest nur, klickt nichts):
+ATAS offen, Chart geöffnet, **nicht** in der Replay-Ansicht; andere Fenster mit privaten Inhalten vorher schließen
+(das Paket enthält ein Bildschirmfoto des Hauptbildschirms):
 
 ```
-"%LOCALAPPDATA%\Programs\ATAS Session Collector\AtasReplayProbe.exe" chartdiag "%USERPROFILE%\Desktop\chartdiag.txt"
+"%LOCALAPPDATA%\Programs\ATAS Session Collector\AtasReplayProbe.exe" diagpack
 ```
 
-Die Datei `chartdiag.txt` auf dem Desktop enthält Prozesse, Fenster, Sitzung und Rechte, Render-Engine laut
-ATAS-Protokoll, alle Chart-Kandidaten mit Name/Klasse/AutomationId/Sichtbarkeit sowie die tatsächlich installierte
-Recorder-DLL (Kennung und SHA-256). Sie enthält keine Zugangsdaten.
+Legt auf dem Desktop `ATAS-Diagnose-<Zeit>` und eine gleichnamige ZIP-Datei an: Prozesse, Fenster, DPI,
+Render-Engine, Chart-Kandidaten, maskierter Auszug des ATAS-Protokolls (Replay/Chart/Fehler), UIA-Baum und Bilder des
+Indikator-Dialogs (wird nur geöffnet und mit „Abbrechen“ geschlossen), Listenzustand „Hinzugefügt“,
+Recorder-Metadaten der letzten Aufnahmen und die letzten Laufprotokolle. Konto-IDs und E-Mail-Adressen werden
+maskiert; ATAS-Konfigurationsdateien werden nicht kopiert.
 
-## Wie der Recorder wieder entfernt wird (neu in 1.3.2)
+Einzelbefehle: `chartdiag <datei>` (nur Chart-Erkennung), `rmrec <datei>` (nur den vorhandenen Recorder entfernen).
 
-Bis 1.3.1 klickte die Steuerung im Indikator-Dialog auf feste Abstände zur Dialogecke (Zeile, Papierkorb,
-„Übernehmen“). Je nach Dialoggröße, Anzahl Indikatoren und Skalierung wurde der Papierkorb verfehlt, „Übernehmen“
-lief trotzdem. Ab 1.3.2:
+## Deinstallieren
 
-1. Die Zeilen unter „Hinzugefügt“ werden per UI Automation gelesen; die Recorder-Zeile wird über ihren Text erkannt
-   (UIA, sonst Texterkennung eines frischen Bildschirmfotos genau dieser Zeile). Genau eine Recorder-Zeile, sonst Abbruch.
-2. Die Zeile wird ausgewählt und der Mauszeiger darauf gelegt, damit die Symbole erscheinen.
-3. Der Papierkorb wird innerhalb dieser Zeile gesucht: als UIA-Schaltfläche mit Löschen-/Entfernen-Bezeichnung, sonst
-   als Symbol im frischen Bildschirmfoto, das per Tooltip als Löschen bestätigt wird. Ohne bestätigtes Ziel kein Klick.
-4. Danach wird geprüft, dass genau die Recorder-Zeile fehlt und alle anderen Indikatoren unverändert sind. Sonst
-   „Abbrechen“ (nichts wird übernommen), Bildschirmfoto und Klickziel landen in `<Datenordner>\Logs`.
-5. Erst dann „Übernehmen“; anschließend werden Writer-Abschluss (`summary.json`, sauber) und „kein Recorder mehr am
-   Chart“ bestätigt.
-
-Feste Bildschirmkoordinaten gibt es im Indikator-Dialog nicht mehr; die Steuerung arbeitet DPI-bewusst (Per-Monitor).
-
-**Nur den vorhandenen Recorder entfernen** (ATAS offen, keine Aufnahme; Protokoll auf dem Desktop):
-
-```
-"%LOCALAPPDATA%\Programs\ATAS Session Collector\AtasReplayProbe.exe" rmrec "%USERPROFILE%\Desktop\rmrec.txt"
-```
+„Einstellungen → Apps → Installierte Apps → ATAS Session Collector → Deinstallieren“ oder `Uninstall.exe` im
+Programmordner (ATAS und Collector vorher schließen). Entfernt werden nur die installierten Programmdateien, die
+eigenen Verknüpfungen und der Registrierungseintrag. Die Recorder-DLL wird nur entfernt, wenn sie unverändert die
+installierte ist; eine beim Setup gesicherte fremde Vorgänger-DLL wird zurückkopiert. **Aufnahmen, Collections und
+Logs bleiben erhalten.** Fremde Dateien im Programmordner bleiben liegen.
 
 ## Was geprüft ist und was nicht
 
-**Geprüft** (Entwicklungsrechner, mit dem frisch entpackten ZIP, Skript `test-package.ps1` im Repository):
+**Geprüft (Entwicklungsrechner, ohne ATAS):**
+- Paket frisch entpackt (`test-package.ps1`): Installation ohne Python/.NET im Suchpfad, Pfade mit Leerzeichen und
+  Umlauten, ohne Laufwerk `F:`; Fehlerfälle; erneutes Setup ohne Doppelinstallation; Datenordnerwechsel;
+  Deinstallation mit Wiederherstellung der Vorgänger-DLL, Daten unverändert.
+- Offline-Gegenbeispiele für die geänderte Logik: Ende/Fehler-Klassifikation mit Zeilen im Format des echten
+  ATAS-Protokolls (natürliches Ende + Auto-Loop, fremde Exceptions, eigener Stopp, Echtzeitwechsel, anderer Bereich),
+  Zeitzonen inkl. Sommerzeit, Listenzustand leer/nicht lesbar, OCR-Zeilen, Maskierung, Loop-Grenze in der Bridge,
+  benutzerdefinierte Fenster (Sekunden, Zeitzone, Zeitumstellung, Ordnername).
 
-- Installation ohne Python und ohne .NET im Suchpfad, in Programm- und Datenordner mit Leerzeichen und Umlauten, ohne Laufwerk `F:`.
-- Fehlendes ATAS, unvollständiges Paket und nicht vorhandenes Laufwerk führen zu einem Abbruch mit genauer Meldung.
-- Zweiter Setup-Lauf: keine doppelte Installation, bestehende Collections/Aufnahmen unverändert; Wechsel des Datenordners.
-- Sicherung einer vorhandenen älteren Recorder-DLL.
-- Die installierte Bridge hat mit der privaten Python-Laufzeit zwei echte Aufnahmefenster (26. und 27.10.2026,
-  1.835.381 Trades) in eine neue Collection übernommen; Zeilen und Volumen stimmen exakt mit der Referenz überein,
-  ein wiederholter Auftrag wird übersprungen (kein doppeltes Anhängen), die Originalaufnahmen sind unverändert.
-- Die Pfadlogik des Recorders (neue Instanz mit leerem Feld, Instanzwechsel, veraltetes Feld, fehlendes Laufwerk)
-  als Offline-Tests.
+**Nicht geprüft – nur mit ATAS möglich (VM):**
+- Alles, was ATAS bedient: Recorder hinzufügen/entfernen im echten Dialog (inkl. Texterkennung der Liste und
+  Tooltip-Prüfung des Papierkorbs), Enderkennung und sofortiger Stopp am echten Auto-Loop, Ladebereichsprüfung,
+  zwei Fenster nacheinander mit Append, Resume, ATAS-Neustart, RDP-Trennung.
+- Die Ursache des „Errored“ im VM-Protokoll (Abbruch bei 15:00:56 UTC) ist nicht belegt; die neue Regel und das
+  Diagnosepaket zeigen künftig die auslösende Zeile.
 
-**Nicht geprüft – bitte auf der Test-VM prüfen:**
-
-- **Der neue Recorder ist noch nie in ATAS gelaufen.** Dass ATAS ihn lädt und dass er tatsächlich in den gewählten
-  Ordner schreibt, ist nur über Tests außerhalb von ATAS belegt. Gleiches gilt für Entfernen/Hinzufügen,
-  Replay-Neuladen und ATAS-Neustart.
-- Kein Aufnahmelauf mit Version 1.3.x. Der Aufnahmeablauf selbst ist gegenüber 1.2.x unverändert, aber die
-  Kombination ist ungetestet.
-- Betrieb in einer VM, RDP-Trennung, gesperrter Bildschirm, andere Auflösung/Skalierung.
-- Das automatische Entfernen des Recorders nach einem frühen Abbruch ist neu und nur außerhalb von ATAS übersetzt, nicht live erprobt.
-- Die neue Entfernen-Routine ist nur mit synthetischen Fällen getestet (Wirkungsprüfung, Symbolsuche), nicht im
-  echten ATAS-Dialog. Ob ATAS für den Papierkorb eine UIA-Schaltfläche oder einen Tooltip anbietet, ist unbekannt;
-  fehlt beides, bricht die Routine ohne Klick ab und hinterlässt ein Bildschirmfoto.
-- Die neue Chart-Erkennung ist mit synthetischen Fällen getestet, aber nicht mit dem UI-Baum der VM. Ob die VM-Ursache
-  ein anderer Renderer-Name ist, ist eine Vermutung; die Diagnose oben zeigt es.
-
-**Bekannte, hier nicht behobene Punkte aus früheren VM-Läufen** (dafür lagen keine Protokolle vor):
-
-- „Replay-Öffner nicht erkannt“: Die Steuerung prüft den Replay-Knopf jetzt, bevor sie einen Recorder anhängt, findet
-  ihn aber auf demselben Weg wie bisher.
-- Widerspruch zwischen erkanntem Replay-Ende und gespeichertem Zeitbereich: unverändert.
-- Die Steuerung erwartet die deutsche ATAS-Oberfläche; nur MNQ ist getestet.
-
-### Empfohlener VM-Test
-
-Zwei Handelstage in einem Lauf aufnehmen (zwei Aufnahmefenster). Danach prüfen:
-
-1. Im Laufprotokoll steht je Fenster eine Zeile `[3] Schreibpfad: …` mit dem gewählten Datenordner und
-   `recorder='OrderFlowReplayRecorder/proto-2c-sharedroot'`.
-2. Beide Aufnahmeordner liegen unter `<Datenordner>\Recordings`, beide Tage enden als „committed“, und in ATAS ist
-   danach kein Recorder mehr am Chart.
-3. „Fortsetzen“ mit demselben Bereich nimmt nichts erneut auf.
-4. ATAS neu starten, einen weiteren Tag aufnehmen: wieder derselbe Schreibpfad.
-5. RDP-Trennung getrennt davon prüfen; bis dahin nicht unbeaufsichtigt laufen lassen.
-
-## Bedienung
-
-- **Start** nimmt alle geplanten Tage auf. **Fortsetzen** überspringt bereits abgeschlossene Tage.
-- **Kontrolliert stoppen** bricht an der nächsten Tagesgrenze sauber ab.
-- **ALLES BEENDEN (Not-Aus)** beendet das Programm und seine Hintergrundprozesse sofort; ATAS bleibt offen.
-- ATAS während eines Laufs nicht bedienen. Der Replay-Transport sollte im Modus „Datum auswählen“ stehen.
-
-## Entfernen
-
-Es gibt kein Deinstallationsprogramm. Zum Entfernen: Programmordner und Verknüpfungen löschen,
-`%APPDATA%\ATAS\Indicators\OrderFlowReplayRecorder.dll` bei geschlossenem ATAS löschen (oder die Sicherung
-zurückkopieren) und `%APPDATA%\AtasSessionCollector` löschen. Der Datenordner bleibt bestehen.
-
-## Rückmeldung nach dem Test
-
-Hilfreich sind: Windows- und ATAS-Version, ATAS-Sprache, Auflösung/Skalierung, das Setup-Protokoll (im Setup-Fenster
-markieren und kopieren), aus dem Datenordner `Logs\` und aus der Collection `run_protocol.txt` und
-`coverage_report.txt`. Bitte keine `trades.csv` und keine Zugangsdaten schicken.
+Empfohlene Reihenfolge auf der VM: `diagpack` → `rmrec` (falls noch ein Recorder hängt) → ein Custom-Fenster von
+2 Minuten → zwei Custom-Fenster an zwei Tagen → „Fortsetzen“ (muss beide überspringen).
 
 Versionen, Prüfsummen und Herkunft der Komponenten: `VERSION-UND-HASHES.txt`. Lizenzen: `LIZENZHINWEISE.txt`.

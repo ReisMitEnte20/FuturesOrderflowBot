@@ -28,7 +28,7 @@ internal static partial class Program
     private static readonly Regex RecorderRowText = new(@"(?i)replay\s*rec", RegexOptions.Compiled);
     private static readonly Regex DeleteWords = new(@"(?i)(l[oö]sch|entfern|delete|remove|trash|papierkorb|\bbin\b)", RegexOptions.Compiled);
 
-    internal sealed record AddedRow(int Index, System.Windows.Rect Rect, string UiaText, string OcrText)
+    internal sealed record AddedRow(int Index, System.Windows.Rect Rect, string UiaText, string OcrText, AutomationElement? Element = null)
     {
         public string Identity => (UiaText.Length > 0 ? UiaText : OcrText).Trim();
         public bool IsRecorder => RecorderRowText.IsMatch(UiaText) || RecorderRowText.IsMatch(OcrText);
@@ -37,6 +37,33 @@ internal static partial class Program
     internal enum RemovalOutcome { Removed, NoRecorder, Failed }
 
     // ------------------------------------------------------------------ reine, getestete Teile
+
+    internal enum ListRead { Readable, Empty, Unreadable }
+
+    /// <summary>Ist die Liste 'Hinzugefuegt' wirklich leer, lesbar oder NICHT lesbar? Eine leere UIA-Abfrage ist kein Beweis
+    /// fuer eine leere Liste: massgeblich ist die Kopfzahl 'Hinzugefuegt (N)'; fehlt sie, entscheidet die Texterkennung.</summary>
+    internal static ListRead ClassifyList(int headerCount, int rowsFound, bool allRowsHaveText)
+    {
+        if (headerCount == 0 && rowsFound == 0) return ListRead.Empty;
+        if (headerCount > 0 && rowsFound == headerCount && allRowsHaveText) return ListRead.Readable;
+        if (headerCount < 0 && rowsFound > 0 && allRowsHaveText) return ListRead.Readable;
+        return ListRead.Unreadable;
+    }
+
+    /// <summary>OCR-Woerter zu Zeilen gruppieren (gleiche Hoehe +-tol Pixel). Liefert (y0, y1, x0, Text) je Zeile, von oben nach unten.</summary>
+    internal static List<(int y0, int y1, int x0, string text)> GroupOcrLines(IEnumerable<(int x, int y, int w, int h, string t)> words, int tol = 6)
+    {
+        var lines = new List<(int cy, List<(int x, int y, int w, int h, string t)> ws)>();
+        foreach (var wd in words.OrderBy(w => w.y + w.h / 2).ThenBy(w => w.x))
+        {
+            int cy = wd.y + wd.h / 2;
+            int idx = lines.FindIndex(l => Math.Abs(l.cy - cy) <= tol);
+            if (idx < 0) lines.Add((cy, new List<(int, int, int, int, string)> { wd }));
+            else lines[idx].ws.Add(wd);
+        }
+        return lines.OrderBy(l => l.cy).Select(l => (l.ws.Min(w => w.y), l.ws.Max(w => w.y + w.h), l.ws.Min(w => w.x),
+            string.Join(" ", l.ws.OrderBy(w => w.x).Select(w => w.t)))).ToList();
+    }
 
     /// <summary>Genau die Recorder-Zeile ist weg, alle anderen Zeilen (Text/Reihenfolge) unveraendert?</summary>
     internal static bool OnlyRecorderRemoved(IReadOnlyList<AddedRow> before, IReadOnlyList<AddedRow> after, out string why)
@@ -121,34 +148,66 @@ internal static partial class Program
         return string.Join(" ", parts.Distinct());
     }
 
-    private static List<AddedRow> ReadAddedRows(AutomationElement dlg, Action<string> W, bool ocr)
+    private static int HeaderCount(AutomationElement dlg) { try { return AddedState(dlg).count; } catch { return -1; } }
+
+    /// <summary>Zeilen unter 'Hinzugefuegt' lesen: zuerst UIA (ListItem, sonst zeilenfoermige Elemente im Rohbaum), dann - wenn
+    /// UIA weniger Zeilen liefert als die Kopfzahl - Texterkennung eines frischen Screenshots der Liste.</summary>
+    private static (List<AddedRow> rows, int header, ListRead state, string source) ReadAddedRows(AutomationElement dlg, Action<string> W, bool ocr)
     {
         var rows = new List<AddedRow>();
+        int header = HeaderCount(dlg);
         var list = AddedList(dlg);
-        if (list == null) { W("  [rm] Liste 'Hinzugefuegt' (IndicatorsList) nicht gefunden."); return rows; }
-        AutomationElementCollection? items = null;
-        try { items = list.FindAll(TreeScope.Children, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.ListItem)); } catch { }
-        if (items == null || items.Count == 0)
-            try { items = list.FindAll(TreeScope.Descendants, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.ListItem)); } catch { }
-        if (items == null) return rows;
+        if (list == null) { W("  [rm] Liste 'Hinzugefuegt' (IndicatorsList) nicht gefunden."); return (rows, header, ListRead.Unreadable, "keine Liste"); }
+        System.Windows.Rect lr; try { lr = list.Current.BoundingRectangle; } catch { lr = System.Windows.Rect.Empty; }
+
+        // (a) UIA: ListItems, sonst zeilenfoermige Elemente (Hoehe 12..60, Breite >= 40 % der Liste) im Rohbaum.
+        var elems = new List<AutomationElement>();
+        try { foreach (AutomationElement it in list.FindAll(TreeScope.Descendants, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.ListItem))) elems.Add(it); } catch { }
+        if (elems.Count == 0 && !lr.IsEmpty)
+        {
+            try
+            {
+                var walker = TreeWalker.RawViewWalker; var st = new Stack<(AutomationElement e, int d)>(); st.Push((list, 0)); int n = 0;
+                var seenY = new HashSet<int>();
+                while (st.Count > 0 && n++ < 600)
+                {
+                    var (e, d) = st.Pop();
+                    System.Windows.Rect r; try { r = e.Current.BoundingRectangle; } catch { r = System.Windows.Rect.Empty; }
+                    if (d > 0 && !r.IsEmpty && r.Height >= 12 && r.Height <= 60 && r.Width >= lr.Width * 0.4 && seenY.Add((int)Math.Round(r.Y / 4)))
+                    { elems.Add(e); continue; }
+                    if (d >= 8) continue;
+                    var c = walker.GetFirstChild(e); while (c != null) { st.Push((c, d + 1)); c = walker.GetNextSibling(c); }
+                }
+            }
+            catch { }
+        }
         int i = 0;
-        foreach (AutomationElement it in items)
+        foreach (var it in elems.OrderBy(e => { try { return e.Current.BoundingRectangle.Y; } catch { return 0.0; } }))
         {
             System.Windows.Rect r; try { r = it.Current.BoundingRectangle; } catch { r = System.Windows.Rect.Empty; }
-            string ut = SubtreeText(it);
-            string ot = "";
+            string ut = SubtreeText(it), ot = "";
             if (ocr && !r.IsEmpty && r.Width > 10 && r.Height > 5)
             {
-                try
-                {
-                    using var bmp = CaptureRect(r);
-                    ot = string.Join(" ", ScreenOcr.Recognize(bmp, (int)r.X, (int)r.Y).Select(x => x.Text));
-                }
+                try { using var bmp = CaptureRect(r); ot = string.Join(" ", ScreenOcr.Recognize(bmp, (int)r.X, (int)r.Y).Select(x => x.Text)); }
                 catch (Exception ex) { ot = "(OCR-Fehler: " + ex.Message + ")"; }
             }
-            rows.Add(new AddedRow(i++, r, ut, ot));
+            rows.Add(new AddedRow(i++, r, ut, ot, it));
         }
-        return rows;
+        var state = ClassifyList(header, rows.Count, rows.All(r => r.Identity.Length > 0));
+        if (state != ListRead.Unreadable || !ocr || lr.IsEmpty) return (rows, header, state, "UIA");
+
+        // (b) Texterkennung der ganzen Liste (frischer Screenshot): Zeilen = Textzeilen.
+        try
+        {
+            using var bmp = CaptureRect(lr);
+            var words = ScreenOcr.Recognize(bmp, (int)Math.Round(lr.X), (int)Math.Round(lr.Y)).Select(w => (w.X, w.Y, w.W, w.H, w.Text));
+            var lines = GroupOcrLines(words);
+            var orows = lines.Select((l, k) => new AddedRow(k, new System.Windows.Rect(l.x0, l.y0 - 4, Math.Max(10, lr.X + lr.Width - l.x0), (l.y1 - l.y0) + 8), "", l.text)).ToList();
+            var ostate = ClassifyList(header, orows.Count, orows.All(r => r.Identity.Length > 0));
+            W($"  [rm] UIA lieferte {rows.Count} Zeile(n) bei Kopfzahl {header} -> Texterkennung der Liste: {orows.Count} Zeile(n), Zustand {ostate}.");
+            return (orows, header, ostate, "OCR");
+        }
+        catch (Exception ex) { W($"  [rm] Texterkennung der Liste fehlgeschlagen: {ex.Message}"); return (rows, header, ListRead.Unreadable, "UIA (OCR fehlgeschlagen)"); }
     }
 
     private static Bitmap CaptureRect(System.Windows.Rect r)
@@ -211,6 +270,14 @@ internal static partial class Program
     /// <summary>Entfernt genau den Recorder vom Zielchart. Jeder Schritt verifiziert; bei Fehler Abbrechen + Screenshot.</summary>
     private static RemovalOutcome RemoveRecorderFromChart(Action<string> W, int writerWaitSec = 60)
     {
+        var swRm = Stopwatch.StartNew();
+        W($"  [rm] Beginn {DateTime.Now:HH:mm:ss.fff}");
+        try { return RemoveRecorderFromChartCore(W, writerWaitSec); }
+        finally { W($"  [rm] Ende {DateTime.Now:HH:mm:ss.fff} ({swRm.ElapsedMilliseconds} ms)"); }
+    }
+
+    private static RemovalOutcome RemoveRecorderFromChartCore(Action<string> W, int writerWaitSec)
+    {
         var lockedBefore = Directory.Exists(RecordingsDir)
             ? Directory.GetDirectories(RecordingsDir).Where(d => IsMetaLocked(Path.Combine(d, "meta.json"))).ToList() : new List<string>();
 
@@ -220,31 +287,43 @@ internal static partial class Program
         ForceForeground(dlg); Thread.Sleep(400);
 
         // 1) Recorder-Zeile eindeutig bestimmen (UIA-Text, sonst OCR des frischen Zeilenbilds).
-        var rows0 = ReadAddedRows(dlg, W, ocr: true);
-        W($"  [rm] Hinzugefuegt ({rows0.Count}): {RowsLine(rows0)}");
+        var (rows0, header0, state0, src0) = ReadAddedRows(dlg, W, ocr: true);
+        W($"  [rm] Hinzugefuegt: Kopfzahl={header0} gelesen={rows0.Count} ({src0}) Zustand={state0}: {RowsLine(rows0)}");
+        if (state0 == ListRead.Unreadable)
+        {
+            W("  [rm] BLOCKER: Liste 'Hinzugefuegt' nicht zuverlaessig lesbar (eine leere UIA-Abfrage beweist keine leere Liste) -> kein Klick.");
+            FailArtifacts(W, dlg, "liste", "-"); CancelDialog(dlg, W); return RemovalOutcome.Failed;
+        }
         var recRows = rows0.Where(r => r.IsRecorder).ToList();
         if (recRows.Count == 0)
         {
-            if (rows0.Count == 0 || rows0.All(r => r.Identity.Length > 0))
-            { W("  [rm] kein Recorder unter 'Hinzugefuegt'."); CancelDialog(dlg, W); return RemovalOutcome.NoRecorder; }
-            W("  [rm] BLOCKER: Zeilen ohne lesbaren Text -> Recorder-Zeile nicht sicher bestimmbar."); FailArtifacts(W, dlg, "zeile", "-"); CancelDialog(dlg, W); return RemovalOutcome.Failed;
+            W(state0 == ListRead.Empty ? "  [rm] Liste 'Hinzugefuegt' ist leer (Kopfzahl 0) -> kein Recorder am Chart."
+                                       : "  [rm] Liste gelesen, keine Recorder-Zeile darin.");
+            CancelDialog(dlg, W); return RemovalOutcome.NoRecorder;
         }
         if (recRows.Count > 1) { W($"  [rm] BLOCKER: {recRows.Count} Recorder-Zeilen - nicht eindeutig."); FailArtifacts(W, dlg, "zeile", "-"); CancelDialog(dlg, W); return RemovalOutcome.Failed; }
         var rec = recRows[0];
 
         // 2) Zeile auswaehlen (UIA) + Mauszeiger auf die Zeile (Aktionssymbole erscheinen).
-        var list = AddedList(dlg);
-        AutomationElement? item = null;
-        try { item = list?.FindAll(TreeScope.Descendants, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.ListItem)).Cast<AutomationElement>().ElementAtOrDefault(rec.Index); } catch { }
-        if (item == null) { W("  [rm] BLOCKER: Recorder-Zeile per UIA nicht mehr greifbar."); FailArtifacts(W, dlg, "zeile", "-"); CancelDialog(dlg, W); return RemovalOutcome.Failed; }
-        try { if (item.TryGetCurrentPattern(ScrollItemPattern.Pattern, out var sp)) ((ScrollItemPattern)sp).ScrollIntoView(); } catch { }
+        var item = rec.Element;
         bool selected = false;
-        try { if (item.TryGetCurrentPattern(SelectionItemPattern.Pattern, out var sel)) { ((SelectionItemPattern)sel).Select(); Thread.Sleep(300); selected = ((SelectionItemPattern)sel).Current.IsSelected; } } catch { }
-        System.Windows.Rect rr; try { rr = item.Current.BoundingRectangle; } catch { rr = rec.Rect; }
+        if (item != null)
+        {
+            try { if (item.TryGetCurrentPattern(ScrollItemPattern.Pattern, out var sp)) ((ScrollItemPattern)sp).ScrollIntoView(); } catch { }
+            try { if (item.TryGetCurrentPattern(SelectionItemPattern.Pattern, out var sel)) { ((SelectionItemPattern)sel).Select(); Thread.Sleep(250); selected = ((SelectionItemPattern)sel).Current.IsSelected; } } catch { }
+        }
+        System.Windows.Rect rr = rec.Rect; if (item != null) { try { rr = item.Current.BoundingRectangle; } catch { rr = rec.Rect; } }
         if (rr.IsEmpty) { W("  [rm] BLOCKER: Recorder-Zeile ohne Bildschirmposition."); FailArtifacts(W, dlg, "zeile", "-"); CancelDialog(dlg, W); return RemovalOutcome.Failed; }
         ForceForeground(dlg); Thread.Sleep(150);
-        // Hover auf den TEXTteil (linkes Fuenftel) - waehlt hoechstens die Zeile, loest kein Symbol aus.
+        // Hover/Klick auf den TEXT der Zeile (erstes erkanntes Wort) - waehlt hoechstens die Zeile, loest kein Symbol aus.
         int hx = (int)(rr.X + Math.Min(60, rr.Width / 5)), hy = (int)(rr.Y + rr.Height / 2);
+        try
+        {
+            using var rb = CaptureRect(rr);
+            var fw = ScreenOcr.Recognize(rb, (int)Math.Round(rr.X), (int)Math.Round(rr.Y)).OrderBy(w => w.X).FirstOrDefault();
+            if (fw != null) { hx = fw.CX; hy = fw.CY; }
+        }
+        catch { }
         SetCursorPos(hx, hy); Thread.Sleep(700);
         if (!selected) { ClickScreen(hx, hy); Thread.Sleep(400); }
         W($"  [rm] Recorder-Zeile #{rec.Index} ausgewaehlt={selected} rect={(int)rr.X},{(int)rr.Y},{(int)rr.Width}x{(int)rr.Height} hover=({hx},{hy}) dpi={SafeDpi(dlg)}");
@@ -255,7 +334,7 @@ internal static partial class Program
         try
         {
             var btns = new List<AutomationElement>();
-            var walker = TreeWalker.RawViewWalker; var st = new Stack<AutomationElement>(); st.Push(item); int n = 0;
+            var walker = TreeWalker.RawViewWalker; var st = new Stack<AutomationElement>(); if (item != null) st.Push(item); int n = 0;
             while (st.Count > 0 && n++ < 300) { var e = st.Pop(); if (Safe(() => e.Current.ControlType.ProgrammaticName) == "ControlType.Button") btns.Add(e); var c = walker.GetFirstChild(e); while (c != null) { st.Push(c); c = walker.GetNextSibling(c); } }
             foreach (var b in btns)
                 W($"    UIA-Schaltflaeche in Zeile: name='{Safe(() => b.Current.Name)}' aid='{Safe(() => b.Current.AutomationId)}' help='{Safe(() => b.Current.HelpText)}' rect={Rect(b)}");
@@ -309,9 +388,16 @@ internal static partial class Program
 
         // 4) Wirkung pruefen: genau die Recorder-Zeile weg, andere Zeilen unveraendert. Sonst Abbrechen.
         var dlg2 = IndicatorDialog() ?? dlg;
-        var rows1 = ReadAddedRows(dlg2, W, ocr: true);
-        W($"  [rm] Hinzugefuegt nachher ({rows1.Count}): {RowsLine(rows1)}");
-        if (!OnlyRecorderRemoved(rows0, rows1, out var why))
+        var (rows1, header1, state1, src1) = ReadAddedRows(dlg2, W, ocr: true);
+        W($"  [rm] Hinzugefuegt nachher: Kopfzahl={header1} gelesen={rows1.Count} ({src1}) Zustand={state1}: {RowsLine(rows1)}");
+        string why;
+        bool headerOk = header0 < 0 || header1 == header0 - 1;
+        if (state1 == ListRead.Unreadable || !headerOk || !OnlyRecorderRemoved(rows0, rows1, out why))
+        {
+            why = state1 == ListRead.Unreadable ? "Liste nachher nicht lesbar" : !headerOk ? $"Kopfzahl {header0} -> {header1}" : (OnlyRecorderRemoved(rows0, rows1, out var w2) ? "" : w2);
+        }
+        else why = "";
+        if (why != "")
         {
             W($"  [rm] BLOCKER: Entfernen nicht bestaetigt ({why}).");
             FailArtifacts(W, dlg2, "pruefung", clickInfo);
@@ -345,9 +431,9 @@ internal static partial class Program
         bool stillListed = false;
         if (OpenIndicatorDialog(W) && IndicatorDialog() is { } dlg3)
         {
-            var rows2 = ReadAddedRows(dlg3, W, ocr: true);
-            stillListed = rows2.Any(r => r.IsRecorder);
-            W($"  [rm] Gegenprobe Hinzugefuegt ({rows2.Count}): {RowsLine(rows2)}");
+            var (rows2, header2, state2, src2) = ReadAddedRows(dlg3, W, ocr: true);
+            stillListed = state2 == ListRead.Unreadable || rows2.Any(r => r.IsRecorder);
+            W($"  [rm] Gegenprobe Hinzugefuegt: Kopfzahl={header2} gelesen={rows2.Count} ({src2}) Zustand={state2}: {RowsLine(rows2)}");
             CancelDialog(dlg3, W);
         }
         bool ok2 = writersDone && lockedNow == 0 && !stillListed;

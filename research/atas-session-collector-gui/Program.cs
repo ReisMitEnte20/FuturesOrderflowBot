@@ -7,7 +7,7 @@ namespace AtasSessionCollector;
 
 internal static class Program
 {
-    public const string AppVersion = "1.3.2";
+    public const string AppVersion = "1.3.3";
 
     [STAThread]
     private static int Main(string[] args)
@@ -47,6 +47,26 @@ internal static class SelfTest
     {
         try { AttachConsole(-1); } catch { }  // an aufrufende Shell anheften (WinExe hat sonst keine Konsole)
         Line("== ATAS-Session-Collector Selftest (Zeitzonen & Kalender) ==\n");
+
+        // --- Benutzerdefiniertes Fenster (Uhrzeit mit Sekunden + Zeitzone) ---
+        {
+            var c = SessionCalendar.Custom(new TimeSpan(14, 30, 0), new TimeSpan(14, 32, 0), SessionCalendar.BerlinTzId);
+            var d = SessionCalendar.PlanDay(new DateOnly(2026, 10, 26), c);
+            Expect(d.WillRecord && d.UtcStart == new DateTime(2026, 10, 26, 13, 30, 0) && d.UtcEnd == new DateTime(2026, 10, 26, 13, 32, 0), "Custom 26.10.2026 14:30:00-14:32:00 Europe/Berlin -> UTC 13:30:00-13:32:00", "");
+            var dSummer = SessionCalendar.PlanDay(new DateOnly(2026, 7, 1), c);
+            Expect(dSummer.UtcStart == new DateTime(2026, 7, 1, 12, 30, 0), "Custom Sommerzeit 01.07.2026 14:30 Berlin -> 12:30Z", "");
+            Expect(SessionCalendar.CollectionFolderName("MNQ", c, new DateOnly(2026, 10, 26), new DateOnly(2026, 10, 26)) == "MNQ_Custom_143000-143200_Europe-Berlin_2026-10-26_bis_2026-10-26", "Custom Ordnername mit Sekunden + Zone", "");
+            var c2 = SessionCalendar.Custom(new TimeSpan(14, 30, 0), new TimeSpan(14, 33, 0), SessionCalendar.BerlinTzId);
+            Expect(SessionCalendar.CollectionFolderName("MNQ", c, new DateOnly(2026, 10, 26), new DateOnly(2026, 10, 26)) != SessionCalendar.CollectionFolderName("MNQ", c2, new DateOnly(2026, 10, 26), new DateOnly(2026, 10, 26)), "Custom: anderes Testfenster -> anderer Ordner (Resume verwechselt nicht)", "");
+            var gap = SessionCalendar.PlanDay(new DateOnly(2026, 3, 29), SessionCalendar.Custom(new TimeSpan(2, 30, 0), new TimeSpan(2, 40, 0), SessionCalendar.BerlinTzId));
+            Expect(gap.Status == DayStatus.Invalid && !gap.WillRecord, "Custom: 29.03.2026 02:30 Berlin existiert nicht -> Invalid", "");
+            var amb = SessionCalendar.PlanDay(new DateOnly(2026, 10, 25), SessionCalendar.Custom(new TimeSpan(2, 30, 0), new TimeSpan(2, 40, 0), SessionCalendar.BerlinTzId));
+            Expect(amb.Status == DayStatus.Invalid, "Custom: 25.10.2026 02:30 Berlin mehrdeutig -> Invalid", "");
+            Expect(SessionCalendar.PlanDay(new DateOnly(2026, 10, 24), c).Status == DayStatus.Weekend, "Custom: Wochenende uebersprungen", "");
+            Expect(SessionCalendar.ValidateCustom(new TimeSpan(14, 32, 0), new TimeSpan(14, 30, 0)) != null, "Custom: Ende vor Start abgelehnt", "");
+            Expect(SessionCalendar.TryParseClock("14:30:05", out var tt) && tt == new TimeSpan(14, 30, 5) && !SessionCalendar.TryParseClock("14:30", out _) && !SessionCalendar.TryParseClock("24:00:00", out _), "Custom: HH:mm:ss streng", "");
+            Expect(SessionCalendar.CollectionFolderName("MNQ", SessionCalendar.Get(SessionId.NewYork), new DateOnly(2026, 10, 26), new DateOnly(2026, 10, 28)) == "MNQ_NewYork_0930-1200_America-New-York_2026-10-26_bis_2026-10-28", "NY-Ordnername unveraendert (bestehende Collections/Resume)", "");
+        }
 
         // --- Zeitzonenfaelle rund um die versetzten Sommerzeitwechsel 2026 ---
         // EU-Sommerzeit endet 2026-10-25, US-Sommerzeit endet 2026-11-01.

@@ -36,6 +36,7 @@ internal static partial class Program
                 "api-scan" => ApiScan(args.Length > 1 ? args[1] : null),
                 "uia-dump" => UiaDump(args.Length > 1 ? args[1] : null),
                 "chartdiag" => ChartDiag(args.Skip(1).FirstOrDefault(a => !a.StartsWith("-"))),
+                "diagpack" => DiagPack(args.Skip(1).FirstOrDefault(a => !a.StartsWith("-"))),
                 "drive" => Drive(args.Contains("--go"), args.FirstOrDefault(a => a.EndsWith(".txt"))),
                 "inspect2" => Inspect2(),
                 "inspect-date" => InspectDate(args.FirstOrDefault(a => a.EndsWith(".txt"))),
@@ -1192,6 +1193,101 @@ internal static partial class Program
         Check("Watchdog 100x NICHT gleich naiver Division 60/100", PlayWatchdogSeconds(60, 100.0, 200) != (int)Math.Ceiling(60 / 100.0));
 
         // ---- Vorpruefungen des Sammellaufs (VM-Befunde): Bridge-Selbsttest + Recorder-Ausgabeordner ----
+        // ---- 1.3.3: Ende/Fehler-Klassifikation aus ATAS-Protokollzeilen (Format wie im echten app_*.log) ----
+        string Ln(string t, string th, string lvl, string src, string msg) => $"2026-11-12 {t} [{th,-10}] {lvl,-5} {src,-15}: {msg}";
+        string PF(string t, string d = "26.10.2026") => Ln(t, "2", "INFO", "Replay DS", $"Playing from {d} 13:30:00 to {d} 16:00:00 type CandlesAndGeneratedBestPrices.");
+        var natural = new[]
+        {
+            PF("20:29:10,147"),
+            Ln("20:29:10,147", "ReplayLoad", "INFO", "Replay", "State changed Initialized -> Started."),
+            Ln("20:29:56,597", "29", "INFO", "Cache1 US", "Disconnecting..."),
+            Ln("20:29:56,598", "78", "INFO", "Cache1 US", "Disconnected."),
+            Ln("20:30:40,147", "ReplayLoad", "INFO", "Replay DS", "Playing historical data stopped."),
+            Ln("20:30:40,148", "ReplayLoad", "INFO", "Replay", "State changed Started -> Stopped."),
+            Ln("20:30:40,148", "ReplayLoad", "INFO", "Replay", "Data processing finished."),
+            Ln("20:30:40,311", "2", "INFO", "Market Replay", "Replay timing: start path = rewind (history re-request skipped)."),
+            Ln("20:30:42,107", "78", "INFO", "Replay", "State changed Stopped -> Initializing."),
+            PF("20:30:44,506"),
+            Ln("20:30:44,506", "ReplayLoad", "INFO", "Replay", "State changed Initialized -> Started."),
+        };
+        {
+            var ex = new ReplayExecution(); ex.Feed(natural.Take(4));
+            Check("Ende: Cache-Disconnect waehrend Wiedergabe -> weiter Running (nur Hinweis)", ex.State == ReplayEnd.Running && ex.Hints.Count == 2);
+            ex.Feed(natural.Skip(4).Take(4));
+            Check("Ende: Abschluss + Auto-Rewind -> NaturalEnd mit Belegzeilen", ex.State == ReplayEnd.NaturalEnd && ex.Evidence.Count == 3 && ex.Evidence[2].Message.Contains("rewind"), ex.Rule);
+            ex.Feed(natural.Skip(8));
+            Check("Ende: anschliessender Auto-Loop loescht den Zustand NICHT (Latch)", ex.State == ReplayEnd.NaturalEnd && ex.LoopRestarted);
+            Check("Ende: Ladebereich aus 'Playing from' (UTC)", ex.Range == (new DateTime(2026, 10, 26, 13, 30, 0, DateTimeKind.Utc), new DateTime(2026, 10, 26, 16, 0, 0, DateTimeKind.Utc)));
+        }
+        {
+            var ex = new ReplayExecution(); ex.Feed(natural.Take(2));
+            ex.Feed(new[] { Ln("20:29:40,000", "31", "ERROR", "Auth", "Instrument 29210 for crosstrading group 9 (Ether) not found."),
+                            Ln("20:29:41,000", "Process", "ERROR", "Main window", "Notification title 'Order register failed' message 'Account is done for day'."),
+                            "System.Exception: Account is done for day",
+                            Ln("20:29:42,000", "40", "INFO", "Websocket", "Exception while reading frame (socket closed)") });
+            Check("Fehler: ERROR/Exception ANDERER Module -> kein Errored (VM-Befund t+99s)", ex.State == ReplayEnd.Running, ex.State.ToString());
+            ex.Feed(new[] { Ln("20:29:50,000", "ReplayLoad", "ERROR", "Replay", "Data source faulted: connection to replay server lost.") });
+            Check("Fehler: ERROR der Replay-Quelle -> Errored mit Originalzeile", ex.State == ReplayEnd.Errored && ex.Evidence[0].Source == "Replay" && ex.Rule.Contains("Replay"));
+        }
+        {
+            var ex = new ReplayExecution(); ex.Feed(natural.Take(2));
+            ex.Feed(new[] { Ln("20:30:00,000", "ReplayLoad", "INFO", "Replay", "State changed Started -> Stopped."), Ln("20:30:00,000", "ReplayLoad", "INFO", "Replay", "Data processing finished.") });
+            Check("Ende: Stopp ohne Rewind und ohne Datenende -> KEIN natuerliches Ende", ex.State == ReplayEnd.Running);
+            ex.DataReachedEnd = true; ex.Recheck();
+            Check("Ende: Stopp + Recorder am Fensterende (unterstuetzend) -> NaturalEnd", ex.State == ReplayEnd.NaturalEnd && ex.Rule.Contains("unterstuetzend"));
+        }
+        {
+            var ex = new ReplayExecution(); ex.Feed(natural.Take(2));
+            ex.MarkOurStop(new DateTime(2026, 11, 12, 20, 29, 59));
+            ex.Feed(new[] { Ln("20:30:00,000", "ReplayLoad", "INFO", "Replay", "State changed Started -> Stopped."), Ln("20:30:00,001", "ReplayLoad", "INFO", "Replay", "Data processing finished."),
+                            Ln("20:30:00,100", "2", "INFO", "Replay MD", "Loading historical data to online state for #MNQZ6@CME."), Ln("20:30:00,200", "2", "INFO", "Market Replay", "Replay timing: start path = rewind") });
+            Check("Ende: eigener Stopp -> StoppedByUs, nie NaturalEnd", ex.State == ReplayEnd.StoppedByUs);
+        }
+        {
+            var ex = new ReplayExecution(); ex.Feed(natural.Take(2));
+            ex.Feed(new[] { Ln("20:30:00,100", "2", "INFO", "Replay MD", "Loading historical data to online state for #MNQZ6@CME.") });
+            Check("Ende: Wechsel zu Echtzeit (nicht durch uns) -> OnlineExit", ex.State == ReplayEnd.OnlineExit);
+            var ex2 = new ReplayExecution(); ex2.Feed(natural.Take(2)); ex2.Feed(new[] { PF("20:31:00,000", "27.10.2026") });
+            Check("Ende: neuer Bereich ohne Abschluss -> OtherRangeRestart", ex2.State == ReplayEnd.OtherRangeRestart);
+        }
+        {
+            var ex = new ReplayExecution();
+            ex.Feed(new[] { Ln("20:31:56,273", "ReplayLoad", "INFO", "Replay DS", "Replay timing: pre-roll 1119 ms, 841175 entities warmed before 2026-10-27 13:30:00Z.") });
+            Check("Ladebestaetigung vor Play: 'warmed before ...Z' gelesen", ex.WarmStartUtc == new DateTime(2026, 10, 27, 13, 30, 0, DateTimeKind.Utc) && !ex.Started);
+            Check("Logzeile: Quelle/Stufe korrekt geparst", AtasLogLine.Parse(Ln("20:30:40,311", "2", "INFO", "Market Replay", "x"))?.Source == "Market Replay"
+                  && AtasLogLine.Parse("System.Exception: Account is done for day") == null);
+        }
+        // ---- Dialog-Zeitzone: keine feste Berlin-Annahme, keine +-1h-Heuristik ----
+        {
+            var tmp = Path.Combine(baseDir, "Platform_test.cnf");
+            File.WriteAllText(tmp, "{\"Login\":\"x@y.de\",\"Password\":\"geheim\",\"SavedTimeZoneOffset\":1,\"SavedTimeZoneOffsetMinutes\":0,\"IsAutoUpdateTimeZone\":false}");
+            var z = DialogZone.Resolve(tmp);
+            Check("Zeitzone: ATAS fester Versatz 0 (z. B. VM in UTC) -> Eingabe = UTC", z.FixedOffsetMinutes == 0 && z.FromUtc(new DateTime(2026, 10, 26, 13, 30, 0, DateTimeKind.Utc)) == new DateTime(2026, 10, 26, 13, 30, 0));
+            Check("Zeitzone: Anmeldedaten werden nicht uebernommen", !z.Source.Contains("geheim") && !z.Source.Contains("x@y.de"));
+            File.WriteAllText(tmp, "{\"SavedTimeZoneOffsetMinutes\":60,\"IsAutoUpdateTimeZone\":true}");
+            var za = DialogZone.Resolve(tmp);
+            Check("Zeitzone: automatisch -> Windows-Zeitzone mit Sommerzeitregeln", za.Zone != null && za.FixedOffsetMinutes == null);
+            var berlin = new DialogZone("test", TimeZoneInfo.FindSystemTimeZoneById("W. Europe Standard Time"), null);
+            Check("Zeitzone: Berlin Sommerzeit (Juli) 13:30Z -> 15:30", berlin.FromUtc(new DateTime(2026, 7, 1, 13, 30, 0, DateTimeKind.Utc)) == new DateTime(2026, 7, 1, 15, 30, 0));
+            Check("Zeitzone: Berlin Winterzeit (26.10.) 13:30Z -> 14:30", berlin.FromUtc(new DateTime(2026, 10, 26, 13, 30, 0, DateTimeKind.Utc)) == new DateTime(2026, 10, 26, 14, 30, 0));
+            File.Delete(tmp);
+        }
+        // ---- Liste 'Hinzugefuegt': leer vs. nicht lesbar (VM-Befund: 0 UIA-Zeilen bei aktivem Recorder) ----
+        Check("Liste: Kopfzahl 1, UIA 0 Zeilen -> NICHT lesbar (kein 'kein Recorder')", ClassifyList(1, 0, true) == ListRead.Unreadable);
+        Check("Liste: Kopfzahl 0, 0 Zeilen -> leer", ClassifyList(0, 0, true) == ListRead.Empty);
+        Check("Liste: Kopfzahl unbekannt, 0 Zeilen -> NICHT lesbar", ClassifyList(-1, 0, true) == ListRead.Unreadable);
+        Check("Liste: Kopfzahl 2, 2 Zeilen mit Text -> lesbar", ClassifyList(2, 2, true) == ListRead.Readable);
+        Check("Liste: Zeile ohne Text -> NICHT lesbar", ClassifyList(1, 1, false) == ListRead.Unreadable);
+        {
+            var lines = GroupOcrLines(new[] { (700, 460, 30, 14, "OF"), (735, 461, 60, 14, "Replay"), (800, 459, 70, 14, "Recorder"), (700, 482, 40, 14, "Big"), (745, 483, 50, 14, "trades") });
+            Check("OCR-Zeilen: Woerter je Zeile gruppiert, von oben nach unten", lines.Count == 2 && lines[0].text == "OF Replay Recorder" && lines[1].text == "Big trades" && lines[0].x0 == 700);
+        }
+        // ---- Diagnose: Konto-/Zugangsdaten maskiert ----
+        {
+            var m = MaskSensitive("2026-11-16 16:56:59,097 [Process] INFO  ic[LT-R3L4XK96]: State changed Connecting => Connected. user a.b@example.com [MNQZ6@CME, LFF050-D4K01AZ9-PRO022] login=abc");
+            Check("Diagnose: E-Mail, Konto-IDs und Login maskiert", !m.Contains("example.com") && !m.Contains("LT-R3L4XK96") && !m.Contains("LFF050") && !m.Contains("login=abc") && m.Contains("MNQZ6@CME"), m);
+        }
+
         // ---- Recorder entfernen: Wirkungspruefung + Symbolsuche im Zeilenbild (VM-Befund: Papierkorb verfehlt) ----
         AddedRow Row(int i, string txt, string ocr = "") => new(i, new System.Windows.Rect(600, 450 + 22 * i, 580, 21), txt, ocr);
         {
@@ -1513,7 +1609,7 @@ internal static partial class Program
             if (IsEnabledSafe(btn)) { try { invoked = Invoke(btn!); } catch { invoked = false; } }   // UIA-Invoke (zuverlaessig)
             if (!invoked && btn != null) { ClickElement(btn); invoked = true; }                        // sonst echter Klick am Button
             if (!invoked) W("  [ind] 'Indikatoren'-Schaltflaeche per UIA nicht gefunden (kein Klick auf feste Koordinaten).");
-            Thread.Sleep(1300);
+            for (var swD = Stopwatch.StartNew(); swD.ElapsedMilliseconds < 3000 && IndicatorDialog() == null && FindIdAny("StartEdit") == null; Thread.Sleep(100)) { }
             if (FindIdAny("StartEdit") != null)   // versehentlich Datum-Dialog -> Chart-Ansicht noetig
             {
                 W("  [ind] Datum-Dialog statt Indikatoren -> schließen + 'Chart'-Reiter aktivieren");
@@ -1598,7 +1694,7 @@ internal static partial class Program
         if (edit == null) { W("  [add] Suchfeld (SearchText) nicht gefunden."); return; }
         try { edit.SetFocus(); Thread.Sleep(180); } catch { }
         KeyVk(0x41, ctrl: true); Thread.Sleep(70); KeyVk(0x2E); Thread.Sleep(120);
-        TypeUnicode(text); Thread.Sleep(600);
+        TypeUnicode(text); Thread.Sleep(150);
         W($"  [add] Suche '{text}' -> Feld='{ValueOf(edit)}'");
     }
 
@@ -1626,13 +1722,16 @@ internal static partial class Program
         if (hit == null) { W($"[add] BLOCKER: exakter Treffer '{REC_CATALOG_NAME}' nicht in der Ergebnisliste gefunden (keine anderen Indikatoren ausprobiert)."); return false; }
         W($"[add] exakter Treffer: '{ValueOf(hit)}' rect={Rect(hit)}");
         try { if (hit.TryGetCurrentPattern(SelectionItemPattern.Pattern, out var sp)) ((SelectionItemPattern)sp).Select(); } catch { }
-        Thread.Sleep(250);
+        Thread.Sleep(80);
         System.Windows.Rect hr; try { hr = hit.Current.BoundingRectangle; } catch { hr = System.Windows.Rect.Empty; }
         if (hr.IsEmpty) { W("[add] BLOCKER: Treffer ohne Rect (nicht klickbar)."); return false; }
-        DoubleClickFast((int)(hr.X + hr.Width / 2), (int)(hr.Y + hr.Height / 2)); Thread.Sleep(700);   // Doppelklick am TATSAECHLICHEN Element
-        var dlg2 = IndicatorDialog() ?? dlg;
-        var st1 = AddedState(dlg2);
-        bool appeared = st1.hasRecorder || (st1.count >= 0 && st1.count > (st0.count < 0 ? 0 : st0.count));
+        DoubleClickFast((int)(hr.X + hr.Width / 2), (int)(hr.Y + hr.Height / 2));   // echter Doppelklick am TATSAECHLICHEN Element
+        var dlg2 = dlg; var st1 = st0; bool appeared = false;
+        for (var swA = Stopwatch.StartNew(); swA.ElapsedMilliseconds < 4000 && !appeared; Thread.Sleep(100))
+        {
+            dlg2 = IndicatorDialog() ?? dlg; st1 = AddedState(dlg2);
+            appeared = st1.hasRecorder || (st1.count >= 0 && st1.count > (st0.count < 0 ? 0 : st0.count));
+        }
         if (!appeared) { W($"[add] BLOCKER: Recorder nicht unter 'Hinzugefügt' erschienen (count {st0.count}->{st1.count}, recorder={st1.hasRecorder})."); return false; }
         W($"[add] unter 'Hinzugefügt' bestaetigt (count {st0.count}->{st1.count}, recorder={st1.hasRecorder}).");
         // Hinweis Portabilitaet: Der Recorder liest 'OutputRoot' nur EINMAL beim Start (Hinzufuegen) und re-initialisiert
@@ -1640,7 +1739,8 @@ internal static partial class Program
         // als Standardvorlage in ATAS gesetzt ('Als Vorlage speichern'); jeder Add erbt ihn dann beim Start.
         var apply = FindBtnIn(dlg2, "Übernehmen");
         if (apply == null) { W("[add] BLOCKER: 'Übernehmen' nicht gefunden."); return false; }
-        Invoke(apply); Thread.Sleep(1200);
+        Invoke(apply);
+        for (var swC = Stopwatch.StartNew(); swC.ElapsedMilliseconds < 5000 && IndicatorDialog() != null; Thread.Sleep(100)) { }
         W("[add] 'Übernehmen' ausgeloest.");
         return true;
     }
@@ -1698,7 +1798,8 @@ internal static partial class Program
         // Waehrend dieses Transients ('Module laden…') ist 'Zur Echtzeit wechseln' DEAKTIVIERT. Daher pollen, bis der
         // Button AKTIV ist (Replay spielt/pausiert wieder), ihn dann invoken; Erfolg = 'Indikatoren' wieder aktiv.
         bool invoked = false, ok = false, toLiveSeen = false;
-        for (int i = 0; i < 40 && !ok; i++)   // bis ~40s: deckt Rewind (~11s) + Settle ab
+        var swView = Stopwatch.StartNew();
+        for (int i = 0; i < 160 && !ok; i++)   // 250-ms-Schritte, bis ~40s: deckt Rewind (~11s) + Settle ab
         {
             if (IndicatorsEnabled()) { ok = true; break; }
             var toLive = FindBtnByHelpAny("Zur Echtzeit wechseln");
@@ -1707,9 +1808,9 @@ internal static partial class Program
             {
                 W($"[view] 'Zur Echtzeit wechseln' aktiv -> Invoke (rect={Rect(toLive!)})");
                 try { Invoke(toLive!); invoked = true; } catch (Exception ex) { W($"[view] Invoke-Fehler: {ex.Message}"); }
-                for (int k = 0; k < 8 && !ok; k++) { Thread.Sleep(600); if (IndicatorsEnabled()) ok = true; }
+                for (int k = 0; k < 20 && !ok; k++) { Thread.Sleep(250); if (IndicatorsEnabled()) ok = true; }
             }
-            else { Thread.Sleep(1000); if (!toLiveSeen && i >= 12) break; }   // custom-gerendert: Button existiert gar nicht in UIA -> Fallback unten
+            else { Thread.Sleep(250); if (!toLiveSeen && i >= 48) break; }   // custom-gerendert: Button existiert gar nicht in UIA -> Fallback unten
         }
         // FALLBACK (custom-gerenderter Transport ohne UIA-'Zur Echtzeit wechseln'): Replay-Modus ueber die Ribbon-
         // Umschaltung verlassen. UNABHAENGIG verifiziert daran, dass der chart-gebundene 'Indikatoren'-Button wieder aktiv wird.
@@ -1718,11 +1819,11 @@ internal static partial class Program
             W("[view] 'Zur Echtzeit wechseln' nicht ueber UIA erreichbar -> Fallback: RibbonReplayButton (Replay-Modus AUS).");
             var rb = FindIdAny("RibbonReplayButton");
             if (rb != null) { try { Invoke(rb); } catch (Exception ex) { W($"[view] Ribbon-Invoke-Fehler: {ex.Message}"); } }
-            for (int k = 0; k < 25 && !ok; k++) { Thread.Sleep(1000); if (IndicatorsEnabled()) ok = true; }
+            for (int k = 0; k < 100 && !ok; k++) { Thread.Sleep(250); if (IndicatorsEnabled()) ok = true; }
         }
         if (!invoked && !ok) W("[view] BLOCKER: Replay-Ansicht weder ueber 'Zur Echtzeit wechseln' noch ueber die Ribbon-Umschaltung verlassen.");
         bool transportClosed = !ReplayOpen();
-        W($"[view] Ergebnis: Indikatoren aktiv={ok}  Transport {(transportClosed ? "zu" : "offen")}  -> Replay-Ansicht {(ok ? "VERLASSEN (verifiziert)" : "NICHT verlassen")}");
+        W($"[view] Ergebnis: Indikatoren aktiv={ok}  Transport {(transportClosed ? "zu" : "offen")}  -> Replay-Ansicht {(ok ? "VERLASSEN (verifiziert)" : "NICHT verlassen")}  ({swView.ElapsedMilliseconds} ms)");
         return ok;
     }
 
@@ -1912,26 +2013,39 @@ internal static partial class Program
 
     // EIN Aufnahmeauftrag (bewaehrter Ablauf). Zeitraum (dStart/dEnd, Dialog/Berlin) ist Parameter; Zielchart ueber
     // ATAS_TARGET_CHART. Mehrere Auftraege teilen sich sharedSb (ein Report) und outFile. rc==0 == GESAMT-PASS.
-    private static int RunRecordingJob(string? outFile, string dStart, string dEnd, int jobNo, int jobCount, StringBuilder? sharedSb, string speedName = "1x")
+    // Altaufrufer (Berlin-Wandzeit): nach UTC umrechnen und den UTC-Auftrag ausfuehren.
+    private static int RunRecordingJob(string? outFile, string dStartBerlin, string dEndBerlin, int jobNo, int jobCount, StringBuilder? sharedSb, string speedName = "1x")
+    {
+        var ci = System.Globalization.CultureInfo.InvariantCulture;
+        return RunRecordingJob(outFile, BerlinToUtc(DateTime.ParseExact(dStartBerlin, "dd.MM.yyyy HH:mm:ss", ci)),
+            BerlinToUtc(DateTime.ParseExact(dEndBerlin, "dd.MM.yyyy HH:mm:ss", ci)), jobNo, jobCount, sharedSb, speedName);
+    }
+
+    private static int RunRecordingJob(string? outFile, DateTime sUtc, DateTime eUtc, int jobNo, int jobCount, StringBuilder? sharedSb, string speedName = "1x")
     {
         var sb = sharedSb ?? new StringBuilder();
         void W(string s = "") { sb.AppendLine(s); Console.WriteLine(s); if (outFile != null) { try { File.WriteAllText(outFile, sb.ToString()); } catch { } } }
         double tBed = 0, tLoad = 0, tPlay = 0; var swAll = Stopwatch.StartNew();
         string targetChart = Environment.GetEnvironmentVariable("ATAS_TARGET_CHART") ?? "";  // leer = einziger Chart
-        // UTC-Zuordnung ausdruecklich via TimeZoneInfo(Europe/Berlin) berechnet (korrektes DST, KEIN fester Offset);
-        // die autoritative Laufzeit-Zuordnung kommt zusaetzlich aus dem ATAS-Log ('Playing from' in UTC).
-        var dswHdr = DateTime.ParseExact(dStart, "dd.MM.yyyy HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
-        var dewHdr = DateTime.ParseExact(dEnd, "dd.MM.yyyy HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
-        var dswUtc = BerlinToUtc(dswHdr); var dewUtc = BerlinToUtc(dewHdr);
-        // Fensterdauer (s) fuer session-abhaengige Zeitlimits (Laden/Watchdog/Writer-Flush). Grosse Sessionfenster
-        // (z.B. 2,5 h) brauchen mehr Lade-/Flush-Zeit; die Grenzen werden NUR groesser, nie kuerzer als bisher.
-        int windowSec = Math.Max(1, (int)(dewHdr - dswHdr).TotalSeconds);
+        // Zeitbezuege GETRENNT fuehren: Soll-Grenzen in UTC (unveraenderlich) -> Eingabe im ATAS-Datumsdialog (dessen
+        // Zeitzone) -> von ATAS bestaetigter Ladebereich (Log, UTC) -> aufgezeichneter Datenbereich (Recorder, UTC).
+        sUtc = DateTime.SpecifyKind(sUtc, DateTimeKind.Utc); eUtc = DateTime.SpecifyKind(eUtc, DateTimeKind.Utc);
+        var zone = DialogZone.Resolve();
+        string dStart = zone.FromUtc(sUtc).ToString("dd.MM.yyyy HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
+        string dEnd = zone.FromUtc(eUtc).ToString("dd.MM.yyyy HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
+        // Fensterdauer (s) fuer fensterabhaengige Zeitlimits (Laden/Watchdog/Writer-Flush).
+        int windowSec = Math.Max(1, (int)(eUtc - sUtc).TotalSeconds);
         W($"\n# ATAS Aufnahmeauftrag {jobNo}/{jobCount}  {DateTime.Now:yyyy-MM-dd HH:mm:ss}  Ausgabe: {RecordingsDir}");
-        W($"# Zeitraum Europe/Berlin: [{dStart}, {dEnd})  == UTC [{dswUtc:yyyy-MM-dd HH:mm:ss}, {dewUtc:yyyy-MM-dd HH:mm:ss}) (TimeZoneInfo, DST-korrekt; Offset={(dswHdr - dswUtc).TotalHours:+0;-0}h)  Zielchart: {(targetChart == "" ? "(einziger Chart)" : targetChart)}");
+        W($"# Soll (UTC, unveraenderlich): [{sUtc:yyyy-MM-dd HH:mm:ss}Z, {eUtc:yyyy-MM-dd HH:mm:ss}Z)");
+        W($"# Dialog-Eingabe: [{dStart}, {dEnd}) in {zone.Describe(sUtc)}; Quelle: {zone.Source}. Annahme - wird gegen den von ATAS bestaetigten Ladebereich geprueft.");
+        W($"# Zielchart: {(targetChart == "" ? "(einziger Chart)" : targetChart)}");
         if (!DriveReadyWritable(RecordingsDir, out var rdr)) { W("BLOCKER: " + rdr); return 3; }
         if (Process.GetProcessesByName("OFT.Platform").Length == 0) { W("BLOCKER: ATAS laeuft nicht."); return 3; }
 
         string? attrFolder = null; string attrRunId = ""; int rc = -1; bool cleanupOk = false;
+        var alog = new IncrementalAtasLog(Path.GetDirectoryName(AtasLogPath())!);
+        var exec = new ReplayExecution();
+        bool? speedVerified = null;
         bool recorderAddedByJob = false;  // dieser Auftrag hat einen Recorder angehaengt -> bei fruehem Abbruch wieder entfernen
         // GETRENNTE Teilergebnisse (Erfolg nur, wenn ALLE erforderlichen erfuellt sind):
         bool endProven = false;          // unabhaengiges, verdrahtetes Replay-ENDSIGNAL erreicht? (sonst Unproven)
@@ -1975,7 +2089,7 @@ internal static partial class Program
                 if (!AddRecorderViaDialog(W)) throw new AbortRun(6, "BLOCKER: Recorder-Hinzufuegen (UIA) fehlgeschlagen.");
                 recorderAddedByJob = true;
                 bool added = false;
-                for (int i = 0; i < 15 && !added; i++) { Thread.Sleep(1000); added = FolderSet().Except(before).Any(f => IsMetaLocked(Path.Combine(RecordingsDir, f, "meta.json"))); }
+                for (var swR = Stopwatch.StartNew(); swR.ElapsedMilliseconds < 15000 && !added; ) { Thread.Sleep(200); added = FolderSet().Except(before).Any(f => IsMetaLocked(Path.Combine(RecordingsDir, f, "meta.json"))); }
                 if (!added) throw new AbortRun(6, $"BLOCKER: Recorder-Hinzufuegen nicht per Dateisystem bestaetigt (kein neuer gesperrter Ordner unter '{RecordingsDir}'). " +
                     "Der Recorder schreibt nicht in den erwarteten Ordner oder ist beim Start abgebrochen.");
                 W("[3] Recorder hinzugefuegt + aktiv (neuer gesperrter Ordner).");
@@ -1992,7 +2106,7 @@ internal static partial class Program
             // ---- Phase 4: Replay-Transport ERKENNEN (angedockt/schwebend/verschoben), fensteruebergreifend, KEIN Toggle-Thrashing ----
             var swL = Stopwatch.StartNew();
             if (FindIdAny("RibbonReplayButton") == null) throw new AbortRun(4, "BLOCKER: RibbonReplayButton fehlt.");
-            Thread.Sleep(2500);   // nach dem Hinzufuegen/Uebernehmen den Chart settlen lassen (Recorder initialisiert)
+            Thread.Sleep(800);    // kurzes Settle nach Uebernehmen (Recorder-Start ist bereits per Dateisystem bestaetigt)
             VisualTransport? vt = null; bool visualMode = false;
             var trans = FindReplayTransport(out var tdiag);
             if (trans == null && tdiag.StartsWith("MEHRDEUTIG")) throw new AbortRun(4, "BLOCKER: " + tdiag);
@@ -2090,6 +2204,7 @@ internal static partial class Program
             var beforeLoad = FolderSet(); DateTime loadClick = DateTime.UtcNow.AddSeconds(-5);
             var sel = FindBtnAny("Auswählen"); if (sel == null) throw new AbortRun(5, "BLOCKER: 'Auswählen' nicht gefunden.");
             int logBaseIdx = TailLines(AtasLogPath(), 4_000_000).Length;   // Log-Leseposition VOR dem Laden dieses Auftrags (execution-scope)
+            alog.SeekToEnd();                                              // inkrementelles Lesen ab hier: nur Zeilen DIESES Auftrags
             W("[7] Laden (Auswählen) …"); Invoke(sel);
             List<string> NewLocked() => FolderSet().Except(beforeLoad).Where(f =>
             {
@@ -2117,6 +2232,16 @@ internal static partial class Program
             W($"[7] Zugeordnete Instanz: {attrFolder}  runId={attrRunId}  (genau EINE neue gesperrte MNQ-Instanz)");
             if (!ready) throw new AbortRun(6, "BLOCKER: Abspielbereitschaft (PlayButton) nicht erreicht. [Zustand gesichert, siehe 7-DIAG]");
             tLoad += swL.Elapsed.TotalSeconds;
+            // Ladebereich VOR Play pruefen, soweit ATAS ihn schon meldet ('... warmed before <Start>Z').
+            exec.Feed(alog.ReadNew());
+            if (exec.WarmStartUtc is DateTime warm)
+            {
+                W($"[7] ATAS-Ladebestaetigung Start={warm:yyyy-MM-dd HH:mm:ss}Z (Zeile: {exec.WarmLine})");
+                if (warm != sUtc)
+                    throw new AbortRun(7, $"BLOCKER: ATAS hat ab {warm:yyyy-MM-dd HH:mm:ss}Z geladen, Soll {sUtc:yyyy-MM-dd HH:mm:ss}Z " +
+                        $"(Abweichung {(warm - sUtc).TotalMinutes:+0;-0} min). Dialog-Zeitzone passt nicht ({zone.Source}). Kein Play, keine Veroeffentlichung.");
+            }
+            else W("[7] ATAS meldet den Startzeitpunkt vor Play nicht im Protokoll -> Pruefung erfolgt sofort bei Play ('Playing from').");
 
             // ---- Phase 8: Geschwindigkeit setzen (konfigurierbar) + zuruecklesen + VERIFIZIEREN, dann Play ----
             // Die Geschwindigkeit wird ueber den vorhandenen Replay-Speed-Selektor gesetzt und zurueckgelesen.
@@ -2129,7 +2254,8 @@ internal static partial class Program
                 // Speed: im custom-gerenderten Transport nicht UIA/OCR-setzbar/-lesbar ('100x' ist fuer Windows-OCR zu
                 // kontrastarm). ATAS zeigt als Default sichtbar '100x'. Eine FALSCHE (zu langsame) Geschwindigkeit fiele
                 // am Play-Watchdog (Phase 9) zuverlaessig als Timeout auf -> kein stiller Fehlerfolg.
-                W("[8] (visuell) Speed nicht UIA/OCR-verifizierbar; ATAS-Default sichtbar '100x' wird verwendet (Watchdog faengt Fehlspeed).");
+                speedVerified = false;
+                W($"[8] (visuell) Geschwindigkeit NICHT verifiziert: weder per UIA noch per OCR lesbar. Angefordert '{speedName}', tatsaechlich unbekannt (Watchdog begrenzt die Laufzeit).");
                 // Play-Position: bevorzugt FRISCH per OCR. Nach dem Laden zeigt die Leiste aber oft nicht mehr
                 // 'Datum auswählen'/'Modul' (DetectTransport-Muster greift dann nicht). In dem Fall die in DIESEM Lauf
                 // bei Phase 4/6 bereits VALIDIERTE Leisten-Geometrie (vt) wiederverwenden (gleiche Position wie der
@@ -2168,6 +2294,7 @@ internal static partial class Program
                 string sp = SetReplaySpeed(speedName, W);
                 if (!SpeedReadbackOk(speedName, sp))
                     throw new AbortRun(8, $"BLOCKER: Replay-Speed '{speedName}' nicht setzbar/zurueckgelesen (gelesen '{sp}').");
+                speedVerified = true;
                 W($"[8] Speed angefordert='{speedName}' zurueckgelesen='{sp}' (verifiziert)");
                 if (!IsEnabledSafe(FindIdAny("PlayButton"))) throw new AbortRun(8, "BLOCKER: PlayButton nicht bereit.");
                 // Play per PHYSISCHEM Klick auf die UIA-Button-Position (UIA-Invoke startet die Wiedergabe hier NICHT).
@@ -2184,117 +2311,86 @@ internal static partial class Program
                 if (!started) throw new AbortRun(8, "BLOCKER: Play-Klick wirkungslos (Titel wechselt nicht auf 'Module laden'/'Historienwiedergabe').");
                 W("[8] Play bestaetigt (Fenstertitel 'Module laden'/'Historienwiedergabe').");
             }
-            // ---- Phase 9: Replay bis zum NATUERLICHEN Ende abspielen (KEIN fruehes Pausieren); Endsignal aus ATAS-Log ----
+            // ---- Phase 9: Wiedergabe bis zum ERSTEN vollstaendigen Durchlauf; Ende aus dem ATAS-Protokoll (Originalzeilen) ----
+            // Kurze Abfragen (200 ms) statt 3 s: bei 100x laufen in 3 s rund 5 Minuten Marktzeit weiter. Das Protokoll wird
+            // inkrementell gelesen; Recorder-Dateien jede Sekunde, nahe am Fensterende alle 250 ms.
             _verifiedReplayEndUtc = null;
-            var logRange = ReplayLoadedRangeUtcFromLog(playInvoke);
-            if (logRange != null) W($"[9] Geladener Bereich (ATAS-Log, UTC): [{logRange.Value.startUtc:yyyy-MM-dd HH:mm:ss}, {logRange.Value.endUtc:HH:mm:ss}]");
-            else W("[9] WARN: geladener Bereich nicht aus ATAS-Log lesbar -> Endsignal kann nicht log-gebunden verifiziert werden.");
-            bool playingObserved = false; DateTime? lastMt = null; DateTime? maxMp = null; int stall = 0; bool engineFinished = false;
-            bool titleStarted = false;           // TITEL-Beweis, dass die Wiedergabe lief ('Module laden'/'Historienwiedergabe') - NICHT Preload
-            bool titleProvenEnd = false;         // TITEL-basiertes natuerliches Ende (Log in dieser ATAS-Sitzung stumm)
-            bool logPlayStarted = false;         // LOG-Beweis, dass DIESER Auftrag zu spielen begonnen hat (robust bei schnellem Replay)
-            bool disconnectHintLogged = false;   // Disconnect wird nur einmal als Hinweis protokolliert (kein Abbruch-Timer)
-            var dsw = DateTime.ParseExact(dStart, "dd.MM.yyyy HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
-            var dew = DateTime.ParseExact(dEnd, "dd.MM.yyyy HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
-            // Watchdog an die Geschwindigkeit angepasst: fester, geschwindigkeits-UNABHAENGIGER Boden (Laden/Flush/Abschluss
-            // sind I/O-gebunden) PLUS Marktanteil/Geschwindigkeit -- NICHT bloss Fensterdauer/100. Enderkennung bleibt
-            // signalgebunden (ATAS-Log natural_end), nicht an diesen Zeitdeckel gekoppelt.
-            // Konservativ budgetiert (halbe Nominalgeschwindigkeit als Puffer, falls 100x ueber lange Fenster nicht
-            // voll gehalten wird) + groesserer Boden fuer Laden/Flush/Abschluss. Enderkennung bleibt signalgebunden.
-            int playWatchdog = PlayWatchdogSeconds((int)(dew - dsw).TotalSeconds, Math.Max(1.0, SpeedToFactor(speedName) * 0.5), loadFlushFloorSeconds: 240);
+            int playWatchdog = PlayWatchdogSeconds(windowSec, Math.Max(1.0, SpeedToFactor(speedName) * 0.5), loadFlushFloorSeconds: 240);
             var swp = Stopwatch.StartNew();
+            DateTime? lastMt = null, maxMp = null, firstMt = null; double stallMs = 0; bool rangeChecked = false, rangeMismatch = false;
+            var lastStreams = DateTime.MinValue; var lastReport = DateTime.MinValue; string stopCause = "";
             while (swp.Elapsed.TotalSeconds < playWatchdog)
             {
-                Thread.Sleep(3000);
-                var st = FolderStreams(dir); st.TryGetValue("ticks.ndjson", out var tv);
-                DateTime? mp = null; foreach (var k in new[] { "dom.ndjson", "bbo.ndjson", "cumtrades.ndjson", "ticks.ndjson" }) if (st.TryGetValue(k, out var v) && v.LastMt is { } lm && (mp == null || lm > mp)) mp = lm;
-                string title = Safe(() => ReplayWindow()?.Current.Name ?? "");
-                bool playingNow = title.Contains("Historienwiedergabe", StringComparison.OrdinalIgnoreCase) && !title.Contains("angehalten", StringComparison.OrdinalIgnoreCase) && !title.Contains("gestoppt", StringComparison.OrdinalIgnoreCase);
-                if (playingNow) playingObserved = true;
-                if (playingNow || title.IndexOf("laden", StringComparison.OrdinalIgnoreCase) >= 0) titleStarted = true;
-                if (mp != null && lastMt != null && mp == lastMt) stall++; else stall = 0;
-                // Ruecksprung erkennen, BEVOR maxMp aktualisiert wird: faellt die aktuelle Marktzeit deutlich (> 2 min)
-                // unter das bisherige Maximum, hat ATAS zum Fensteranfang zurueckgespult (Auto-Loop). Der End-Guard
-                // (nahe am Fensterende gewesen) folgt weiter unten, sobald endUtcLoop bekannt ist.
-                bool mpDropped = mp != null && maxMp != null && mp.Value < maxMp.Value.AddMinutes(-2);
-                if (mp != null) lastMt = mp;
-                if (mp != null && (maxMp == null || mp.Value > maxMp.Value)) maxMp = mp;   // hoechste je gesehene Marktzeit (faellt nie)
-                if (tv?.FirstMt is { } fm) offMin = Math.Round((dsw - fm.ToUniversalTime()).TotalMinutes);
-                var endUtcLoop = logRange?.endUtc ?? dew.AddMinutes(-offMin);
-                bool dataReachedEnd = lastMt != null && lastMt.Value.ToUniversalTime() >= endUtcLoop.AddSeconds(-2);
-                // Das geladene Fenster wurde EINMAL vollstaendig abgespielt, wenn die hoechste je aufgezeichnete
-                // Marktzeit das Fensterende erreicht hat (bleibt wahr, auch nachdem ATAS zum Anfang zurueckspringt).
-                bool everReachedEnd = maxMp != null && maxMp.Value.ToUniversalTime() >= endUtcLoop.AddSeconds(-2);
-                // Auto-Loop bestaetigt: Ruecksprung UND vorher bis kurz vor das Fensterende gespielt (<=5 min davor).
-                // Faengt den Fall, dass in den letzten Sekunden keine Ticks liegen (maxMp knapp unter Fensterende),
-                // ATAS aber sichtbar zum Anfang zurueckspringt -> Fenster war trotzdem einmal komplett.
-                bool loopedBack = mpDropped && maxMp != null && maxMp.Value.ToUniversalTime() >= endUtcLoop.AddMinutes(-5);
-                // EXECUTION-SCOPED Enderkennung aus dem ATAS-Log: NUR Zeilen AB der eigenen 'Playing from'-Startzeile
-                // dieses Auftrags. Robust gegen Fehler/Disconnect/manuellen Wechsel-zu-Realtime -> nur echtes natuerliches Ende.
-                var execLines = ExecutionLogSlice(logBaseIdx);
-                var endClass = ClassifyExecutionEnd(execLines, dataReachedEnd);
-                // LOG ist die autoritative Endquelle. endClass != NoStart == der Auftrag hat (log-gebunden) zu spielen begonnen;
-                // das ersetzt bei schnellem Replay (100x) das UI-Titel-Gate 'playingObserved', das die kurze Spielphase verpasst.
-                if (endClass != ReplayEndClass.NoStart) logPlayStarted = true;
-                bool playProven = playingObserved || logPlayStarted;
-                // Natuerliches Ende in dieser (log-stummen, am Ende AUTO-LOOPENDEN) ATAS-Sitzung: die Wiedergabe lief
-                // NACHWEISLICH ('Historienwiedergabe' im Titel gesehen -> KEIN Preload) UND die aufgezeichneten Daten haben
-                // das geladene Fensterende erreicht und bleiben dort stehen (ATAS rewinded am Ende selbst und spielt erneut;
-                // die aufgezeichnete Max-Marktzeit bleibt am Fensterende -> stall). >=4 Polls (~12s) Stillstand am Ende.
-                // NATUERLICHES Ende (log-stumm + Auto-Loop): die Wiedergabe lief nachweislich (Titel/Log) UND das geladene
-                // Fenster wurde EINMAL komplett abgespielt - belegt entweder durch 'Daten am Fensterende erreicht' ODER
-                // durch einen erkannten Auto-Loop-Ruecksprung. KEINE Abhaengigkeit mehr von 'stall am Fensterende', die den
-                // Loop-Moment verpassen konnte (dann lief die naechste Runde faelschlich weiter).
-                bool titleNaturalEnd = playProven && (everReachedEnd || loopedBack);
-                engineFinished = (playProven && endClass == ReplayEndClass.NaturalEnd) || titleNaturalEnd;
-                W($"    [play t+{(int)swp.Elapsed.TotalSeconds}s] title='{title}' mp={(mp?.ToString("HH:mm:ss") ?? "-")} max={(maxMp?.ToString("HH:mm:ss") ?? "-")} dataEnd={dataReachedEnd} everEnd={everReachedEnd} loop={loopedBack} endClass={endClass} stall={stall} playObs={playingObserved} titleStart={titleStarted} logPlay={logPlayStarted}");
-                if (titleNaturalEnd)
+                exec.Feed(alog.ReadNew());
+                if (!rangeChecked && exec.Range is { } lr)
                 {
-                    _verifiedReplayEndUtc = endUtcLoop; dataWindowRecorded = everReachedEnd; titleProvenEnd = true;
-                    endReason = (loopedBack && !everReachedEnd)
-                        ? "natural_end(TITEL: Auto-Loop-Ruecksprung erkannt -> Fenster einmal komplett)"
-                        : "natural_end(TITEL/Daten: Fensterende erreicht)";
-                    break;
-                }
-                if (endClass == ReplayEndClass.Disconnected && !disconnectHintLogged)
-                { disconnectHintLogged = true; W("    [play] Disconnect = Hinweis (KEINE feste Abbruch-Uhr); beobachte Fortschritt bis Ende + Abschluss-Puffer, Abbruch nur bei Stillstand"); }
-                if (playProven)
-                {
-                    var act = PlayLoopStep(endClass, dataReachedEnd, stall, stallFailLimit: 10, settleLimit: 8);   // ~30s Stillstand bzw. ~24s Abschluss-Puffer (Poll 3s)
-                    if (act == LoopAction.Success)
-                    { _verifiedReplayEndUtc = logRange?.endUtc ?? endUtcLoop; dataWindowRecorded = dataReachedEnd; endReason = "natural_end(LOG) = unabh. Endsignal"; break; }
-                    if (act == LoopAction.Abort)
+                    rangeChecked = true;
+                    W($"[9] Ladebereich laut ATAS: [{lr.startUtc:yyyy-MM-dd HH:mm:ss}Z, {lr.endUtc:yyyy-MM-dd HH:mm:ss}Z]  (Zeile: {exec.RangeLine})");
+                    if (lr.startUtc != sUtc || lr.endUtc != eUtc)
                     {
-                        dataWindowRecorded = dataReachedEnd;   // Ende erreicht ist KORROBORATION, NIE Endbeweis
-                        endReason = endClass == ReplayEndClass.Errored ? "replay_fehler(LOG:Errored)"
-                                  : dataReachedEnd ? "ende_erreicht_aber_kein_Abschluss_in_Frist (KORROBORATION, KEIN Endbeweis)"
-                                  : $"stillstand_ohne_abschluss (stall={stall}, letzte mp={(lastMt?.ToString("HH:mm:ss") ?? "-")})";
+                        rangeMismatch = true;
+                        stopCause = $"Ladebereich weicht vom Soll ab: ATAS [{lr.startUtc:HH:mm:ss}Z, {lr.endUtc:HH:mm:ss}Z] statt [{sUtc:HH:mm:ss}Z, {eUtc:HH:mm:ss}Z] " +
+                                    $"(Start {(lr.startUtc - sUtc).TotalMinutes:+0;-0} min). Dialog-Zeitzone: {zone.Source}.";
                         break;
                     }
                 }
-                if (tv?.FirstMt == null && swp.Elapsed.TotalSeconds > 90) { endReason = "no_data_90s"; break; }
+                bool nearEnd = maxMp != null && maxMp.Value >= eUtc.AddMinutes(-3);
+                double since = (DateTime.UtcNow - lastStreams).TotalMilliseconds;
+                if (since >= (nearEnd ? 250 : 1000))
+                {
+                    lastStreams = DateTime.UtcNow;
+                    var st = FolderStreams(dir);
+                    DateTime? mp = null;
+                    foreach (var k in new[] { "dom.ndjson", "bbo.ndjson", "cumtrades.ndjson", "ticks.ndjson" })
+                        if (st.TryGetValue(k, out var v) && v.LastMt is { } lm && (mp == null || lm > mp)) mp = lm;
+                    if (st.TryGetValue("ticks.ndjson", out var tv0) && tv0.FirstMt is { } fm0) firstMt ??= fm0.ToUniversalTime();
+                    if (mp != null && lastMt != null && mp == lastMt) stallMs += Math.Min(since, 5000); else stallMs = 0;
+                    if (mp != null) { lastMt = mp; if (maxMp == null || mp.Value > maxMp.Value) maxMp = mp; }
+                    exec.DataReachedEnd = maxMp != null && maxMp.Value.ToUniversalTime() >= eUtc.AddSeconds(-2);
+                    exec.Recheck();
+                    if ((DateTime.UtcNow - lastReport).TotalSeconds >= 3)
+                    {
+                        lastReport = DateTime.UtcNow;
+                        W($"    [play t+{swp.Elapsed.TotalSeconds:0.0}s] mp={(mp?.ToString("HH:mm:ss") ?? "-")} max={(maxMp?.ToString("HH:mm:ss") ?? "-")} zustand={exec.State} datenEnde={exec.DataReachedEnd} stillstand={stallMs / 1000:0.0}s hinweise={exec.Hints.Count}");
+                    }
+                }
+                if (exec.State == ReplayEnd.NaturalEnd) { stopCause = "natuerliches Ende"; break; }
+                if (exec.State is ReplayEnd.Errored or ReplayEnd.OnlineExit or ReplayEnd.OtherRangeRestart or ReplayEnd.StoppedByUs or ReplayEnd.StoppedOther) { stopCause = exec.Rule; break; }
+                if (exec.Started && !exec.DataReachedEnd && stallMs >= 30000) { stopCause = $"Stillstand {stallMs / 1000:0}s ohne Ende (letzte Marktzeit {(lastMt?.ToString("HH:mm:ss") ?? "-")})"; break; }
+                if (exec.DataReachedEnd && stallMs >= 24000) { stopCause = "Daten am Fensterende, aber kein Abschluss von ATAS innerhalb 24 s (keine Endbestaetigung)"; break; }
+                if (firstMt == null && swp.Elapsed.TotalSeconds > 90) { stopCause = "keine Daten nach 90 s"; break; }
+                Thread.Sleep(200);
             }
+            if (stopCause == "") stopCause = $"Zeitlimit {playWatchdog}s erreicht";
+            tPlay += swP.Elapsed.TotalSeconds;
+
+            // SOFORT stoppen (vor jeder weiteren Auswertung): Replay verlassen beendet die Wiedergabe. Ein bereits
+            // begonnener Auto-Loop schreibt in eine NEUE Recorder-Instanz (eigener Ordner), nicht in die zugeordnete.
+            var swStop = Stopwatch.StartNew();
+            exec.MarkOurStop(DateTime.Now);
+            W($"[9] Stopp-Grund: {stopCause}  -> Wiedergabe jetzt beenden ({DateTime.Now:HH:mm:ss.fff})");
+            replayViewLeft = ExitReplayView(W);
+            W($"[9] Wiedergabe beendet: Replay-Ansicht verlassen={replayViewLeft} nach {swStop.ElapsedMilliseconds} ms");
+            exec.Feed(alog.ReadNew());
+
+            // Entscheidung mit Belegen (Originalzeilen, Regel, Zuordnung zur eigenen Ausfuehrung)
+            endProven = exec.State == ReplayEnd.NaturalEnd && !rangeMismatch;
+            endStatus = endProven ? "Reached" : "Unproven";
+            if (endProven) _verifiedReplayEndUtc = exec.Range?.endUtc;
+            dataWindowRecorded = exec.DataReachedEnd;
+            endReason = $"{exec.State}: {(exec.Rule == "" ? stopCause : exec.Rule)}";
+            W($"[9] Endstatus={endStatus}  Klasse={exec.State}  Regel='{exec.Rule}'  zugeordnet ab eigenem 'Playing from' {(exec.RangeLine != null ? exec.RangeLine.Ts.ToString("HH:mm:ss.fff") : "(keins)")}");
+            foreach (var ev in exec.Evidence) W($"      Beleg: {ev}");
+            foreach (var h in exec.Hints.Take(8)) W($"      Hinweis (kein Abbruchgrund): {h}");
+            if (exec.LoopRestarted) W("      ATAS hat nach dem Abschluss automatisch neu gestartet (Auto-Loop); diese Daten liegen in einer eigenen, NICHT zugeordneten Instanz.");
+            if (rangeMismatch) throw new AbortRun(7, "BLOCKER: " + stopCause + " Keine Veroeffentlichung.");
+
             var fin = FolderStreams(dir); fin.TryGetValue("ticks.ndjson", out var fv);
             span = fv?.FirstMt != null ? $"{fv.FirstMt:yyyy-MM-dd HH:mm:ss}->{fv.LastMt:HH:mm:ss}Z" : "-";
             mpStr = lastMt != null ? lastMt.Value.ToString("HH:mm:ss") + "Z" : "-"; ticksBytes = fv?.Bytes ?? 0;
-            // Pause NUR falls wir NICHT am natuerlichen Ende sind (nach engine_finished rewindet ATAS selbst;
-            // das Stoppen+Verlassen uebernimmt ExitReplayView ueber 'Zur Echtzeit wechseln'). Sonst: pausieren, falls noch spielend.
-            if (!engineFinished && !visualMode)
-            {
-                var p2 = FindIdAny("PlayButton"); string tp = Safe(() => ReplayWindow()?.Current.Name ?? "");
-                if (!tp.Contains("gestoppt", StringComparison.OrdinalIgnoreCase) && !tp.Contains("angehalten", StringComparison.OrdinalIgnoreCase) && p2 != null) { Invoke(p2); Thread.Sleep(1200); }
-            }
-            else if (!engineFinished && visualMode)
-                W("[9] (visuell) nicht am natuerlichen Ende -> Stopp/Verlassen erfolgt in Phase 10 ueber die Ribbon-Replay-Umschaltung.");
-            tPlay += swP.Elapsed.TotalSeconds;
-            // UNABHAENGIGES Endsignal: engine-emittierter Abschluss (ATAS-Log) NACH Play, ohne von uns ausgeloesten
-            // Stopp, gebunden an den geladenen Bereich (Log, UTC). AssessEnd: verifizierte Position >= Fensterende + playing.
-            var endUtcFinal = logRange?.endUtc ?? dew.AddMinutes(-offMin);
-            endProven = titleProvenEnd || AssessEnd(TryVerifiedReplayPositionUtc(), playingObserved || logPlayStarted, endUtcFinal) == EndVerdict.Reached;
-            endStatus = endProven ? "Reached" : "Unproven";
-            W($"[9] Endstatus={endStatus} (unabh. Replay-Endsignal={(TryVerifiedReplayPositionUtc() == null ? "KEINS -> Unproven" : TryVerifiedReplayPositionUtc()!.Value.ToString("yyyy-MM-dd HH:mm:ss") + "Z")}); " +
-              $"Daten-Korroboration={dataWindowRecorded} ({endReason}); Fensterende(UTC)={endUtcFinal:HH:mm:ss}; Marktzeit(ticks)={span}");
-            // KEIN Abbruch hier: die Aufnahme ist gespeichert; Cleanup wird dennoch versucht; das Gesamt-Verdikt faellt am Ende.
+            W($"[9] Datenbereich der zugeordneten Instanz (Recorder, UTC): {span}; Soll [{sUtc:HH:mm:ss}Z, {eUtc:HH:mm:ss}Z)");
+            var loopFolders = FolderSet().Except(beforeLoad).Where(f => f != attrFolder).ToList();
+            if (loopFolders.Count > 0) W($"[9] Weitere Instanzen seit dem Laden (Auto-Loop/Echtzeit, werden NICHT angehaengt): {string.Join(", ", loopFolders)}");
 
             // ---- Phase 10: Replay-Transport verlassen + Replay-ANSICHT des Charts beenden ----
             // Marker: ab hier eigene Cleanup-Aktionen. Deren Logmeldungen (Disconnect durch 'Zur Echtzeit' etc.) gehoeren
@@ -2363,8 +2459,10 @@ internal static partial class Program
         W($"  Recorder dieser Aufnahme (meta.json): '{(recMeta == "" ? "-" : recMeta)}' | {RecorderIdentity()}");
         W($"  HERKUNFT-GRENZE: ein sichtbarer Chart + neuer gesperrter Ordner ist KEINE vollstaendige Herkunft;");
         W($"   die ausgelieferten Recorder-Varianten binden KEIN Lauf-Token (GUID-runId) -> keine token-gebundene Chart/Instanz-Zuordnung.");
-        W($"  aufgezeichnete Marktzeit(ticks): {span}; ticks={ticksBytes}B; tz-offset={offMin}min");
+        W($"  aufgezeichnete Marktzeit(ticks): {span}; ticks={ticksBytes}B; Soll [{sUtc:yyyy-MM-dd HH:mm:ss}Z, {eUtc:HH:mm:ss}Z); Dialog {dStart}..{dEnd} ({zone.Source})");
+        W($"  Geschwindigkeit: '{speedName}' {(speedVerified == true ? "verifiziert" : speedVerified == false ? "NICHT verifiziert" : "nicht gesetzt")}");
         W($"  Replay-Transport geschlossen (cleanup-Teil): {cleanupOk} | aktive gesperrte Instanzen jetzt: {LockedCount()}");
+        LockedInstancesReport(W, attrFolder);
         W($"  [timing] gesamt {swAll.Elapsed.TotalSeconds:F0}s = Bedienung {tBed:F0}s + Laden {tLoad:F0}s + Wiedergabe {tPlay:F0}s");
         if (!gesamtPass) W($"  HINWEIS: Aufnahme bleibt erhalten; Gesamtablauf NICHT bestanden. Fehlend: " +
             $"{(!recordingSaved ? "[Aufnahme] " : "")}{(!endProven ? "[unabh. Endsignal] " : "")}{(!cleanupDone ? "[Cleanup/Remove]" : "")}");
@@ -2426,6 +2524,7 @@ internal static partial class Program
 
         string session; int year; string tz, speed, collDir, py, script; bool keepAttached;
         var windows = new List<(string dStart, string dEnd)>();
+        var utcWindows = new List<(DateTime s, DateTime e)>();
         try
         {
             using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(configPath));
@@ -2439,11 +2538,19 @@ internal static partial class Program
             script = r.TryGetProperty("collectorScript", out var vs) ? vs.GetString()! : Path.Combine(AppContext.BaseDirectory, "bridge", "atas_collect.py");
             keepAttached = r.TryGetProperty("keepRecorderAttached", out var vk) && vk.GetBoolean();
             foreach (var w in r.GetProperty("windows").EnumerateArray())
-                windows.Add((w.GetProperty("startBerlin").GetString()!, w.GetProperty("endBerlin").GetString()!));
+            {
+                // Bevorzugt UTC-Grenzen (ab 1.3.3); Berlin-Wandzeit bleibt fuer aeltere Konfigurationen lesbar.
+                if (w.TryGetProperty("startUtc", out var su) && w.TryGetProperty("endUtc", out var eu))
+                    utcWindows.Add((DateTime.Parse(su.GetString()!, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal),
+                                    DateTime.Parse(eu.GetString()!, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal)));
+                else
+                    windows.Add((w.GetProperty("startBerlin").GetString()!, w.GetProperty("endBerlin").GetString()!));
+            }
         }
         catch (Exception ex) { W($"BLOCKER: Konfig nicht lesbar: {ex.GetType().Name}: {ex.Message}"); Flush(sb, outFile); return 3; }
 
         W($"# ATAS Sammellauf  {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+        W($"# Programme: Probe {ProgramVersion()} | {RecorderIdentity()}");
         W($"# Session='{session}' Jahr={year} TZ='{tz}' Speed='{speed}' keepAttached={keepAttached}");
         W($"# Gemeinsame CSV: {Path.Combine(collDir, "trades.csv")}");
         W($"# Collector: {py} \"{script}\"");
@@ -2478,10 +2585,15 @@ internal static partial class Program
                 var sU = BerlinToUtc(s); var eU = BerlinToUtc(e);
                 jobs.Add((ds, de, sU, eU, BuildJobId(session, year, sU, eU)));
             }
+            foreach (var (sU, eU) in utcWindows)
+            {
+                if (!(sU < eU)) throw new ArgumentException($"Ende {eU:o} liegt nicht nach Start {sU:o}");
+                jobs.Add(($"{sU:yyyy-MM-ddTHH:mm:ssZ}", $"{eU:yyyy-MM-ddTHH:mm:ssZ}", sU, eU, BuildJobId(session, year, sU, eU)));
+            }
         }
         catch (Exception ex) { W($"BLOCKER: Fenster nicht parsebar ({ex.Message})."); Flush(sb, outFile); return 3; }
         foreach (var j in jobs)
-            W($"#  Fenster {j.dStart}..{j.dEnd} Europe/Berlin == UTC [{j.sUtc:yyyy-MM-ddTHH:mm:ssZ}, {j.eUtc:yyyy-MM-ddTHH:mm:ssZ})  job_id={j.jobId}");
+            W($"#  Fenster UTC [{j.sUtc:yyyy-MM-ddTHH:mm:ssZ}, {j.eUtc:yyyy-MM-ddTHH:mm:ssZ})  job_id={j.jobId}");
 
         var committed = ReadCommittedJobs(py, script, collDir, W);
         W($"# bereits committed: {(committed.Count == 0 ? "(keine)" : string.Join(", ", committed))}");
@@ -2494,7 +2606,7 @@ internal static partial class Program
             var j = jobs[i];
             if (committed.Contains(j.jobId)) { skipped++; W($"\n[SKIP] {j.jobId} bereits committed -> nicht erneut aufnehmen/anhaengen."); continue; }
             W($"\n===== Fenster-Auftrag {i + 1}/{jobs.Count}: {j.jobId} =====");
-            int rc = RunRecordingJob(outFile, j.dStart, j.dEnd, i + 1, jobs.Count, sb, speed);
+            int rc = RunRecordingJob(outFile, j.sUtc, j.eUtc, i + 1, jobs.Count, sb, speed);
             if (rc != 0) { stopReason = $"Aufnahme-Auftrag {j.jobId} nicht bestanden (rc={rc})"; break; }
             if (_lastJobFolder == null || !_lastJobFinalizedClean) { stopReason = $"Instanz fuer {j.jobId} nicht finalisiert (folder={_lastJobFolder ?? "-"})"; break; }
             string recDir = Path.Combine(RecordingsDir, _lastJobFolder);

@@ -15,9 +15,9 @@ namespace AtasSessionCollector;
 /// Probe erwartet Berlin-Wandzeiten (startBerlin/endBerlin); diese Klasse liefert sie,
 /// ohne die bestehenden Berlin-Fenster semantisch zu veraendern.
 /// </summary>
-public enum SessionId { NewYork, London }
+public enum SessionId { NewYork, London, Custom }
 
-public enum DayStatus { Trading, Weekend, Holiday, EarlyCloseTrading }
+public enum DayStatus { Trading, Weekend, Holiday, EarlyCloseTrading, Invalid }
 
 public sealed record SessionDef(
     SessionId Id,
@@ -58,6 +58,36 @@ public static class SessionCalendar
 
     public static SessionDef Get(SessionId id) => Sessions.First(s => s.Id == id);
 
+    /// <summary>Gaengige Zeitzonen fuer den benutzerdefinierten Zeitraum (Windows-Id, Anzeige). Standard: Europe/Berlin.</summary>
+    public static readonly IReadOnlyList<(string TzId, string Display)> CustomZones = new[]
+    {
+        (BerlinTzId, "Europe/Berlin"),
+        ("Eastern Standard Time", "America/New_York"),
+        ("GMT Standard Time", "Europe/London"),
+        ("Central Standard Time", "America/Chicago"),
+        ("UTC", "UTC"),
+    };
+
+    /// <summary>Benutzerdefiniertes Fenster: Uhrzeiten (mit Sekunden) gelten je Kalendertag in der gewaehlten Zeitzone.</summary>
+    public static SessionDef Custom(TimeSpan start, TimeSpan end, string tzId)
+    {
+        var disp = CustomZones.FirstOrDefault(z => z.TzId == tzId).Display ?? tzId;
+        return new SessionDef(SessionId.Custom, "Custom", "Benutzerdefiniert", tzId, disp, disp.Replace("/", "-"), start, end);
+    }
+
+    /// <summary>"HH:mm:ss" streng parsen (00:00:00..23:59:59).</summary>
+    public static bool TryParseClock(string s, out TimeSpan t)
+    {
+        t = default;
+        if (!TimeSpan.TryParseExact((s ?? "").Trim(), @"hh\:mm\:ss", CultureInfo.InvariantCulture, out var v)) return false;
+        if (v < TimeSpan.Zero || v >= TimeSpan.FromDays(1)) return false;
+        t = v; return true;
+    }
+
+    /// <summary>Prueft ein benutzerdefiniertes Fenster: Ende muss am selben Tag nach dem Start liegen.</summary>
+    public static string? ValidateCustom(TimeSpan start, TimeSpan end)
+        => end <= start ? "Ende muss nach dem Start am selben Tag liegen (Fenster ueber Mitternacht sind in dieser Version nicht vorgesehen)." : null;
+
     private static TimeZoneInfo Tz(string id)
     {
         // Windows-Id zuerst, IANA als Fallback (falls jemals auf ICU/Linux gebaut).
@@ -84,12 +114,22 @@ public static class SessionCalendar
         var localStart = date.ToDateTime(TimeOnly.FromTimeSpan(s.LocalStart));
         var localEnd = date.ToDateTime(TimeOnly.FromTimeSpan(s.LocalEnd));
 
+        // Sommerzeit-Luecke/-Doppelung: solche Ortszeiten sind nicht eindeutig in UTC umrechenbar -> nicht aufnehmen.
+        foreach (var (lt, nm) in new[] { (localStart, "Start"), (localEnd, "Ende") })
+        {
+            var u = DateTime.SpecifyKind(lt, DateTimeKind.Unspecified);
+            string? bad = tzSession.IsInvalidTime(u) ? $"{nm} {lt:HH:mm:ss} existiert an diesem Tag nicht (Sommerzeitumstellung)"
+                        : tzSession.IsAmbiguousTime(u) ? $"{nm} {lt:HH:mm:ss} ist an diesem Tag mehrdeutig (Zeitumstellung)" : null;
+            if (bad != null)
+                return new DayPlan(date, DayStatus.Invalid, bad, localStart, localEnd, localStart, localEnd, DateTime.MinValue, DateTime.MinValue);
+        }
+
         var utcStart = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(localStart, DateTimeKind.Unspecified), tzSession);
         var utcEnd = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(localEnd, DateTimeKind.Unspecified), tzSession);
         var berlinStart = TimeZoneInfo.ConvertTimeFromUtc(utcStart, tzBerlin);
         var berlinEnd = TimeZoneInfo.ConvertTimeFromUtc(utcEnd, tzBerlin);
 
-        var (status, reason) = ClassifyDay(date, s.Id);
+        var (status, reason) = s.Id == SessionId.Custom ? ClassifyCustomDay(date) : ClassifyDay(date, s.Id);
 
         return new DayPlan(date, status, reason,
             localStart, localEnd, berlinStart, berlinEnd, utcStart, utcEnd);
@@ -123,6 +163,14 @@ public static class SessionCalendar
             return (DayStatus.EarlyCloseTrading, "Verkuerzter Handelstag (" + ename + ") – Aufnahmefenster liegt vor dem fruehen Schluss");
 
         return (DayStatus.Trading, null);
+    }
+
+    // Benutzerdefiniert: kein Boersenkalender bekannt -> nur Wochenenden werden uebersprungen (sichtbar begruendet).
+    public static (DayStatus status, string? reason) ClassifyCustomDay(DateOnly date)
+    {
+        if (date.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
+            return (DayStatus.Weekend, "Wochenende (benutzerdefiniert: Wochenenden werden uebersprungen)");
+        return (DayStatus.Trading, "benutzerdefiniert: kein Feiertagskalender - fehlende Replay-Daten zeigt die Aufnahme");
     }
 
     // ---- Datumshelfer ----
@@ -231,7 +279,9 @@ public static class SessionCalendar
     /// <summary>Ordnername gemaess Vorgabe, z.B. MNQ_NewYork_0930-1200_America-New-York_2026-10-26_bis_2026-10-28.</summary>
     public static string CollectionFolderName(string instrument, SessionDef s, DateOnly from, DateOnly to)
     {
-        string win = $"{s.LocalStart:hh\\:mm}".Replace(":", "") + "-" + $"{s.LocalEnd:hh\\:mm}".Replace(":", "");
+        // Benutzerdefiniert: Sekunden und Zeitzone im Namen -> unterschiedliche Testfenster werden beim Fortsetzen nie verwechselt.
+        string fmt = s.Id == SessionId.Custom ? "hhmmss" : "hhmm";
+        string win = s.LocalStart.ToString(fmt, CultureInfo.InvariantCulture) + "-" + s.LocalEnd.ToString(fmt, CultureInfo.InvariantCulture);
         return $"{instrument}_{s.Name}_{win}_{s.FolderSlug}_{from:yyyy-MM-dd}_bis_{to:yyyy-MM-dd}";
     }
 }
