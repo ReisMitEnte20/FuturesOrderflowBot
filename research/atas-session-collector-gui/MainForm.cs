@@ -21,6 +21,10 @@ public sealed class MainForm : Form
     private readonly TextBox _instrument = new() { Text = "MNQ", ReadOnly = true, Width = 90 };
     private readonly TextBox _output = new() { Text = "", Width = 360, ReadOnly = true };   // Datenordner (portabel, per Durchsuchen gewaehlt)
     private readonly Button _browse = new() { Text = "\u2026", Width = 32 };
+    // Benutzerdefinierter Zeitraum (nur aktiv bei Session "Benutzerdefiniert")
+    private readonly TextBox _cStart = new() { Text = "14:30:00", Width = 80 };
+    private readonly TextBox _cEnd = new() { Text = "14:32:00", Width = 80 };
+    private readonly ComboBox _cZone = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 170 };
 
     private readonly Label _summary = new() { AutoSize = false, Height = 54, Dock = DockStyle.Top, Padding = new Padding(4) };
     private readonly ListView _grid = new() { View = View.Details, FullRowSelect = true, GridLines = true, Dock = DockStyle.Fill };
@@ -47,6 +51,9 @@ public sealed class MainForm : Form
         Width = 1020; Height = 740; StartPosition = FormStartPosition.CenterScreen; MinimumSize = new Size(900, 600);
 
         foreach (var s in SessionCalendar.Sessions) _session.Items.Add(s.DisplayName);
+        _session.Items.Add("Benutzerdefiniert (Uhrzeit + Zeitzone)");
+        foreach (var z in SessionCalendar.CustomZones) _cZone.Items.Add(z.Display);
+        _cZone.SelectedIndex = 0;
         _session.SelectedIndex = 0;
         _speed.Items.AddRange(new object[] { "0.1x", "0.3x", "0.5x", "1x", "5x", "10x", "100x", "1000x" });
         _speed.SelectedItem = "100x";
@@ -63,6 +70,9 @@ public sealed class MainForm : Form
         _to.ValueChanged += (_, _) => RefreshPreview();
         _session.SelectedIndexChanged += (_, _) => RefreshPreview();
         _speed.SelectedIndexChanged += (_, _) => RefreshPreview();
+        _cStart.TextChanged += (_, _) => RefreshPreview();
+        _cEnd.TextChanged += (_, _) => RefreshPreview();
+        _cZone.SelectedIndexChanged += (_, _) => RefreshPreview();
         _output.TextChanged += (_, _) => RefreshPreview();
         _browse.Click += (_, _) => BrowseOutput();
         _start.Click += async (_, _) => await StartRun(resume: false);
@@ -152,6 +162,11 @@ public sealed class MainForm : Form
 
         Row("Von (Datum):", _from, "Bis (Datum):", _to);
         Row("Session:", _session, "Geschwindigkeit:", _speed);
+        var custom = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Margin = new Padding(0) };
+        custom.Controls.Add(new Label { Text = "Start", AutoSize = true, Margin = new Padding(3, 8, 3, 3) }); custom.Controls.Add(_cStart);
+        custom.Controls.Add(new Label { Text = "Ende", AutoSize = true, Margin = new Padding(3, 8, 3, 3) }); custom.Controls.Add(_cEnd);
+        custom.Controls.Add(new Label { Text = "(HH:mm:ss, je Tag)", AutoSize = true, Margin = new Padding(3, 8, 3, 3) });
+        Row("Benutzerdefiniert:", custom, "Zeitzone:", _cZone);
         var outPanel = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Margin = new Padding(0) };
         outPanel.Controls.Add(_output); outPanel.Controls.Add(_browse);
         Row("Instrument:", _instrument, "Datenordner:", outPanel);
@@ -187,7 +202,22 @@ public sealed class MainForm : Form
     }
 
     // ---------------- Vorschau ----------------
-    private SessionDef CurrentSession => SessionCalendar.Sessions[_session.SelectedIndex];
+    private bool IsCustom => _session.SelectedIndex >= SessionCalendar.Sessions.Count;
+
+    /// <summary>Aktuelle Session; bei "Benutzerdefiniert" aus Start/Ende/Zeitzone. Fehler -> null + Grund.</summary>
+    private SessionDef? TryCurrentSession(out string? error)
+    {
+        error = null;
+        _cStart.Enabled = _cEnd.Enabled = _cZone.Enabled = IsCustom;
+        if (!IsCustom) return SessionCalendar.Sessions[_session.SelectedIndex];
+        if (!SessionCalendar.TryParseClock(_cStart.Text, out var st)) { error = "Startzeit ungueltig (Format HH:mm:ss)."; return null; }
+        if (!SessionCalendar.TryParseClock(_cEnd.Text, out var en)) { error = "Endzeit ungueltig (Format HH:mm:ss)."; return null; }
+        error = SessionCalendar.ValidateCustom(st, en);
+        if (error != null) return null;
+        return SessionCalendar.Custom(st, en, SessionCalendar.CustomZones[Math.Max(0, _cZone.SelectedIndex)].TzId);
+    }
+
+    private SessionDef CurrentSession => TryCurrentSession(out _) ?? SessionCalendar.Sessions[0];
 
     private (DateOnly from, DateOnly to) Range()
     {
@@ -199,7 +229,14 @@ public sealed class MainForm : Form
     private void RefreshPreview()
     {
         var (from, to) = Range();
-        var s = CurrentSession;
+        var s0 = TryCurrentSession(out var sessErr);
+        if (s0 == null)
+        {
+            _grid.Items.Clear(); _rows.Clear();
+            _summary.Text = "Benutzerdefinierter Zeitraum ungueltig: " + sessErr;
+            return;
+        }
+        var s = s0;
         var days = SessionCalendar.PlanRange(from, to, s);
         _rows.Clear();
         _grid.BeginUpdate();
@@ -208,9 +245,10 @@ public sealed class MainForm : Form
         {
             var it = new ListViewItem(d.Date.ToString("yyyy-MM-dd"));
             it.SubItems.Add(d.WillRecord ? (d.Status == DayStatus.EarlyCloseTrading ? "geplant (verkuerzt)" : "geplant") : d.Status.ToString());
-            it.SubItems.Add($"{d.LocalStart:HH:mm}\u2013{d.LocalEnd:HH:mm}");
-            it.SubItems.Add($"{d.BerlinStart:HH:mm}\u2013{d.BerlinEnd:HH:mm}");
-            it.SubItems.Add($"{d.UtcStart:HH:mm}\u2013{d.UtcEnd:HH:mm}");
+            string tf = IsCustom ? "HH:mm:ss" : "HH:mm";
+            it.SubItems.Add($"{d.LocalStart.ToString(tf)}\u2013{d.LocalEnd.ToString(tf)}");
+            it.SubItems.Add(d.Status == DayStatus.Invalid ? "-" : $"{d.BerlinStart.ToString(tf)}\u2013{d.BerlinEnd.ToString(tf)}");
+            it.SubItems.Add(d.Status == DayStatus.Invalid ? "-" : $"{d.UtcStart.ToString(tf)}Z\u2013{d.UtcEnd.ToString(tf)}Z");
             it.SubItems.Add("");
             it.SubItems.Add("");
             it.SubItems.Add(d.Reason ?? "");
@@ -225,9 +263,9 @@ public sealed class MainForm : Form
         string dd = _output.Text;
         string recPath = string.IsNullOrWhiteSpace(dd) ? "(Datenordner waehlen)" : AppPaths.Recordings(dd);
         _summary.Text =
-            $"Session: {s.DisplayName}  |  Zeitzone: {s.TzIana}  |  Geschwindigkeit: {_speed.SelectedItem}  |  Instrument: {_instrument.Text}\n" +
+            $"Session: {s.DisplayName}{(IsCustom ? $" {s.LocalStart:hh\\:mm\\:ss}\u2013{s.LocalEnd:hh\\:mm\\:ss}" : "")}  |  Zeitzone: {s.TzIana}  |  Geschwindigkeit: {_speed.SelectedItem}  |  Instrument: {_instrument.Text}\n" +
             $"Geplante Aufnahme-Tage: {planned}   (kalendarisch uebersprungen: {skipped})   |   Ausgabe-Collection: {collName}\n" +
-            $"Recorder-Ordner (einmalig in ATAS als 'Output-Ordner' setzen): {recPath}";
+            $"Recorder-Ordner (wird dem Recorder automatisch uebergeben, keine Eingabe in ATAS noetig): {recPath}";
     }
 
     private void BrowseOutput() => ChooseDataDir();
@@ -248,7 +286,7 @@ public sealed class MainForm : Form
     {
         if (string.IsNullOrWhiteSpace(_output.Text)) { MessageBox.Show(this, "Noch kein Datenordner gewaehlt."); return; }
         var rec = AppPaths.Recordings(_output.Text);
-        try { Clipboard.SetText(rec); MessageBox.Show(this, "Recorder-Ordner in die Zwischenablage kopiert:\n\n" + rec + "\n\nDiesen Pfad in ATAS beim Indikator 'OF Replay Recorder' als 'Output-Ordner' eintragen (einmalige Einrichtung).", "Recorder-Ordner", MessageBoxButtons.OK, MessageBoxIcon.Information); }
+        try { Clipboard.SetText(rec); MessageBox.Show(this, "Recorder-Ordner in die Zwischenablage kopiert:\n\n" + rec + "\n\nDer Recorder erhaelt diesen Ordner automatisch ueber die gemeinsame Konfiguration; in ATAS ist keine Eingabe noetig.", "Recorder-Ordner", MessageBoxButtons.OK, MessageBoxIcon.Information); }
         catch (Exception ex) { MessageBox.Show(this, "Kopieren fehlgeschlagen: " + ex.Message); }
     }
 
@@ -256,8 +294,12 @@ public sealed class MainForm : Form
     private async Task StartRun(bool resume)
     {
         var (from, to) = Range();
-        var s = CurrentSession;
+        var s = TryCurrentSession(out var sessErr);
+        if (s == null) { MessageBox.Show(this, "Benutzerdefinierter Zeitraum ungueltig: " + sessErr, "Zeitraum", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
         var days = SessionCalendar.PlanRange(from, to, s);
+        var invalid = days.Where(d => d.Status == DayStatus.Invalid).ToList();
+        if (invalid.Count > 0)
+        { MessageBox.Show(this, "Nicht eindeutige Ortszeit:\n" + string.Join("\n", invalid.Select(d => $"{d.Date:yyyy-MM-dd}: {d.Reason}")), "Zeitumstellung", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
         if (days.Count(d => d.WillRecord) == 0)
         {
             MessageBox.Show(this, "Im gewaehlten Bereich liegt kein Handelstag (nur Wochenende/Feiertage).", "Nichts zu tun", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -345,8 +387,8 @@ public sealed class MainForm : Form
     {
         _runner?.RequestStop();
         _stop.Enabled = false;
-        _stop.Text = "Stoppe nach aktuellem Fenster \u2026";
-        _stepLabel.Text = "Kontrollierter Stopp angefordert \u2013 der laufende Tag wird sauber beendet.";
+        _stop.Text = "Stoppe \u2026";
+        _stepLabel.Text = "Kontrollierter Stopp angefordert \u2013 Wiedergabe wird beendet, Recorder entfernt, Writer abgeschlossen; kein weiterer Tag.";
         AppendDetail("[Bedienung] Kontrolliert stoppen angefordert (kein Prozess-Kill).");
     }
 

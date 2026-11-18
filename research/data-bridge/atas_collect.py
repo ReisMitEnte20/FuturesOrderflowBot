@@ -31,9 +31,19 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
+# Skriptordner explizit in den Suchpfad: Eine isolierte Laufzeit (python313._pth der mitgelieferten privaten
+# Python-Laufzeit, ebenso 'python -I') nimmt den Ordner des Skripts NICHT automatisch auf. Ohne diese Zeile
+# scheitert der Import unten dort mit "No module named 'atas_bridge'" (VM-Befund).
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
 import atas_bridge as b   # Wiederverwendung der geprueften reinen Helfer (keine Duplizierung)
 
 COLLECTION_SCHEMA = "atas-collection-trades-1"
+REWIND_TOLERANCE_NS = 1_000_000_000        # Marktzeit faellt um mehr als 1 s zurueck -> neuer Durchlauf
+END_REACHED_TOLERANCE_NS = 2_000_000_000   # erster Durchlauf gilt als bis zum Fensterende gespielt
+LIVE_PREFIX_GAP_NS = 3_600_000_000_000     # Trades >= 1 h nach Fensterende am Dateianfang = Live-Vorlauf (vor dem Laden)
 
 # Spaltenreihenfolge der gemeinsamen CSV (stabil; Header wird einmalig geschrieben).
 CSV_COLUMNS = [
@@ -108,6 +118,17 @@ def read_window_trades(recording_dir, start, end):
     n_total = n_window = n_before = n_after = n_bad = n_nontrade = n_lines = 0
     tot = buy = sell = 0
     first_ns = last_ns = None
+    # Ausfuehrungsgrenze: ATAS spult am Fensterende zurueck und spielt erneut (Auto-Loop). Landet ein zweiter Durchlauf
+    # in DERSELBEN Aufnahme, faellt die Marktzeit in Dateireihenfolge deutlich zurueck. Nur der erste Durchlauf zaehlt.
+    # KEINE Deduplizierung ueber Inhalte: identische echte Trades (gleiche Zeit/Preis/Menge) bleiben erhalten.
+    max_tm = None
+    rewind = None          # {"srcSeq", "atUtc", "maxBeforeUtc", "firstPassComplete"}
+    after_rewind = 0
+    # Live-Vorlauf: Eine im Live-Modus angehaengte Recorder-Instanz kann VOR dem Laden des Replays echte Live-Trades
+    # schreiben (Marktzeit = heute). Solche Trades am DATEIANFANG, mindestens 1 h nach dem Fensterende, sind kein
+    # Replay-Durchlauf: sie werden gezaehlt, nicht exportiert und setzen keine Ruecksprung-Grenze.
+    live_prefix = 0
+    in_replay = False
 
     for file_idx, obj in _iter_trades_ns(ticks_path):
         if obj is None:
@@ -119,6 +140,19 @@ def read_window_trades(recording_dir, start, end):
             continue
         n_total += 1
         tm_ns = b.parse_iso_ns(obj["tMarket"])
+        if not in_replay:
+            if tm_ns >= end_ns + LIVE_PREFIX_GAP_NS:
+                live_prefix += 1
+                continue
+            in_replay = True
+        if rewind is None and max_tm is not None and tm_ns < max_tm - REWIND_TOLERANCE_NS:
+            rewind = {"srcSeq": file_idx, "atUtc": b.ns_to_iso(tm_ns), "maxBeforeUtc": b.ns_to_iso(max_tm),
+                      "firstPassComplete": max_tm >= end_ns - END_REACHED_TOLERANCE_NS}
+        if rewind is not None:
+            after_rewind += 1
+            continue
+        if max_tm is None or tm_ns > max_tm:
+            max_tm = tm_ns
         if tm_ns < start_ns:
             n_before += 1
             continue
@@ -162,6 +196,9 @@ def read_window_trades(recording_dir, start, end):
             f"Quelle hat sich waehrend des Lesens geaendert ({', '.join(changed)}); kein verlaesslicher Snapshot.")
 
     summ_ticks = ((summary.get("perStream") or {}).get("ticks.ndjson") or {}).get("events")
+    loop = {"detected": rewind is not None, "tradesAfterBoundary": after_rewind}
+    if rewind is not None:
+        loop.update(rewind)
     summ_clean = summary.get("clean")
     stats = {
         "rows": n_window, "tradesTotalInFile": n_total,
@@ -169,6 +206,8 @@ def read_window_trades(recording_dir, start, end):
         "badJsonLines": n_bad, "nonTradeEventsInTicksStream": n_nontrade,
         "totalVolume": tot, "buyVolume": buy, "sellVolume": sell, "unknownVolume": tot - buy - sell,
         "firstTradeInWindowUtc": b.ns_to_iso(first_ns), "lastTradeInWindowUtc": b.ns_to_iso(last_ns),
+        "loopBoundary": loop,
+        "liveTicksBeforeReplay": live_prefix,
         "reconciliation": {
             "ndjson_lines_total": n_lines, "ndjson_trade_events_total": n_total,
             "csv_data_rows": csv_rows, "summary_ticks_events": summ_ticks,
@@ -187,6 +226,9 @@ def read_window_trades(recording_dir, start, end):
         reasons.append("csv_trade_count_discrepancy")
     if stats["reconciliation"]["summary_eq_ndjson_lines"] is False:
         reasons.append("summary_ndjson_line_discrepancy")
+    if rewind is not None and not rewind["firstPassComplete"]:
+        # Ruecksprung, bevor das Fensterende erreicht war: kein belegter vollstaendiger erster Durchlauf.
+        reasons.append("market_time_rewind_before_window_end")
     status = "empty_window" if n_window == 0 else ("check" if reasons else "complete")
     stats["status"] = status
     stats["statusReasons"] = reasons
@@ -451,6 +493,13 @@ def _fmt_cmp(t):
 # ---------------------------------------------------------------------------
 
 def main(argv=None):
+    # Ausgabe immer als UTF-8: Pfade mit Zeichen ausserhalb der Windows-Codepage (Benutzer-/Ordnernamen) duerfen
+    # die JSON-Ausgabe nicht mit UnicodeEncodeError abbrechen lassen. Die aufrufende Steuerung liest UTF-8.
+    for _st in (sys.stdout, sys.stderr):
+        try:
+            _st.reconfigure(encoding="utf-8", errors="backslashreplace")
+        except Exception:
+            pass
     ap = argparse.ArgumentParser(description="ATAS-Sammellauf: Abschnitt -> gemeinsame Trade-CSV (append/status/compare/recover)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -477,7 +526,14 @@ def main(argv=None):
     pc.add_argument("--start", required=True)
     pc.add_argument("--end", required=True)
 
+    sub.add_parser("selfcheck", help="Importe und Laufzeit pruefen (vor jeder ATAS-Aktion aufrufen)")
+
     a = ap.parse_args(argv)
+    if a.cmd == "selfcheck":
+        import pyarrow
+        print(json.dumps({"result": "ok", "python": sys.version.split()[0], "pyarrow": pyarrow.__version__,
+                          "bridge": os.path.abspath(b.__file__), "schema": COLLECTION_SCHEMA}, ensure_ascii=False))
+        return 0
     if a.cmd == "append":
         r = append_job(a.collection, a.recording, a.job_id, a.start, a.end,
                        session=a.session, year=a.year, timezone_name=a.tz, allow_check_status=a.allow_check)

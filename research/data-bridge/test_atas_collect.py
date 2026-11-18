@@ -279,3 +279,75 @@ def test_source_change_during_read_aborts(tmp_path, monkeypatch):
     monkeypatch.setattr(c.b, "sha256_file", flaky)
     with pytest.raises(b.SourceChangedError):
         c.read_window_trades(r, START, END)
+
+def test_selfcheck_runs_with_isolated_interpreter(tmp_path):
+    """VM-Befund: Mit isolierter Laufzeit (private Python-Laufzeit mit ._pth, hier nachgestellt ueber -I) liegt der
+    Skriptordner NICHT im Suchpfad. Der Collector muss sein Schwestermodul atas_bridge trotzdem finden - aus einem
+    fremden Arbeitsverzeichnis und einem Pfad mit Leerzeichen."""
+    import os, shutil, subprocess, sys as _sys
+    here = os.path.dirname(os.path.abspath(__file__))
+    dst = tmp_path / "Ordner mit Leerzeichen" / "bridge"
+    dst.mkdir(parents=True)
+    for f in ("atas_collect.py", "atas_bridge.py"):
+        shutil.copy(os.path.join(here, f), dst / f)
+    r = subprocess.run([_sys.executable, "-I", str(dst / "atas_collect.py"), "selfcheck"],
+                       cwd=str(tmp_path), capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    assert out["result"] == "ok"
+    assert os.path.normcase(out["bridge"]) == os.path.normcase(str(dst / "atas_bridge.py"))
+
+def _lines_at(seconds, base_price=100.0):
+    return [_line(i + 1, f"2026-10-26T08:00:{sec:02d}.000Z", base_price + i * 0.25, 1, "Buy") for i, sec in enumerate(seconds)]
+
+
+def test_loop_in_same_recording_only_first_pass_published(tmp_path):
+    """Auto-Loop in DERSELBEN Aufnahme: Marktzeit springt nach dem Fensterende zurueck -> nur erster Durchlauf."""
+    secs = [0, 10, 30, 59, 0, 10]          # erster Durchlauf bis 08:00:59 (Fensterende 08:01:00), dann Ruecksprung
+    rec = _make_recording(tmp_path / "rec", _lines_at(secs))
+    rows, stats, _ = c.read_window_trades(rec, START, END)
+    assert [r["t_market_utc"][17:19] for r in rows] == ["00", "10", "30", "59"]
+    assert stats["loopBoundary"]["detected"] and stats["loopBoundary"]["firstPassComplete"]
+    assert stats["loopBoundary"]["tradesAfterBoundary"] == 2
+    assert "market_time_rewind_before_window_end" not in stats["statusReasons"]
+
+
+def test_identical_real_trades_are_not_deduplicated(tmp_path):
+    """Gleiche Zeit + gleicher Preis + gleiche Menge sind echte, eigene Trades - kein Ruecksprung, nichts entfernt."""
+    lines = [_line(i + 1, "2026-10-26T08:00:05.000Z", 100.25, 1, "Buy") for i in range(4)]
+    rec = _make_recording(tmp_path / "rec", lines)
+    rows, stats, _ = c.read_window_trades(rec, START, END)
+    assert len(rows) == 4 and not stats["loopBoundary"]["detected"]
+
+
+def test_rewind_before_window_end_is_not_published_as_complete(tmp_path):
+    """Ruecksprung, bevor das Fensterende erreicht war -> Status 'check' (keine falsche Vollstaendigkeit)."""
+    rec = _make_recording(tmp_path / "rec", _lines_at([0, 10, 20, 0, 5]))
+    rows, stats, _ = c.read_window_trades(rec, START, END)
+    assert stats["status"] == "check"
+    assert "market_time_rewind_before_window_end" in stats["statusReasons"]
+    coll = tmp_path / "coll"
+    res = c.append_job(coll, rec, "job-r", START, END, session="Custom", year=2026)
+    assert res["result"] != "committed"
+
+
+def test_live_prefix_before_replay_is_excluded_not_a_rewind(tmp_path):
+    """VM 18.11. (Folgetag): Instanz im Live-Modus angehaengt -> Live-Trades (heute) VOR den Replay-Trades.
+    Kein Ruecksprung, nicht exportiert, gezaehlt; der Replay-Durchlauf wird vollstaendig uebernommen."""
+    live = [_line(i + 1, f"2026-11-18T15:36:{s:02d}.000Z", 27000.0, 1, "Buy") for i, s in enumerate([31, 40, 55])]
+    replay = [_line(10 + i, f"2026-10-26T08:00:{s:02d}.000Z", 100.0 + i * 0.25, 1, "Sell") for i, s in enumerate([0, 10, 30, 59])]
+    rec = _make_recording(tmp_path / "rec", live + replay)
+    rows, stats, _ = c.read_window_trades(rec, START, END)
+    assert [r["t_market_utc"][17:19] for r in rows] == ["00", "10", "30", "59"]
+    assert stats["liveTicksBeforeReplay"] == 3
+    assert not stats["loopBoundary"]["detected"]
+    assert stats["status"] == "complete"
+
+
+def test_live_trades_after_replay_start_are_not_prefix(tmp_path):
+    """Nur der DATEIANFANG zaehlt als Live-Vorlauf; spaetere ferne Trades sind normale Rest-Ticks (kein Verschlucken)."""
+    replay = [_line(1 + i, f"2026-10-26T08:00:{s:02d}.000Z", 100.0, 1, "Buy") for i, s in enumerate([0, 30, 59])]
+    later = [_line(20, "2026-11-18T15:40:00.000Z", 27000.0, 1, "Buy")]
+    rec = _make_recording(tmp_path / "rec", replay + later)
+    rows, stats, _ = c.read_window_trades(rec, START, END)
+    assert len(rows) == 3 and stats["liveTicksBeforeReplay"] == 0 and stats["restTicksAfter"] == 1

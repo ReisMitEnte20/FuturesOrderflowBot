@@ -55,3 +55,6 @@ dashboard/public/orderflow-runs/
 # Python-Bytecode (research/data-bridge u. a.)
 __pycache__/
 *.pyc
+
+# Build-Ausgabe des ATAS-Recorders (research/atas-recorder/build.ps1)
+research/atas-recorder/out/

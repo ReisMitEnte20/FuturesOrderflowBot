@@ -16,8 +16,13 @@
     <AssemblyName>AtasSessionCollector</AssemblyName>
     <RootNamespace>AtasSessionCollector</RootNamespace>
     <LangVersion>latest</LangVersion>
-    <Version>1.2.5</Version>
+    <Version>1.3.8</Version>
     <Deterministic>true</Deterministic>
   </PropertyGroup>
+
+  <!-- Gemeinsame Datenordner-Konfiguration: dieselbe Quelldatei wie Recorder, Probe und Setup (kein Drift). -->
+  <ItemGroup>
+    <Compile Include="../recorder-core/SharedDataRoot.cs" Link="SharedDataRoot.cs" />
+  </ItemGroup>
 
 </Project>
