@@ -11,6 +11,21 @@ export interface WsTrade {
   index: number; side: string; qty: number; entryBarIndex: number; exitBarIndex: number;
   entryPrice: number; exitPrice: number; exitReason: string; stopLossPrice: number; takeProfitPrice: number;
   ambiguous: boolean; netPnL: number; entryTimeMs: number; exitTimeMs: number; entryTime: string; exitTime: string;
+  // Trade-Nachvollzug (nur Laeufe mit provenance.tradeDetailVersion >= 1). Fehlt/null = in der Laufdatei nicht gespeichert.
+  grossPnL?: number | null; fees?: number | null;
+  /** Exakte Engine-Fillzeiten (ISO-UTC, 100 ns); entryTimeMs/exitTimeMs sind auf ms abgeschnitten. */
+  entryTimeUtc?: string | null; exitTimeUtc?: string | null;
+  /** 0-basierter Index des Fill-Ticks in der Tick-Liste des Laufs (Quellreihenfolge). */
+  entryTickIndex?: number | null; exitTickIndex?: number | null;
+  /** Marktpreis des Fill-Ticks vor Slippage. */
+  entryTickPrice?: number | null; exitTickPrice?: number | null;
+  entrySignal?: WsSignal | null; exitSignal?: WsSignal | null;
+  signalLink?: string | null;
+}
+/** Gespeichertes Strategiesignal (Schluss der Signal-Bar). reason leer = kein Begruendungstext gespeichert. */
+export interface WsSignal {
+  barIndex: number; tickIndex: number; timeUtc: string; direction: string; referencePrice: number;
+  reason: string; triggeredConditions?: string[]; positionBefore: string;
 }
 export interface WsStrategy {
   name: string; usesOrderflow: boolean; netPnL: number; fees: number; finalEquity: number; trades: WsTrade[];
@@ -35,6 +50,9 @@ export interface WsProvenance {
   ticksPerBar: number; deltaThreshold: number; startingBalance: number;
   capabilities: string; executionModel: string; divergencesFromHarness: string[]; caveats: string[];
   settingsUsed?: Record<string, string>;
+  costs?: { feePerSideTotal: number; slippageTicks: number; tickSize: number; pointValue: number; [k: string]: number };
+  /** 0/fehlend = alte Laufdatei ohne Signal-/Fill-Tick-Nachvollzug. */
+  tradeDetailVersion?: number;
 }
 export interface WorkspaceData {
   meta: { instrument: string; dataSource: string; marketStartMs: number; marketEndMs: number; ticksPerBar: number; pointValue: number; tickSizeNote: string; feePerSide: number; slippageTicks: number; generatedUtc: string; };

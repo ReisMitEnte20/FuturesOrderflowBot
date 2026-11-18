@@ -74,6 +74,16 @@ Position zum **letzten vorhandenen Tick**) · `openPositionEntryFees` (nur gezah
 hypothetische Exit-Fee) · `totalFeesPaid` · `endEquityRealized` und `endEquityMarkToMarket`.
 Es wird **kein** künstlicher EndOfData-Fill erzeugt.
 
+## Trade-Nachvollzug je Trade (`provenance.tradeDetailVersion = 1`, abwärtskompatibel)
+
+Neue Läufe speichern zusätzlich je Trade: `grossPnL`, `fees` (Engine), exakte Fillzeiten `entryTimeUtc`/`exitTimeUtc`
+(ISO, 100 ns), `entryTickIndex`/`exitTickIndex` (Fill-Tick in Quellreihenfolge), `entryTickPrice`/`exitTickPrice`
+(Marktpreis vor Slippage) sowie `entrySignal`/`exitSignal` (Signal-Bar-Index, Signal-Tick = letzter Tick der Bar,
+Zeit, Richtung, Referenzpreis, gespeicherter `reason` – leer = nicht gespeichert). Quelle ist ein reiner
+Mitschnitt (`SignalRecordingStrategy`); die Zuordnung (`TradeSignalLinker`) wird nur gesetzt, wenn Richtung,
+Folge-Tick und Fillpreis = Tickpreis ± Slippage exakt passen, sonst bleiben die Felder `null` und `signalLink`
+nennt den Grund. Alte Laufdateien bleiben unverändert und ladbar (ohne diese Felder: kein Signalmarker im Replay).
+
 ## Ausgaben (alle gitignored — nicht committen)
 
 - `artifacts/orderflow/runs/<id>/workspace.json` + `manifest.json`

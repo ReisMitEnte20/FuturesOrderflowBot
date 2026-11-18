@@ -37,12 +37,20 @@ public sealed class OrderflowMultiStrategyRunner
 
         // --- je Strategie ein eigener Lauf ueber die bestehende Engine (getrennte Ledgers) ---
         var runResults = new List<StrategyRunResult>(req.Candidates.Count);
+        var signalLogs = new List<List<RecordedSignal>>(req.Candidates.Count);
         foreach (var cand in req.Candidates)
         {
             ct.ThrowIfCancellationRequested();
+            // Reiner Mitschnitt der ausgegebenen Signale (Trade-Nachvollzug); Strategie/Parameter/Reihenfolge unveraendert.
+            var log = new List<RecordedSignal>();
+            signalLogs.Add(log);
+            var recorded = cand with
+            {
+                CreateStrategy = c => { log.Clear(); return new SignalRecordingStrategy(cand.CreateStrategy(c), log); }
+            };
             var inputs = new StrategyRunInputs
             {
-                Candidate = cand,
+                Candidate = recorded,
                 Config = cand.BaseConfig,
                 Ticks = ticks,
                 Symbol = req.Symbol,
@@ -99,13 +107,17 @@ public sealed class OrderflowMultiStrategyRunner
         decimal pv = req.Instrument.PointValue;
         decimal lastTickPrice = ticks[^1].Price; // "letzter vorhandener Tick" fuer Mark-to-Market
         var strategies = new List<WsStrategy>(runResults.Count);
-        foreach (var rr in runResults)
+        decimal slipTicksUsed = req.SlippageTicksOverride ?? req.Fee.EstimatedSlippageTicks;
+        for (int ri = 0; ri < runResults.Count; ri++)
         {
+            var rr = runResults[ri];
+            var links = TradeSignalLinker.Link(ticks, fullBarList, tpb, signalLogs[ri], rr.Trades, req.Instrument.TickSize, slipTicksUsed);
             var trades = new List<WsTrade>(rr.Trades.Count);
             int k = 0;
             decimal net = 0m, fees = 0m;
             foreach (var tr in rr.Trades)
             {
+                var link = links[k];
                 net += tr.NetPnL;
                 fees += tr.Fees;
                 long eMs = Ms(tr.EntryTime), xMs = Ms(tr.ExitTime);
@@ -126,7 +138,18 @@ public sealed class OrderflowMultiStrategyRunner
                     EntryTimeMs = eMs,
                     ExitTimeMs = xMs,
                     EntryTime = tr.EntryTime.ToString("HH:mm:ss", CultureInfo.InvariantCulture),
-                    ExitTime = tr.ExitTime.ToString("HH:mm:ss", CultureInfo.InvariantCulture)
+                    ExitTime = tr.ExitTime.ToString("HH:mm:ss", CultureInfo.InvariantCulture),
+                    GrossPnL = tr.GrossPnL,
+                    Fees = tr.Fees,
+                    EntryTimeUtc = TradeSignalLinker.Iso(tr.EntryTime),
+                    ExitTimeUtc = TradeSignalLinker.Iso(tr.ExitTime),
+                    EntryTickIndex = link.EntryTickIndex,
+                    ExitTickIndex = link.ExitTickIndex,
+                    EntryTickPrice = link.EntryTickPrice,
+                    ExitTickPrice = link.ExitTickPrice,
+                    EntrySignal = link.EntrySignal,
+                    ExitSignal = link.ExitSignal,
+                    SignalLink = link.Status
                 });
             }
             var diag = rr.Diagnostics;
@@ -261,7 +284,8 @@ public sealed class OrderflowMultiStrategyRunner
                 "Fill-/Slippage-/Flip-Details stammen aus FillModel/OrderManager, nicht aus der vereinfachten Harness-Transition -> PnL bewusst NICHT identisch erzwungen."
             },
             Caveats = caveats,
-            SettingsUsed = req.SettingsUsed
+            SettingsUsed = req.SettingsUsed,
+            TradeDetailVersion = 1
         };
 
         var artifact = new OrderflowWorkspaceArtifact

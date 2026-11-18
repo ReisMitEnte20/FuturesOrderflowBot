@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { TickReplayChart, type ReplaySlot } from "@/components/research/TickReplayChart";
+import { TickReplayChart, type ReplaySlot, type ReplayMarker } from "@/components/research/TickReplayChart";
 import {
   TickReplayEngine, createStore, appendChunk, decodeChunk, countAtOrBefore, candleStatus, advanceClock,
   type TickStore, type ReplayCandle,
 } from "@/lib/tickReplay";
 import { tickReplayApi, type TickReplayMeta, type TickReplaySession } from "@/lib/tickReplayApi";
+import { basisCheck, eventReached, pauseTarget, tradeEvents, tradeRef, type EventKind, type ReplayFocus, type TradeEvent } from "@/lib/tradeReplay";
+import { SignalFacts, TradeCalc } from "@/components/research/TradeJournal";
 
 // Historisches TICK-Replay mit sich aufbauenden 5-Minuten-Kerzen aus den ECHTEN aufgezeichneten Trades einer
 // Collection-Session. Jeder Trade wird einzeln angewandt (Darstellung je Frame gebuendelt). Nur Informationen bis
@@ -36,8 +38,14 @@ const secOfDay = (s: string) => { const [h, mi, se] = s.split(":").map(Number); 
 
 interface LoadState { phase: "idle" | "prepare" | "load" | "done" | "error"; loaded: number; total: number; msg?: string; }
 
-export function TickReplayPanel() {
+/** Ziel-Session eines Journal-Fokus (Collection-Job bevorzugt, sonst Tag). */
+const focusMatches = (f: ReplayFocus, jobId: string, day: string) => (f.jobId ? f.jobId === jobId : f.day === day);
+
+export function TickReplayPanel({ focus = null, onClearFocus }: { focus?: ReplayFocus | null; onClearFocus?: () => void } = {}) {
   const [open, setOpen] = useState(true);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const focusSeekRef = useRef<number | null>(null);
+  const [focusMsg, setFocusMsg] = useState<string | null>(null);
   const [sessions, setSessions] = useState<TickReplaySession[]>([]);
   const [listErr, setListErr] = useState<string | null>(null);
   const [jobId, setJobId] = useState("");
@@ -217,6 +225,52 @@ export function TickReplayPanel() {
     const startSec = secOfDay(nyFmt.format(offMs(m, m.windowStartUnits)));
     seekTime(m.windowStartUnits + (secOfDay(gotoText.trim()) - startSec) * UNITS_PER_SEC);
   };
+  /** Exakt auf Position p (Anzahl angewandter Ticks) – loest gleiche Zeitstempel ueber die gespeicherte Reihenfolge auf. */
+  const seekIndex = (p: number) => {
+    const m = metaRef.current, st = storeRef.current, eng = engRef.current;
+    if (!m || !st || !eng || p > st.loaded) return;
+    stopLoop(); setPlaying(false);
+    pendingSeekRef.current = null;
+    eng.seek(p);
+    clockRef.current = p > 0 ? st.t[p - 1] : m.windowStartUnits;
+    lastFrameRef.current = null;
+    requestRender();
+  };
+  /** Direkt NACH ein Ereignis springen (exakt per Tick-Index, sonst an das Ende seines Zeitbereichs). */
+  const jumpAfter = (ev: TradeEvent) => {
+    const st = storeRef.current;
+    if (ev.tickIndex != null && st && st.loaded > ev.tickIndex) { seekIndex(ev.tickIndex + 1); return; }
+    stopLoop(); setPlaying(false);
+    if (ev.unitsUpper != null) seekTime(ev.unitsUpper);
+  };
+
+  // Journal-Fokus: Panel oeffnen, passenden Tag waehlen (laedt ggf. neu), danach vor dem Signal pausieren.
+  useEffect(() => {
+    if (!focus) { setFocusMsg(null); focusSeekRef.current = null; return; }
+    setOpen(true);
+    stopLoop(); setPlaying(false);
+    rootRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (!sessions.length) { setFocusMsg("Replay-Sessions werden geladen …"); focusSeekRef.current = focus.key; return; }
+    const s = sessions.find((x) => focusMatches(focus, x.jobId, x.day));
+    if (!s) {
+      focusSeekRef.current = null;
+      setFocusMsg(`Replay-Tag ${focus.day ?? "?"} (Collection-Job ${focus.jobId ?? "?"}) ist in der konfigurierten Collection nicht vorhanden – kein Replay für diesen Trade.`);
+      return;
+    }
+    setFocusMsg(null);
+    focusSeekRef.current = focus.key;
+    setJobId(s.jobId);
+  }, [focus?.key, sessions]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!focus || focusSeekRef.current !== focus.key || !meta || !focusMatches(focus, meta.jobId, meta.day)) return;
+    // Nur auf die TATSAECHLICH aktive Session anwenden (nicht auf einen gerade verworfenen Ladezustand).
+    if (metaRef.current !== meta || !storeRef.current || !engRef.current) return;
+    focusSeekRef.current = null;
+    const evs = tradeEvents(focus.trade, meta.anchorUnixMs, basisCheck(focus, meta).exact);
+    const pt = pauseTarget(evs, meta.windowStartUnits);
+    if (pt) seekTime(pt.units);
+  }, [meta, focus?.key, sessions]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Intervall-Beschriftungen haengen nur von der Session ab -> einmal je Session berechnen, nicht je Frame.
   const slotTemplates = useMemo(() => {
@@ -265,11 +319,37 @@ export function TickReplayPanel() {
     cs: eng!.candles().map((c) => [c.bucket, c.open, c.high, c.low, c.close, c.volume, c.trades]),
   }) : "";
 
+  // ----------------------------- Journal-Trade: nur Ereignisse bis zur Replay-Position -----------------------------
+  const fActive = !!(focus && m && st && eng && focusMatches(focus, m.jobId, m.day));
+  const basis = fActive ? basisCheck(focus!, m!) : null;
+  const evs: TradeEvent[] = fActive ? tradeEvents(focus!.trade, m!.anchorUnixMs, basis!.exact) : [];
+  const evOf = (k: EventKind) => evs.find((e) => e.kind === k) ?? null;
+  const reached: Record<EventKind, boolean> = { signal: false, entry: false, exitSignal: false, exit: false };
+  if (fActive) for (const e of evs) reached[e.kind] = eventReached(e, st!, eng!.p);
+  /** Exakte Zeit eines Ereignisses (Tick-Zeit bei Tick-Index, sonst gespeicherte Zeit). */
+  const evUnits = (e: TradeEvent) => (e.tickIndex != null && st && st.loaded > e.tickIndex ? st.t[e.tickIndex] : e.units ?? 0);
+  const markers: ReplayMarker[] = [];
+  if (fActive && slotTemplates.length) {
+    const side = focus!.trade.side;
+    for (const e of evs) {
+      if (!reached[e.kind] || e.kind === "exitSignal" || e.price == null) continue;
+      const slot = Math.floor(evUnits(e) / m!.bucketUnits) - slotTemplates[0].bucket;
+      if (slot < 0 || slot >= slotTemplates.length) continue;
+      markers.push({ kind: e.kind as "signal" | "entry" | "exit", slot, price: e.price, side,
+        label: e.kind === "signal" ? `Signal ${focus!.trade.entrySignal?.direction ?? ""}` : e.kind === "entry" ? `Entry ${e.price}` : `Exit ${e.price}` });
+    }
+  }
+  const evTime = (e: TradeEvent | null) => (e && m ? `${fmtTime(m, evUnits(e), nyFmt, e.precision === "ms" ? 3 : 7)} ${tzShort(offMs(m, evUnits(e)))}` : "");
+  const tradeReplayState = fActive ? JSON.stringify({
+    ref: tradeRef(focus!.runId, focus!.candidate, focus!.trade, false), exact: basis!.exact, p: eng!.p, reached,
+    markers: markers.map((k) => k.kind), events: evs.map((e) => ({ kind: e.kind, tickIndex: e.tickIndex, units: e.units, precision: e.precision })),
+  }) : "";
+
   const btn = "h-[28px] px-2.5 rounded-md border border-[var(--line-2)] text-[var(--fg)] text-xs disabled:opacity-40";
   const btnOn = "h-[28px] px-2.5 rounded-md bg-[var(--key)] text-black text-xs font-semibold";
 
   return (
-    <div className="rounded-lg border border-[var(--line)] bg-[var(--panel)]" data-testid="tick-replay" data-replay-state={replayState}>
+    <div ref={rootRef} className="rounded-lg border border-[var(--line)] bg-[var(--panel)] scroll-mt-2" data-testid="tick-replay" data-replay-state={replayState} data-trade-replay={tradeReplayState}>
       <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-2 px-3 py-2 text-left">
         <span className="text-[var(--key)] text-xs">{open ? "▾" : "▸"}</span>
         <span className="rounded bg-[var(--panel-3)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--fg-dim)]">Tick-Replay · 5-Minuten-Kerzen</span>
@@ -278,6 +358,7 @@ export function TickReplayPanel() {
       {open && (
         <div className="space-y-3 border-t border-[var(--line)] p-3">
           {listErr && <div className="text-xs text-[var(--red)]">{listErr}</div>}
+          {focus && focusMsg && <div className="text-xs text-[var(--gold,#e8c069)]" data-testid="tr-focus-msg">{focusMsg}</div>}
 
           <div className="flex flex-wrap items-center gap-2">
             <label className="text-[11px] text-[var(--fg-dim)]">Session</label>
@@ -364,17 +445,88 @@ export function TickReplayPanel() {
                 </div>
               </div>
 
-              <TickReplayChart slots={slots} currentSlot={currentSlot} lastPrice={lastPrice} follow={follow} />
+              {fActive && focus && <TradeReplayBox focus={focus} basisWhy={basis!.why} exact={basis!.exact} reached={reached} evOf={evOf} evTime={evTime}
+                lastPrice={lastPrice} onJump={jumpAfter} onBefore={(e) => e.tickIndex != null && st.loaded >= e.tickIndex ? seekIndex(e.tickIndex) : e.units != null && seekTime(e.units - 1)}
+                onPause={() => { const pt = pauseTarget(evs, m.windowStartUnits); if (pt) { stopLoop(); setPlaying(false); seekTime(pt.units); } }}
+                onClear={onClearFocus} />}
+
+              <TickReplayChart slots={slots} currentSlot={currentSlot} lastPrice={lastPrice} follow={follow} markers={markers} />
 
               <div className="text-[10px] leading-relaxed text-[var(--fg-faint)]">
                 Kerzen an echten 5-Minuten-Grenzen in {TZ}, Intervalle [Start, Ende); Open = erster, Close = zuletzt abgespielter Trade, High/Low/Volumen nur aus bereits abgespielten Trades.
                 Gleiche Zeitstempel in Originalreihenfolge, keine Deduplizierung, Lücken ohne erfundene Trades. {m.timePrecision}
-                {" "}Bestehende Strategieläufe (500 Ticks/Bar) bleiben unverändert und werden hier nicht als Replay-Zustand eingeblendet.
+                {" "}Strategieläufe (500 Ticks/Bar) werden hier weder neu berechnet noch auf 5-Minuten-Kerzen umgerechnet; ein aus dem Journal geöffneter Trade zeigt nur seine im Lauf gespeicherten Ereignisse (Signal / simulierter Entry / simulierter Exit), jeweils erst ab Erreichen der Replay-Position.
               </div>
             </>
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+const KEYC = "#3cf0a0", REDC = "#f0566a", GOLDC = "#e8c069";
+
+/** Detail des Journal-Trades im Replay – ausschliesslich bis zur Replay-Position eingetretene Ereignisse.
+ *  Vor dem Signal keine Richtung, vor dem Entry kein Fill, vor dem Exit kein Ergebnis. */
+function TradeReplayBox({ focus, basisWhy, exact, reached, evOf, evTime, lastPrice, onJump, onBefore, onPause, onClear }: {
+  focus: ReplayFocus; basisWhy: string; exact: boolean; reached: Record<EventKind, boolean>;
+  evOf: (k: EventKind) => TradeEvent | null; evTime: (e: TradeEvent | null) => string; lastPrice: number | null;
+  onJump: (e: TradeEvent) => void; onBefore: (e: TradeEvent) => void; onPause: () => void; onClear?: () => void;
+}) {
+  const t = focus.trade;
+  const sig = evOf("signal"), en = evOf("entry"), xs = evOf("exitSignal"), ex = evOf("exit");
+  const dir = t.side === "Long" ? 1 : -1;
+  const pv = focus.costs.pointValue;
+  const open = reached.entry && !reached.exit;
+  const unreal = open && lastPrice != null && pv != null ? Math.round((lastPrice - t.entryPrice) * dir * t.qty * pv * 100) / 100 : null;
+  const usd = (n: number) => (n < 0 ? "−" : "") + "$" + Math.abs(n).toFixed(2);
+  const pending = <span className="text-[var(--fg-faint)]">noch nicht eingetreten</span>;
+  const sb = "h-[22px] px-2 rounded border border-[var(--line-2)] text-[11px] text-[var(--fg)] disabled:opacity-40";
+  const Row = ({ c, title, children }: { c: string; title: string; children: React.ReactNode }) => (
+    <div className="flex gap-2"><span className="w-[92px] shrink-0 font-semibold" style={{ color: c }}>{title}</span><div className="min-w-0">{children}</div></div>
+  );
+  return (
+    <div className="rounded-md border border-[rgba(232,192,105,.45)] bg-[rgba(232,192,105,.05)] p-2 text-[11px] font-mono space-y-1" data-testid="tr-trade">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-semibold text-[var(--fg)]">Journal-Trade im Replay</span>
+        <span className="text-[var(--fg-dim)]">Kandidat <b>{focus.candidate}</b> · Ref {tradeRef(focus.runId, focus.candidate, t, false)}</span>
+        <span className="ml-auto flex gap-1">
+          <button className={sb} onClick={onPause} title="Erneut kurz vor das Signal (15 s Marktzeit)">⇤ vor Signal</button>
+          {sig && <button className={sb} onClick={() => onBefore(sig)} title="Genau ein Tick vor dem Signal-Tick">1 Tick vor Signal</button>}
+          {sig && <button className={sb} onClick={() => onJump(sig)}>→ Signal</button>}
+          {en && <button className={sb} onClick={() => onJump(en)}>→ Entry</button>}
+          {ex && <button className={sb} onClick={() => onJump(ex)}>→ Exit</button>}
+          {onClear && <button className={sb} onClick={onClear} data-testid="tr-trade-clear">Auswahl entfernen</button>}
+        </span>
+      </div>
+      <div className="text-[10px]" style={{ color: exact ? "var(--fg-faint)" : GOLDC }}>
+        Zuordnung: {exact ? "exakt über gespeicherte Tick-Indizes" : "nur über Zeitstempel"} – {basisWhy}. Signal-Bars des Laufs: {focus.ticksPerBar} Ticks (Ansicht: 5-Minuten-Kerzen, keine Neuberechnung).
+      </div>
+      <Row c={GOLDC} title="① Signal">
+        {!sig ? <span className="text-[var(--fg-faint)]">Signalzeitpunkt in dieser Laufdatei nicht gespeichert – kein Marker, keine Schätzung{t.signalLink ? ` (${t.signalLink})` : ""}.</span>
+          : reached.signal ? <SignalFacts s={t.entrySignal} bar={focus.signalBars.entry} ticksPerBar={focus.ticksPerBar} label="bestätigt" /> : pending}
+      </Row>
+      <Row c={dir > 0 ? KEYC : REDC} title="② Entry (sim.)">
+        {reached.entry && en ? <>
+          {t.side} {t.qty} @ <b>{t.entryPrice}</b> · {evTime(en)}
+          {t.entryTickPrice != null ? <> · Tickpreis {t.entryTickPrice} + Slippage im Fill ({Math.abs(t.entryPrice - t.entryTickPrice)} Pkt)</> : <span className="text-[var(--fg-faint)]"> · Tickpreis vor Slippage nicht gespeichert</span>}
+          {en.precision === "ms" && <span className="text-[var(--fg-faint)]"> · Zeit nur ms-genau gespeichert</span>}
+        </> : pending}
+      </Row>
+      {open && <Row c="var(--fg-dim)" title="   offen">
+        unrealisiert brutto {unreal == null ? "—" : <b style={{ color: unreal >= 0 ? KEYC : REDC }}>{usd(unreal)}</b>} beim letzten abgespielten Tick {lastPrice ?? "—"} <span className="text-[var(--fg-faint)]">(ohne Exit-Slippage und Gebühren; Ergebnis erst nach dem Exit)</span>
+        {xs && reached.exitSignal && <div className="text-[var(--fg-dim)]"><SignalFacts s={t.exitSignal} bar={focus.signalBars.exit} ticksPerBar={focus.ticksPerBar} label="Exit-Signal" /></div>}
+      </Row>}
+      <Row c="#7fc4b4" title="③ Exit (sim.)">
+        {reached.exit && ex ? <>
+          @ <b>{t.exitPrice}</b> · {evTime(ex)}
+          {t.exitTickPrice != null ? <> · Tickpreis {t.exitTickPrice} − Slippage im Fill ({Math.abs(t.exitPrice - t.exitTickPrice)} Pkt)</> : <span className="text-[var(--fg-faint)]"> · Tickpreis nicht gespeichert</span>}
+          {" "}· Auslöser: {t.exitSignal ? <>Strategiesignal {t.exitSignal.direction} (Schluss Signal-Bar #{t.exitSignal.barIndex})</> : <span className="text-[var(--fg-faint)]">nicht gespeichert</span>}
+          {" "}· Exitgrund-Text: {t.exitReason || <span className="text-[var(--fg-faint)]">nicht gespeichert</span>}
+          <div className="mt-1 border-t border-[var(--line)] pt-1"><TradeCalc t={t} costs={focus.costs} runId={focus.runId} candidate={focus.candidate} withRef={false} /></div>
+        </> : <span className="text-[var(--fg-faint)]">{reached.entry ? "Position noch offen – kein Exit, kein Ergebnis vor dem Exit" : "noch nicht eingetreten"}</span>}
+      </Row>
     </div>
   );
 }

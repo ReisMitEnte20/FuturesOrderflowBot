@@ -37,6 +37,7 @@ import { EquityDrawdownChart } from "@/components/backtest/EquityDrawdownChart";
 import { BacktestChart } from "@/components/backtest/BacktestChart";
 import { ResearchWorkspace } from "@/components/research/ResearchWorkspace";
 import { TickReplayPanel } from "@/components/research/TickReplayPanel";
+import type { ReplayFocus } from "@/lib/tradeReplay";
 import {
   CostHeatmap,
   DistributionChart,
@@ -174,6 +175,7 @@ export function Research() {
   const [cfg, setCfg] = useState<ResearchConfig>(DEFAULT_CONFIG);
   const [evalOpts] = useState<QuantEvaluationOptions>({ ...defaultEvaluationOptions, frequency: "Daily" });
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [replayFocus, setReplayFocus] = useState<ReplayFocus | null>(null); // Journal-Trade -> Tick-Replay
   const [showConfig, setShowConfig] = useState(false); // „Neuen Lauf konfigurieren" bei der Analyse standardmaessig geschlossen
 
   const [run, setRun] = useState<ResearchRunRecord | null>(null);
@@ -416,10 +418,10 @@ export function Research() {
         {error && <div className="rounded-lg border border-[var(--red)] bg-[var(--panel)] p-3 text-xs text-[var(--red)]">{error}</div>}
 
         {/* Orderflow-Arbeitsfläche auf AUFGENOMMENEN ATAS-Daten (technischer Test; Reuse ECharts-Komponenten) */}
-        <ResearchWorkspace />
+        <ResearchWorkspace onOpenInReplay={setReplayFocus} />
 
         {/* Tick-Replay: 5-Minuten-Kerzen bauen sich aus ALLEN echten Trades einer Session auf (read-only, /api/tickreplay) */}
-        <TickReplayPanel />
+        <TickReplayPanel focus={replayFocus} onClearFocus={() => setReplayFocus(null)} />
 
         {/* Konfiguration — einklappbar; bei der Analyse standardmäßig geschlossen (ändert kein geladenes Ergebnis) */}
         <button

@@ -17,13 +17,37 @@ export interface ReplaySlot {
   status: CandleStatus | null;
 }
 
+/** Marker eines Journal-Trades – der Aufrufer uebergibt NUR bereits eingetretene Ereignisse. */
+export interface ReplayMarker {
+  kind: "signal" | "entry" | "exit";
+  slot: number;
+  price: number;
+  side: string;
+  label: string;
+}
+
 interface Props {
   slots: ReplaySlot[];
   currentSlot: number | null;
   lastPrice: number | null;
   follow: boolean;
   height?: number;
+  markers?: ReplayMarker[];
 }
+
+const markerPoint = (k: ReplayMarker) => {
+  const long = k.side === "Long";
+  const style = k.kind === "signal"
+    ? { symbol: "diamond", symbolSize: 13, color: RUN, labelPos: "left" }
+    : k.kind === "entry"
+      ? { symbol: "triangle", symbolSize: 13, color: long ? UP : DOWN, labelPos: long ? "bottom" : "top", rotate: long ? 0 : 180 }
+      : { symbol: "rect", symbolSize: 10, color: "#7fc4b4", labelPos: "right" };
+  return {
+    name: k.kind, coord: [k.slot, k.price], value: k.label, symbol: style.symbol, symbolSize: style.symbolSize,
+    symbolRotate: (style as any).rotate ?? 0, itemStyle: { color: style.color, borderColor: "#0a0a0a", borderWidth: 1 },
+    label: { show: true, position: style.labelPos, formatter: k.label, color: style.color, fontSize: 10, fontFamily: "var(--mono)" },
+  };
+};
 
 const statusText: Record<CandleStatus, string> = {
   abgeschlossen: "abgeschlossen",
@@ -31,7 +55,7 @@ const statusText: Record<CandleStatus, string> = {
   "rand-unvollstaendig": "Randkerze – Intervall nur teilweise im Aufnahmefenster",
 };
 
-export function TickReplayChart({ slots, currentSlot, lastPrice, follow, height = 440 }: Props) {
+export function TickReplayChart({ slots, currentSlot, lastPrice, follow, height = 440, markers = [] }: Props) {
   const el = useRef<HTMLDivElement | null>(null);
   const chart = useRef<echarts.ECharts | null>(null);
   const zoom = useRef<{ start: number; end: number } | null>(null);
@@ -132,6 +156,8 @@ export function TickReplayChart({ slots, currentSlot, lastPrice, follow, height 
             label: { position: "end", color: "#0a0a0a", backgroundColor: LINE, padding: [2, 4], formatter: () => String(lastPrice) },
             data: [{ yAxis: lastPrice }],
           },
+          // Immer vollstaendig ersetzen (auch leer): Wechsel des Trades oder Zuruecksprung hinterlaesst keine alten Marker.
+          markPoint: { silent: true, animation: false, data: markers.map(markerPoint) },
         },
         { data: vols },
       ],
