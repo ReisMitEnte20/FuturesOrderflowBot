@@ -27,4 +27,47 @@ internal static partial class Program
             W($"      {f}  aktiv={IsMetaLocked(m)}  start='{ReadMetaField(m, "startWallUtc")}'  instrument='{ReadMetaField(m, "instrument")}'  daten={DataBytes(d)} B");
         }
     }
+
+    /// <summary>Reine Bewertung (getestet): Trades, die eine in Schritt 3 (Live-Modus) angelegte Instanz VOR dem Laden
+    /// geschrieben hat. Erlaubt: keine Trades, oder nur Trades mindestens 1 h NACH dem Fensterende (Live-Vorlauf; die
+    /// Bridge schliesst sie als solchen aus). Jeder Trade im/vor dem Replay-Bereich -> nicht verwendbar.</summary>
+    internal static (bool ok, string why) ClassifyPreload(IReadOnlyList<DateTime> tradeTimesUtc, DateTime windowEndUtc, bool truncated)
+    {
+        if (truncated) return (false, "Datenstrom zu gross fuer die Pruefung vor dem Laden -> nicht verwendbar");
+        if (tradeTimesUtc.Count == 0) return (true, "noch keine Trades");
+        var bad = tradeTimesUtc.Count(t => t < windowEndUtc.AddHours(1));
+        if (bad > 0) return (false, $"{bad} von {tradeTimesUtc.Count} Trades liegen im/vor dem Replay-Bereich (Marktzeit < Fensterende+1h) -> wuerde Daten mischen");
+        return (true, $"{tradeTimesUtc.Count} Live-Trades vor dem Laden (Marktzeit {tradeTimesUtc.Min():yyyy-MM-dd HH:mm}Z..{tradeTimesUtc.Max():HH:mm}Z, weit nach dem Fenster) - Bridge schliesst sie als Live-Vorlauf aus");
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex RxTradeTm = new(@"""dataType""\s*:\s*""Trade"".*?""tMarket""\s*:\s*""([^""]+)""|""tMarket""\s*:\s*""([^""]+)"".*?""dataType""\s*:\s*""Trade""",System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    internal static (bool ok, string why) PreloadTradesCheck(string dir, DateTime windowEndUtc)
+    {
+        var p = Path.Combine(dir, "ticks.ndjson");
+        var times = new List<DateTime>(); bool truncated = false;
+        try
+        {
+            if (File.Exists(p))
+            {
+                if (new FileInfo(p).Length > 50_000_000) truncated = true;
+                else
+                {
+                    using var fs = new FileStream(p, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                    using var sr = new StreamReader(fs);
+                    string? line;
+                    while ((line = sr.ReadLine()) != null)
+                    {
+                        var m = RxTradeTm.Match(line);
+                        if (!m.Success) continue;
+                        var v = m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value;
+                        if (DateTime.TryParse(v, System.Globalization.CultureInfo.InvariantCulture,
+                                System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out var t)) times.Add(t);
+                    }
+                }
+            }
+        }
+        catch (Exception ex) { return (false, $"ticks.ndjson nicht lesbar ({ex.Message})"); }
+        return ClassifyPreload(times, windowEndUtc, truncated);
+    }
 }

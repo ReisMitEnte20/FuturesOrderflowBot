@@ -194,7 +194,11 @@ internal static partial class Program
             rows.Add(new AddedRow(i++, r, ut, ot, it));
         }
         var state = ClassifyList(header, rows.Count, rows.All(r => r.Identity.Length > 0));
-        if (state != ListRead.Unreadable || !ocr || lr.IsEmpty) return (rows, header, state, "UIA");
+        // 1.3.8 (lokal belegt): UIA kann Zeilen OHNE Bildschirmposition liefern (Rechteck leer/int.MinValue). Dann ist die
+        // Zeile nicht sicher anfahrbar -> wie bei unlesbarer Liste auf die Texterkennung der Liste wechseln.
+        bool positioned = rows.All(r => !r.Rect.IsEmpty && r.Rect.Width > 10 && r.Rect.Height > 5 && r.Rect.X > -10000 && r.Rect.Y > -10000);
+        if (!positioned && rows.Count > 0) W($"  [rm] UIA-Zeile(n) ohne Bildschirmposition -> Texterkennung der Liste.");
+        if ((state != ListRead.Unreadable && positioned) || !ocr || lr.IsEmpty) return (rows, header, state, "UIA");
 
         // (b) Texterkennung der ganzen Liste (frischer Screenshot): Zeilen = Textzeilen.
         try

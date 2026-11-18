@@ -1245,6 +1245,21 @@ internal static partial class Program
             File.WriteAllText(Path.Combine(d0, "dom.ndjson"), "{\"dataType\":\"Depth\"}\n");
             Check("Laden: Instanz mit Echtzeitdaten (beliebiger Strom) -> NICHT leer (keine Mischung)", DataBytes(d0) > 0);
             Check("Laden: fehlender Ordner -> 0 ohne Ausnahme", DataBytes(Path.Combine(baseDir, "gibtsnicht")) == 0);
+            // 1.3.8: Instanz aus Schritt 3 am Folgetag (VM 18.11.: Laden + Play bereit, keine neue Instanz)
+            var we = new DateTime(2026, 10, 27, 13, 32, 0, DateTimeKind.Utc);
+            Check("Laden: Instanz aus Schritt 3 ohne Trades -> verwendbar", ClassifyPreload(Array.Empty<DateTime>(), we, false).ok);
+            Check("Laden: nur Live-Trades (heute, weit nach dem Fenster) -> verwendbar (Bridge schliesst Live-Vorlauf aus)",
+                  ClassifyPreload(new[] { new DateTime(2026, 11, 18, 15, 36, 31, DateTimeKind.Utc), new DateTime(2026, 11, 18, 15, 36, 40, DateTimeKind.Utc) }, we, false).ok);
+            Check("Laden: ein Trade im Replay-Bereich vor dem Laden -> NICHT verwendbar",
+                  !ClassifyPreload(new[] { new DateTime(2026, 11, 18, 15, 36, 31, DateTimeKind.Utc), new DateTime(2026, 10, 27, 13, 31, 0, DateTimeKind.Utc) }, we, false).ok);
+            Check("Laden: Datenstrom zu gross fuer die Pruefung -> NICHT verwendbar", !ClassifyPreload(Array.Empty<DateTime>(), we, true).ok);
+            var dl = Path.Combine(baseDir, "inst_live"); Directory.CreateDirectory(dl);
+            File.WriteAllText(Path.Combine(dl, "ticks.ndjson"),
+                "{\"seq\":1,\"tMarket\":\"2026-11-18T15:36:31.0000000Z\",\"tRecv\":\"2026-11-18T15:36:31.1Z\",\"dataType\":\"Trade\",\"price\":27000}\n" +
+                "{\"seq\":2,\"tMarket\":\"2026-11-18T15:36:32.0000000Z\",\"dataType\":\"BestBid\",\"price\":26999}\n");
+            var pl = PreloadTradesCheck(dl, we);
+            Check("Laden: Datei mit 1 Live-Trade + 1 Nicht-Trade -> 1 Live-Trade erkannt, verwendbar", pl.ok && pl.why.StartsWith("1 Live-Trades"), pl.why);
+            Directory.Delete(dl, true);
             Directory.Delete(d0, true);
         }
         Check("Stop: Titel 'Module laden' = Ladezustand, 'Historienwiedergabe' = spielt",
@@ -1823,7 +1838,7 @@ internal static partial class Program
         var dlg = IndicatorDialog();
         if (dlg == null) { W("[add] BLOCKER: Dialog 'IndicatorsSettingsView' nicht im UIA-Baum."); return false; }
         var st0 = AddedState(dlg);
-        if (st0.hasRecorder) { W($"[add] Recorder bereits unter 'Hinzugefügt' (count={st0.count}) -> kein doppeltes Hinzufuegen."); return true; }
+        if (st0.hasRecorder) { W($"[add] Recorder bereits unter 'Hinzugefügt' (count={st0.count}) -> kein doppeltes Hinzufuegen."); CancelDialog(dlg, W); return true; }
         // Einfach: Suchleiste -> 'replay' -> exakter Treffer -> Doppelklick -> Uebernehmen (kein Kategoriewechsel).
         SetSearchText(dlg, "replay", W);
         AutomationElement? hit = null;
@@ -2160,7 +2175,8 @@ internal static partial class Program
         bool? speedVerified = null;
         bool recorderAddedByJob = false;  // dieser Auftrag hat einen Recorder angehaengt -> bei fruehem Abbruch wieder entfernen
         HashSet<string> preJobFolders = new();
-        bool provisionalAttr = false;     // Instanz nicht beim Laden neu erzeugt -> bestehende (leere) Instanz dieses Auftrags uebernommen
+        bool provisionalAttr = false;
+        string? jobAddedFolder = null;    // in Schritt 3 von DIESEM Auftrag angelegte Instanz     // Instanz nicht beim Laden neu erzeugt -> bestehende (leere) Instanz dieses Auftrags uebernommen
         // GETRENNTE Teilergebnisse (Erfolg nur, wenn ALLE erforderlichen erfuellt sind):
         bool endProven = false;          // unabhaengiges, verdrahtetes Replay-ENDSIGNAL erreicht? (sonst Unproven)
         bool dataWindowRecorded = false; // Daten-KORROBORATION: Fortschritt bis Ende waehrend Abspielen (KEIN Endbeweis)
@@ -2208,6 +2224,8 @@ internal static partial class Program
                 if (!added) throw new AbortRun(6, $"BLOCKER: Recorder-Hinzufuegen nicht per Dateisystem bestaetigt (kein neuer gesperrter Ordner unter '{RecordingsDir}'). " +
                     "Der Recorder schreibt nicht in den erwarteten Ordner oder ist beim Start abgebrochen.");
                 W("[3] Recorder hinzugefuegt + aktiv (neuer gesperrter Ordner).");
+                var addedLocked = FolderSet().Except(before).Where(f => IsMetaLocked(Path.Combine(RecordingsDir, f, "meta.json"))).ToList();
+                if (addedLocked.Count == 1) jobAddedFolder = addedLocked[0];
                 // Tatsaechlichen Schreibpfad belegen: neuer Ordner liegt unter RecordingsDir; der Recorder nennt zusaetzlich
                 // seine Quelle in meta.json (ab proto-2c). Aeltere DLLs schreiben diese Felder nicht.
                 foreach (var nf in FolderSet().Except(before))
@@ -2333,10 +2351,19 @@ internal static partial class Program
             // 1.3.5 (VM-Befund 17.11.: ATAS meldete 'Initialized', aber KEINE neue Recorder-Instanz -> die Probe wartete bis zu
             // 450 s ohne jede Ausgabe und kam nie zu Play). Jetzt: Statuszeile alle 10 s; Ladeende aus dem ATAS-Protokoll DIESES
             // Ladevorgangs; danach begrenzte Nachfrist, belegte Ersatzwege, sonst sofortiger Abbruch mit Diagnose.
-            var swLoad = Stopwatch.StartNew(); long loadedAtMs = -1; bool sawInit = false, chartToggleTried = false;
+            // 1.3.8 (VM-Befund 18.11., Folgetag 27.10.): Laden + Play bereit, aber keine NEUE Instanz; die Probe sendete wegen
+            // 'Indikatoren aktiv' Strg+Alt+R (danach Disconnected, Play nicht mehr bereit) und wartete bis zum Ladelimit.
+            // Jetzt: KEIN Kuerzel in Phase 7. 'Indikatoren aktiv' ist nach dem Laden kein Beleg fuer "nicht in Replay" (am 26.10.
+            // stand dort 'NEIN (Indikatoren aktiv)' und der Tag lief durch); UIA-Zeitgrenze = "unbekannt". Nach dem Laden:
+            // neue Instanz -> wie bisher; sonst die in Schritt 3 angelegte Instanz, wenn eindeutig + aktiv + ohne Trades im
+            // Replay-Bereich; sonst nach Nachfrist mit konkretem Grund abbrechen (Aufraeumen im finally). Play nicht bereit
+            // nach dem Laden -> begrenzt warten, dann Abbruch statt Ladelimit.
+            var swLoad = Stopwatch.StartNew(); long loadedAtMs = -1; bool sawInit = false, readdTried = false;
             long lastBeatMs = -10_000;
             List<string> JobLocked() => FolderSet().Except(preJobFolders).Where(f => IsMetaLocked(Path.Combine(RecordingsDir, f, "meta.json"))
                 && ReadMetaField(Path.Combine(RecordingsDir, f, "meta.json"), "instrument").Contains("MNQ", StringComparison.OrdinalIgnoreCase)).ToList();
+            string IndState() => Bounded<bool?>("Indikatoren aktiv?", () => IndicatorsEnabled(), 3000, null, W) switch
+            { true => "aktiv", false => "inaktiv", null => "unbekannt (UIA-Zeitgrenze)" };
             while (swLoad.ElapsedMilliseconds < loadTimeout * 1000L && !ready)
             {
                 Thread.Sleep(1000); cands = NewLocked();
@@ -2348,58 +2375,79 @@ internal static partial class Program
                     { loadedAtMs = swLoad.ElapsedMilliseconds; W($"    [t+{loadedAtMs / 1000}s] ATAS: Laden abgeschlossen (Initialized)."); }
                     if (nl.Contains("Replay") && nl.Contains("Initialized -> Started"))
                         W($"    [t+{swLoad.ElapsedMilliseconds / 1000}s] HINWEIS: Wiedergabe wurde gestartet, OHNE dass die Steuerung Play gedrueckt hat (manuell?): {ShortLog(nl)}");
+                    if (nl.Contains("Replay") && nl.Contains("Disconnected"))
+                        W($"    [t+{swLoad.ElapsedMilliseconds / 1000}s] ATAS: {ShortLog(nl)}");
                 }
                 string lg = LatestReplayState();
                 if (lg != lastLog) { lastLog = lg; W($"    [t+{swLoad.ElapsedMilliseconds / 1000}s] neueInstanz={cands.Count} | {lg}"); }
                 bool playReady = visualMode ? OcrReadyToPlay(vt!.BarY, out _) : Bounded("PlayButton bereit?", () => IsEnabledSafe(FindIdAny("PlayButton")), 4000, false, W);
                 if (cands.Count >= 1 && playReady && swLoad.ElapsedMilliseconds >= 3000) { ready = true; break; }
 
-                // Statuszeile alle 10 s (nie mehr stumm warten)
                 if (swLoad.ElapsedMilliseconds - lastBeatMs >= 10_000)
                 {
                     lastBeatMs = swLoad.ElapsedMilliseconds;
-                    bool indOn = Bounded("Indikatoren aktiv?", IndicatorsEnabled, 3000, false, W);
-                    var beat = $"neueInstanz={cands.Count} Play bereit={playReady} geladen={(loadedAtMs >= 0 ? "ja" : "nein")} Chart in Replay-Ansicht={(indOn ? "NEIN (Indikatoren aktiv)" : "ja")}";
-                    W($"    [t+{swLoad.ElapsedMilliseconds / 1000}s] warte: {beat}");
+                    W($"    [t+{swLoad.ElapsedMilliseconds / 1000}s] warte: neueInstanz={cands.Count} Play bereit={playReady} geladen={(loadedAtMs >= 0 ? "ja" : "nein")} Indikatoren={IndState()}");
                 }
-                if (loadedAtMs < 0 || !playReady) continue;
+                if (loadedAtMs < 0) continue;
                 long sinceLoaded = swLoad.ElapsedMilliseconds - loadedAtMs;
-                if (sinceLoaded < 15_000) continue;   // normal: neue Instanz entsteht mit 'Initialized' (lokal belegt), Nachfrist 15 s
-
-                // Ersatzweg 1: Chart folgt dem Replay nicht (Indikatoren weiter aktiv = Chart NICHT in der Replay-Ansicht).
-                // Dann bekommt der Recorder nie Replay-Daten. Einmal das ATAS-Kuerzel 'DisableEnableMarketReplay' senden
-                // (Zustand frisch gelesen, danach unabhaengig verifiziert: Indikatoren inaktiv + neue Instanz).
-                if (!chartToggleTried && Bounded("Indikatoren aktiv?", IndicatorsEnabled, 3000, false, W))
+                if (sinceLoaded < 15_000) continue;   // normal: neue Instanz entsteht mit 'Initialized'; Nachfrist 15 s
+                if (!playReady)
                 {
-                    chartToggleTried = true;
-                    W("[7] Chart ist NICHT in der Replay-Ansicht (Indikatoren aktiv) obwohl ATAS geladen hat -> einmal Kuerzel 'DisableEnableMarketReplay' (Chart auf Replay).");
-                    bool sent = SendAtasHotkey("DisableEnableMarketReplay", W);
-                    W($"[7] Kuerzel gesendet={sent}; pruefe bis 25 s auf Replay-Ansicht + neue Instanz …");
-                    for (int k = 0; k < 25 && cands.Count == 0; k++) { Thread.Sleep(1000); cands = NewLocked(); }
-                    bool indAfter = Bounded("Indikatoren aktiv?", IndicatorsEnabled, 3000, false, W);
-                    W($"[7] nach Kuerzel: neueInstanz={cands.Count} Chart in Replay-Ansicht={(!indAfter ? "ja" : "NEIN")}");
-                    loadedAtMs = swLoad.ElapsedMilliseconds - 15_000;   // eine weitere Runde Nachfrist erlauben
-                    continue;
+                    if (sinceLoaded < 45_000) continue;
+                    CaptureLoadState(W, logBaseIdx, cands); ListJobFolders(W, preJobFolders);
+                    throw new AbortRun(6, $"BLOCKER: ATAS hat geladen, aber Play ist {sinceLoaded / 1000} s danach nicht bereit (letzter Zustand: {lg}). Kein Play.");
                 }
-                // Ersatzweg 2: Chart IST in der Replay-Ansicht, ATAS hat die beim Hinzufuegen erzeugte Instanz aber behalten.
-                // Nur uebernehmen, wenn genau EINE aktive (gesperrte) MNQ-Instanz dieses Auftrags existiert und sie noch
-                // KEINE Daten enthaelt (sonst wuerden Echtzeitdaten vor die Replay-Daten gemischt -> Bridge schneidet ab).
+
+                // Instanz aus Schritt 3 dieses Auftrags pruefen (ATAS hat beim Laden keine neue angelegt).
                 var jl = JobLocked();
-                if (jl.Count == 1 && LockedCount() == 1)
+                string why;
+                if (jl.Count != 1) why = $"{jl.Count} aktive MNQ-Instanzen dieses Auftrags ({string.Join(",", jl)})";
+                else if (LockedCount() != 1) why = $"insgesamt {LockedCount()} aktive Instanzen (nicht eindeutig)";
+                else if (jobAddedFolder == null) why = $"Instanz {jl[0]} nicht in Schritt 3 von diesem Auftrag angelegt";
+                else if (jl[0] != jobAddedFolder) why = $"aktive Instanz {jl[0]} ist nicht die in Schritt 3 angelegte {jobAddedFolder}";
+                else
                 {
-                    long bytes = DataBytes(Path.Combine(RecordingsDir, jl[0]));
-                    if (bytes == 0)
+                    var pre = PreloadTradesCheck(Path.Combine(RecordingsDir, jl[0]), eUtc);
+                    if (pre.ok)
                     {
                         cands = jl; provisionalAttr = true; ready = true;
-                        W($"[7] Keine neue Instanz beim Laden; ATAS hat die Instanz dieses Auftrags behalten: {jl[0]} (aktiv, einzige, noch ohne Daten) -> uebernommen (vorlaeufig; Pruefung nach Play).");
+                        W($"[7] Keine neue Instanz beim Laden; Instanz aus Schritt 3 {jl[0]}: aktiv, einzige, von diesem Auftrag; {pre.why} -> uebernommen (Pruefung nach Play).");
                         break;
                     }
-                    W($"[7] Instanz dieses Auftrags {jl[0]} enthaelt bereits {bytes} B Daten (vor dem Replay, z. B. Echtzeit) -> NICHT uebernehmen (wuerde Daten mischen).");
+                    why = $"Instanz aus Schritt 3 {jl[0]}: {pre.why}";
+                }
+                // Lokal belegt (18.11., Folgetag): ATAS stellt beim Laden einen Chart-Stand von VOR Schritt 3 wieder her
+                // ('Reload: keeping previously captured chart state ...'); der angehaengte Recorder faellt dabei vom Chart.
+                // Dann EINMAL nach dem Laden (Replay am Startpunkt, vor Play) ueber den bewaehrten Dialog anhaengen. Der
+                // Dialog fuegt nichts hinzu, wenn der Recorder noch in der Liste steht (kein Doppel). Uebernommen wird nur
+                // genau EINE danach neu entstandene, aktive MNQ-Instanz ohne Trades im Replay-Bereich.
+                if (!readdTried && jl.Count == 0 && LockedCount() == 0)
+                {
+                    readdTried = true;
+                    W($"[7] Keine aktive Recorder-Instanz nach dem Laden ({why}) -> Recorder jetzt (nach dem Laden, vor Play) EINMAL erneut anhaengen.");
+                    var beforeRe = FolderSet();
+                    bool addOk = AddRecorderViaDialog(W);
+                    List<string> reNew = new();
+                    for (var swR = Stopwatch.StartNew(); addOk && swR.ElapsedMilliseconds < 15000 && reNew.Count == 0; Thread.Sleep(300))
+                        reNew = FolderSet().Except(beforeRe).Where(f => IsMetaLocked(Path.Combine(RecordingsDir, f, "meta.json"))
+                            && ReadMetaField(Path.Combine(RecordingsDir, f, "meta.json"), "instrument").Contains("MNQ", StringComparison.OrdinalIgnoreCase)).ToList();
+                    if (reNew.Count == 1 && LockedCount() == 1)
+                    {
+                        var preRe = PreloadTradesCheck(Path.Combine(RecordingsDir, reNew[0]), eUtc);
+                        if (preRe.ok)
+                        {
+                            cands = reNew; jobAddedFolder = reNew[0]; ready = true;
+                            W($"[7] Nach dem Laden erneut angehaengt: neue Instanz {reNew[0]} (aktiv, einzige; {preRe.why}) -> zugeordnet.");
+                            break;
+                        }
+                        why = $"erneut angehaengte Instanz {reNew[0]}: {preRe.why}";
+                    }
+                    else why = addOk ? $"erneutes Anhaengen ergab {reNew.Count} neue aktive Instanz(en), insgesamt aktiv {LockedCount()}" : "erneutes Anhaengen ueber den Dialog fehlgeschlagen";
                 }
                 CaptureLoadState(W, logBaseIdx, cands);
                 ListJobFolders(W, preJobFolders);
-                throw new AbortRun(6, $"BLOCKER: ATAS hat geladen, aber nach {sinceLoaded / 1000} s keine verwertbare Recorder-Instanz " +
-                    $"(neu={cands.Count}, aktive Instanzen dieses Auftrags={jl.Count}). Kein Play ohne zugeordnete Aufnahme. Diagnose siehe [7-DIAG].");
+                throw new AbortRun(6, $"BLOCKER: ATAS hat geladen und Play ist bereit, aber nach {sinceLoaded / 1000} s keine eindeutige Recorder-Instanz: {why}. " +
+                    "Kein Play ohne zugeordnete Aufnahme; Recorder wird entfernt.");
             }
             if (!ready) { cands = NewLocked(); CaptureLoadState(W, logBaseIdx, cands); ListJobFolders(W, preJobFolders); }   // genauen Zustand sichern (keine Spekulation)
             if (cands.Count == 0) throw new AbortRun(6, $"BLOCKER: keine neue Recorder-Instanz nach LOAD ({swLoad.ElapsedMilliseconds / 1000} s; geladen={(loadedAtMs >= 0 ? "ja" : "nein")}).");
@@ -2543,9 +2591,12 @@ internal static partial class Program
                     lastStreams = DateTime.UtcNow;
                     var st = FolderStreams(dir);
                     DateTime? mp = null;
+                    // 1.3.8: Marktzeiten >= Fensterende+1h sind Live-Vorlauf einer in Schritt 3 (Live-Modus) angehaengten
+                    // Instanz, keine Replay-Daten -> zaehlen weder als Fortschritt noch als Fensterende.
+                    bool Replayish(DateTime t) => t.ToUniversalTime() < eUtc.AddHours(1);
                     foreach (var k in new[] { "dom.ndjson", "bbo.ndjson", "cumtrades.ndjson", "ticks.ndjson" })
-                        if (st.TryGetValue(k, out var v) && v.LastMt is { } lm && (mp == null || lm > mp)) mp = lm;
-                    if (st.TryGetValue("ticks.ndjson", out var tv0) && tv0.FirstMt is { } fm0) firstMt ??= fm0.ToUniversalTime();
+                        if (st.TryGetValue(k, out var v) && v.LastMt is { } lm && Replayish(lm) && (mp == null || lm > mp)) mp = lm;
+                    if (st.TryGetValue("ticks.ndjson", out var tv0) && tv0.LastMt is { } lm0 && Replayish(lm0)) firstMt ??= lm0.ToUniversalTime();
                     if (mp != null && lastMt != null && mp == lastMt) stallMs += Math.Min(since, 5000); else stallMs = 0;
                     if (mp != null) { lastMt = mp; if (maxMp == null || mp.Value > maxMp.Value) maxMp = mp; }
                     exec.DataReachedEnd = maxMp != null && maxMp.Value.ToUniversalTime() >= eUtc.AddSeconds(-2);
@@ -2625,7 +2676,13 @@ internal static partial class Program
                 removal = RemoveRecorderFromChart(W, writerWaitSec: Math.Max(15, windowSec / 60));
             }
             else W("  [11] Entfernen uebersprungen: Indikator-Dialog ist waehrend/kurz nach Replay-Ansicht gesperrt (Replay-Ansicht nicht verlassen).");
-            recorderRemoved = removal == RemovalOutcome.Removed && LockedCount() == 0;
+            // 1.3.8 (lokal belegt): Beim Wechsel zurueck zur Echtzeit stellt ATAS u. U. einen Chart-Stand ohne Recorder wieder
+            // her ('keeping previously captured chart state'). Steht dann KEIN Recorder mehr in der Chart-Liste, ist keine
+            // Instanz mehr aktiv und ist die zugeordnete Instanz entsperrt (Writer beendet), ist das Ziel erreicht.
+            bool attrClosed = attrFolder != null && !IsMetaLocked(Path.Combine(RecordingsDir, attrFolder, "meta.json"));
+            if (removal == RemovalOutcome.NoRecorder && LockedCount() == 0 && attrClosed)
+                W("[11] Recorder stand nicht mehr in der Chart-Liste (von ATAS beim Wechsel zur Echtzeit entfernt); keine aktive Instanz, zugeordnete Instanz geschlossen -> kein Recorder aktiv (bestaetigt).");
+            recorderRemoved = (removal == RemovalOutcome.Removed || (removal == RemovalOutcome.NoRecorder && attrClosed)) && LockedCount() == 0;
         }
         catch (AbortRun ab) { W(ab.Message); rc = ab.Code; }
         catch (Exception ex) { W($"BLOCKER: Exception {ex.GetType().Name}: {ex.Message}"); rc = 2; }

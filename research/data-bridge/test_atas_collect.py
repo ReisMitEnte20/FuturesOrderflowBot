@@ -329,3 +329,25 @@ def test_rewind_before_window_end_is_not_published_as_complete(tmp_path):
     coll = tmp_path / "coll"
     res = c.append_job(coll, rec, "job-r", START, END, session="Custom", year=2026)
     assert res["result"] != "committed"
+
+
+def test_live_prefix_before_replay_is_excluded_not_a_rewind(tmp_path):
+    """VM 18.11. (Folgetag): Instanz im Live-Modus angehaengt -> Live-Trades (heute) VOR den Replay-Trades.
+    Kein Ruecksprung, nicht exportiert, gezaehlt; der Replay-Durchlauf wird vollstaendig uebernommen."""
+    live = [_line(i + 1, f"2026-11-18T15:36:{s:02d}.000Z", 27000.0, 1, "Buy") for i, s in enumerate([31, 40, 55])]
+    replay = [_line(10 + i, f"2026-10-26T08:00:{s:02d}.000Z", 100.0 + i * 0.25, 1, "Sell") for i, s in enumerate([0, 10, 30, 59])]
+    rec = _make_recording(tmp_path / "rec", live + replay)
+    rows, stats, _ = c.read_window_trades(rec, START, END)
+    assert [r["t_market_utc"][17:19] for r in rows] == ["00", "10", "30", "59"]
+    assert stats["liveTicksBeforeReplay"] == 3
+    assert not stats["loopBoundary"]["detected"]
+    assert stats["status"] == "complete"
+
+
+def test_live_trades_after_replay_start_are_not_prefix(tmp_path):
+    """Nur der DATEIANFANG zaehlt als Live-Vorlauf; spaetere ferne Trades sind normale Rest-Ticks (kein Verschlucken)."""
+    replay = [_line(1 + i, f"2026-10-26T08:00:{s:02d}.000Z", 100.0, 1, "Buy") for i, s in enumerate([0, 30, 59])]
+    later = [_line(20, "2026-11-18T15:40:00.000Z", 27000.0, 1, "Buy")]
+    rec = _make_recording(tmp_path / "rec", replay + later)
+    rows, stats, _ = c.read_window_trades(rec, START, END)
+    assert len(rows) == 3 and stats["liveTicksBeforeReplay"] == 0 and stats["restTicksAfter"] == 1

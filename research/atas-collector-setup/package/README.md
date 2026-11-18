@@ -1,4 +1,4 @@
-# ATAS Session Collector 1.3.7 – All-in-one-Paket (Vorabversion)
+# ATAS Session Collector 1.3.8 – All-in-one-Paket (Vorabversion)
 
 Zeichnet ATAS-Replay-Trades lokal auf (Research/Simulation-only: keine Orders, keine Broker-Anbindung, keine
 Kontoänderungen). Das Paket enthält alles außer ATAS selbst.
@@ -31,6 +31,36 @@ Recorder hinzufügen → Zeitraum laden → Ladebereich prüfen → abspielen �
 sofort stoppen → Recorder entfernen → Writer-Abschluss prüfen → Daten prüfen und an die gemeinsame CSV anhängen →
 nächster Tag. Ein nicht vollständig abgeschlossener Tag stoppt den Lauf; abgeschlossene Tage bleiben erhalten,
 „Fortsetzen“ überspringt sie.
+
+## Was in 1.3.8 geändert ist (Laden am Folgetag)
+
+VM-Befund 18.11.2026 (1.3.7): Der 26.10. lief vollständig durch. Am 27.10. waren Laden und Play bereit, es entstand aber
+keine Recorder-Instanz. Die Steuerung sendete wegen „Indikatoren aktiv“ Strg+Alt+R und wartete danach bis zum Ladelimit.
+
+Lokal nachgestellt und im ATAS-Protokoll belegt: Nach dem Wechsel zurück zur Echtzeit meldet ATAS
+`Reload: keeping previously captured chart state instead of snapshotting the cleared chart`. Beim nächsten Laden stellt
+ATAS dann einen Chart-Stand von **vor** dem Anhängen des Recorders wieder her; der Recorder fällt vom Chart.
+
+- **Kein Tastenkürzel mehr in Phase 7.** „Indikatoren aktiv“ ist nach dem Laden kein Beleg gegen die Replay-Ansicht;
+  eine UIA-Zeitüberschreitung wird als „unbekannt“ protokolliert.
+- **Recorder nach dem Laden erneut anhängen:** Ist nach dem Laden keine Recorder-Instanz aktiv, hängt die Steuerung den
+  Recorder **einmal** nach dem Laden (Replay am Startpunkt, vor Play) über den bekannten Dialog an. Steht er noch in der
+  Liste, wird nichts doppelt hinzugefügt. Übernommen wird nur genau eine danach neu entstandene, aktive Instanz ohne
+  Trades im Replay-Bereich. Sonst klarer Abbruch mit Grund; der Recorder wird entfernt.
+- Verwendet ATAS die in Schritt 3 angelegte Instanz weiter, wird sie nur übernommen, wenn sie die einzige aktive ist und
+  höchstens Live-Trades enthält. Die Bridge zählt Live-Trades am Dateianfang (`liveTicksBeforeReplay`), exportiert sie
+  nicht und wertet sie nicht als Loop-Rücksprung; Phase 9 wertet sie weder als Fortschritt noch als Fensterende.
+- **X der Leiste:** Liegt das schwebende Leistenfenster hinter dem Hauptfenster, wird es nach vorn geholt. Findet UIA
+  keine Schließen-Schaltfläche, wird das rechteste Symbol im Leistenfenster genommen, nur mit Tooltip „Schließen“ und
+  Fenster-Treffertest unmittelbar vor dem Klick.
+- **Recorder entfernen:** UIA-Zeilen ohne Bildschirmposition führen zur Texterkennung der Liste statt zum Abbruch. Hat ATAS
+  den Recorder beim Wechsel zur Echtzeit schon selbst vom Chart genommen (Liste leer, keine aktive Instanz, Writer
+  beendet), gilt das als bestätigt „kein Recorder aktiv“.
+- Ist Play 45 s nach dem Laden nicht bereit, bricht die Steuerung ab, statt bis zum Ladelimit zu warten.
+
+Lokal geprüft (ATAS 8.0.15, Vulkan): zwei Handelstage am Stück (26.–27.10.2026, 14:30–14:32 Berlin, 100×) ohne Eingriff,
+28.203 und 26.956 MNQ-Trades, nur im jeweiligen UTC-Fenster, keine Doppelten, danach kein Recorder aktiv; „Fortsetzen“
+überspringt beide Tage, CSV unverändert. Auf der VM noch nicht geprüft.
 
 ## Was in 1.3.7 geändert ist (Ablauf nach dem Replay-Ende)
 

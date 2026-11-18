@@ -64,10 +64,26 @@ internal static partial class Program
 
     private static bool BelongsTo(IntPtr bar, IntPtr hit) => hit != IntPtr.Zero && (hit == bar || IsChild(bar, hit));
 
-    private sealed record CloseTarget(int X, int Y, string How, AutomationElement? El, IntPtr BarHwnd);
+    private sealed record CloseTarget(int X, int Y, string How, AutomationElement? El, IntPtr BarHwnd) { public bool Visual { get; init; } }
+
+    private static readonly Regex RxCloseTip = new(@"(?i)(schlie(ß|ss)en|close)", RegexOptions.Compiled);
+
+    /// <summary>Tooltip nahe am Zeiger: UIA, sonst Texterkennung des Bereichs unter dem Zeiger (Tooltip wird gezeichnet).</summary>
+    private static string ReadTooltipNear(int x, int y)
+    {
+        var tip = Bounded("Tooltip lesen", () => CurrentToolTip(), 1500, null) ?? "";
+        if (tip != "") return tip;
+        try
+        {
+            var r = new System.Windows.Rect(Math.Max(0, x - 200), y + 4, 420, 60);
+            using var bmp = CaptureRect(r);
+            return string.Join(" ", ScreenOcr.Recognize(bmp, (int)r.X, (int)r.Y).Select(w => w.Text));
+        }
+        catch { return ""; }
+    }
 
     /// <summary>X der Leiste frisch ermitteln. Nur Elemente im Leistencontainer (Hoehe <= 200 px), nie Chart/Hauptfenster.</summary>
-    private static CloseTarget? FindBarClose(Action<string> W, FloatWin? fw)
+    private static CloseTarget? FindBarClose(Action<string> W, FloatWin? fw, bool allowHover = true)
     {
         // Container: schwebend = eigenes Fenster der Leiste; angedockt = kleinster Vorfahr der Transport-Schaltflaechen.
         AutomationElement? container = null; string cdesc = "";
@@ -132,6 +148,32 @@ internal static partial class Program
                 return new CloseTarget(cx, cy, $"Win32-Schliessen-Feld (HTCLOSE) des Leistenfensters, {found.Count} Punkte", null, fw.Hwnd);
             }
             W("[x] Kein Schliessen-Feld per Win32-Treffertest am Leistenfenster.");
+
+            // c) Custom gezeichnete Leiste (lokal belegt, 1.3.8): das X ist das RECHTESTE Symbol im eigenen Leistenfenster,
+            //    Tooltip 'Schließen'. Nur wenn die Leiste sichtbar vorn liegt (Fenster unter ihrer Mitte = Leistenfenster).
+            var mid = WindowFromPoint(new Point((int)(r.X + r.Width / 2), (int)(r.Y + r.Height / 2)));
+            if (!BelongsTo(fw.Hwnd, mid)) { W($"[x] Leiste verdeckt (unter ihrer Mitte liegt 0x{mid.ToInt64():X} '{ClassOf(mid)}') -> keine Symbolsuche."); return null; }
+            List<(int cx, int cy, int w)> blobs;
+            try
+            {
+                using var bmp = CaptureRect(r);
+                List<(int x0, int x1)> spans;
+                try { spans = ScreenOcr.Recognize(bmp, 0, 0).Select(o => (o.X, o.X + o.W)).ToList(); } catch { spans = new(); }
+                blobs = FindIconBlobs(bmp, spans);
+            }
+            catch (Exception ex) { W($"[x] Symbolsuche fehlgeschlagen: {ex.Message}"); return null; }
+            var right = blobs.Where(b => b.cx >= r.Width * 0.85).OrderByDescending(b => b.cx).ToList();
+            W($"[x] Symbolsuche im Leistenfenster: {blobs.Count} Symbole, im rechten Rand {right.Count}" +
+              (right.Count > 0 ? $"; rechtestes @({(int)r.X + right[0].cx},{(int)r.Y + right[0].cy}) Breite {right[0].w}" : ""));
+            if (right.Count == 0) return null;
+            int sx = (int)r.X + right[0].cx, sy = (int)r.Y + right[0].cy;
+            if (!allowHover)
+                return new CloseTarget(sx, sy, "rechtestes Symbol der Leiste (Tooltip-Pruefung nur im Lauf)", null, fw.Hwnd) { Visual = true };
+            SetCursorPos(sx, sy); Thread.Sleep(1300);
+            var tip = ReadTooltipNear(sx, sy);
+            W($"[x] Tooltip am rechtesten Symbol: '{Trunc(tip, 60)}'");
+            if (!RxCloseTip.IsMatch(tip)) { W("[x] Tooltip ist nicht 'Schließen' -> kein Ziel."); return null; }
+            return new CloseTarget(sx, sy, "rechtestes Symbol der Leiste mit Tooltip 'Schließen'", null, fw.Hwnd) { Visual = true };
         }
         return null;
     }
@@ -150,6 +192,13 @@ internal static partial class Program
             bool same = Automation.Compare(at, t.El) || Ancestors(at, 4).Any(a => Automation.Compare(a, t.El));
             return same ? (true, $"UIA: unter dem Zeiger liegt die Schliessen-Schaltflaeche (Fenster 0x{hw.ToInt64():X})")
                         : (false, $"UIA: unter dem Zeiger liegt '{Safe(() => at.Current.Name)}' ({Safe(() => at.Current.ClassName)}), nicht das Schliessen-Symbol");
+        }
+        if (t.Visual)
+        {
+            if (!moveCursor) return (true, $"Fenster am Ziel 0x{hw.ToInt64():X} = Leiste (Tooltip-Pruefung erst im Lauf)");
+            var tip = ReadTooltipNear(t.X, t.Y);
+            return RxCloseTip.IsMatch(tip) ? (true, $"unter dem Zeiger: Leistenfenster 0x{hw.ToInt64():X}, Tooltip '{Trunc(tip, 40)}'")
+                                           : (false, $"Tooltip unter dem Zeiger ist '{Trunc(tip, 40)}', nicht 'Schließen'");
         }
         int ht = NcHit(t.BarHwnd, t.X, t.Y);
         return ht == HTCLOSE ? (true, $"Win32: HTCLOSE am Zeiger, Fenster 0x{hw.ToInt64():X} = Leiste") : (false, $"Win32: Treffertest am Zeiger = {ht}, nicht HTCLOSE");
@@ -264,8 +313,9 @@ internal static partial class Program
         W($"# ATAS X-Diagnose (nur lesen, kein Klick)  {DateTime.Now:yyyy-MM-dd HH:mm:ss}  Probe {ProgramVersion()}");
         if (Process.GetProcessesByName("OFT.Platform").Length == 0) { W("ATAS laeuft nicht."); return 3; }
         var fw = ReplayFloatWin32();
+        if (fw != null) { ForceForegroundHwnd(fw.Hwnd); Thread.Sleep(300); }   // nur nach vorn holen (kein Klick, keine Mausbewegung)
         W($"Leiste schwebend (Win32): {(fw != null ? $"'{fw.Title}' hwnd=0x{fw.Hwnd.ToInt64():X} rect={(int)fw.Rect.X},{(int)fw.Rect.Y},{(int)fw.Rect.Width}x{(int)fw.Rect.Height} Vordergrund={GetForegroundWindow() == fw.Hwnd}" : "nein")}");
-        var t = FindBarClose(W, fw);
+        var t = FindBarClose(W, fw, allowHover: false);
         if (t == null) { W("ERGEBNIS: X der Leiste NICHT eindeutig gefunden - im Lauf wuerde NICHT geklickt."); }
         else
         {
