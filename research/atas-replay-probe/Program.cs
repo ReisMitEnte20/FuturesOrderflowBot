@@ -63,6 +63,8 @@ internal static partial class Program
                 "allctrls" => AllCtrls(args.FirstOrDefault(a => a.EndsWith(".txt"))),
                 "replayrect" => ReplayRect(args.FirstOrDefault(a => a.EndsWith(".png"))),
                 "setdate" => SetDate(args),
+            "datediag" => DateDiag(args),
+            "xblob" => XBlob(args),
                 "series" => Series(args.FirstOrDefault(a => a.EndsWith(".txt"))),
                 "autorun" => AutoRun(args.FirstOrDefault(a => a.EndsWith(".txt"))),
                 "liveproof" => LiveProof(args.FirstOrDefault(a => a.EndsWith(".txt"))),
@@ -1390,6 +1392,33 @@ internal static partial class Program
             using (var g = System.Drawing.Graphics.FromImage(empty)) { g.Clear(System.Drawing.Color.FromArgb(37, 37, 38)); g.FillRectangle(System.Drawing.Brushes.White, 10, 6, 180, 10); }
             Check("Symbolsuche: ohne Symbole -> keine Kandidaten (kein Blindklick)", FindIconBlobs(empty, new List<(int, int)> { (10, 190) }).Count == 0);
         }
+        {
+            // 1.3.9 (Befund 18.11.): Leiste waehrend 'Module laden…' – Fortschrittsbalken UNTER der Symbolzeile ueber die ganze Breite.
+            using var bar = new System.Drawing.Bitmap(760, 70);
+            using (var g = System.Drawing.Graphics.FromImage(bar))
+            {
+                g.Clear(System.Drawing.Color.FromArgb(37, 37, 38));
+                g.FillRectangle(System.Drawing.Brushes.White, 40, 14, 120, 12);       // 'Datum auswählen'
+                g.FillRectangle(System.Drawing.Brushes.White, 300, 14, 30, 12);       // '100x'
+                foreach (int x in new[] { 420, 480, 540, 600, 650 }) g.FillRectangle(System.Drawing.Brushes.LightGray, x, 13, 14, 14); // Transport/Zahnrad/Hilfe
+                g.FillRectangle(System.Drawing.Brushes.LightGray, 700, 13, 14, 14);   // X (rechtestes Symbol der Zeile)
+                g.FillRectangle(System.Drawing.Brushes.DodgerBlue, 10, 44, 745, 6);   // Fortschrittsbalken 'Module laden…'
+            }
+            var words = new List<OcrWord>
+            {
+                new() { Text = "Datum auswählen", X = 40, Y = 14, W = 120, H = 12 },
+                new() { Text = "100x", X = 300, Y = 14, W = 30, H = 12 },
+                new() { Text = "Module laden...", X = 330, Y = 44, W = 90, H = 6 },
+                new() { Text = "x", X = 699, Y = 13, W = 16, H = 14 },   // echtes Bild: das X selbst wird als Buchstabe erkannt
+            };
+            var spans = words.Where(o => o.Text != "x").Select(o => (o.X, o.X + o.W)).ToList();
+            var old = FindIconBlobs(bar, spans).Where(b => b.cx >= bar.Width * 0.85).ToList();
+            Check("X-Suche alt: Fortschrittsbalken verschmilzt mit dem X (Befund nachgestellt)", !old.Any(b => Math.Abs(b.cx - 707) <= 3 && Math.Abs(b.cy - 20) <= 3), string.Join(",", old.Select(b => $"{b.cx}/{b.cy}")));
+            var neu = BarCloseCandidates(bar, words, out var d1);
+            Check("X-Suche: nur Symbolzeile -> rechtestes Symbol ist das X", neu.Count > 0 && Math.Abs(neu[0].cx - 707) <= 3 && Math.Abs(neu[0].cy - 20) <= 3, d1 + " " + string.Join(",", neu.Select(b => $"{b.cx}/{b.cy}")));
+            var noRow = BarCloseCandidates(bar, words.Where(o => o.Text.Contains("laden")).ToList(), out var d2);
+            Check("X-Suche: 'Module laden' bestimmt NICHT die Zeile", d2.Contains("ganze Hoehe"), d2);
+        }
 
         // ---- Zielchart-Erkennung (VM-Befund 'VulkanChartWpf-Treffer=0'): reine Auswahlfunktion ----
         ChartCand Cc(string name, string cls = "", string aid = "", string type = "Pane", double x = 100, double y = 100, double w = 900, double h = 600, bool off = false, bool min = false)
@@ -2323,16 +2352,16 @@ internal static partial class Program
                 Invoke(datumBtn); for (int i = 0; i < 8 && FindIdAny("StartEdit") == null; i++) Thread.Sleep(600);
                 if (FindIdAny("StartEdit") == null) throw new AbortRun(5, "BLOCKER: Datum-Dialog oeffnet nicht.");
             }
-            bool okE = false, okS = false;
-            for (int a = 0; a < 3 && !(okE && okS); a++)
+            // 1.3.9: Eingabe ohne Leeren, Reihenfolge Start:=Zieltag 00:00 -> Ende -> Start (siehe SetDialogRange in
+            // DateEntry.cs; Befund 18.11.: Ende blieb nach 'Strg+A/Entf' + Mitschieben auf 05.11. 00:00 stehen).
+            SetDialogRange(dStart, dEnd, W, trace: false);
             {
-                TypeIntoField(FindIdAny("EndEdit"), dEnd); TypeIntoField(FindIdAny("StartEdit"), dStart);
                 string gs = ValueOf(FindIdAny("StartEdit")), ge = ValueOf(FindIdAny("EndEdit"));
-                okS = gs.StartsWith(dStart.Substring(0, 16), StringComparison.Ordinal);
-                okE = ge.StartsWith(dEnd.Substring(0, 16), StringComparison.Ordinal);
+                bool okS = gs.StartsWith(dStart.Substring(0, 16), StringComparison.Ordinal);
+                bool okE = ge.StartsWith(dEnd.Substring(0, 16), StringComparison.Ordinal);
                 W($"[6] Zeitraum zurueckgelesen: Start='{gs}' Ende='{ge}' (okS={okS} okE={okE})");
+                if (!(okS && okE)) throw new AbortRun(5, "BLOCKER: Zeitraum nicht verlaesslich setzbar/zurueckgelesen.");
             }
-            if (!(okS && okE)) throw new AbortRun(5, "BLOCKER: Zeitraum nicht verlaesslich setzbar/zurueckgelesen.");
             // ---- Phase 7: LOAD + Instanz-Zuordnung (genau ein neuer gesperrter Ordner) ----
             var beforeLoad = FolderSet(); DateTime loadClick = DateTime.UtcNow.AddSeconds(-5);
             var sel = FindBtnAny("Auswählen"); if (sel == null) throw new AbortRun(5, "BLOCKER: 'Auswählen' nicht gefunden.");
@@ -3479,7 +3508,7 @@ internal static partial class Program
 
     // Maskiertes Datetime-Feld (dd.MM.yyyy HH:mm:ss): fokussieren -> in Feldmitte klicken -> Home ->
     // NUR Ziffern tippen (die Maske setzt '.'/':'/Leer selbst) -> Tab (Commit). Keine Trennzeichen, kein Strg+A.
-    private static bool TypeIntoField(AutomationElement? el, string value)
+    private static bool TypeIntoField(AutomationElement? el, string value, Action<string>? step = null, bool clear = true)
     {
         if (el == null) return false;
         // Editierbare Maske ist 'dd.MM.yyyy HH:mm' = 12 Ziffern (KEINE Sekunden). Nur diese tippen (Sekunden-00 wuerden ueberlaufen).
@@ -3490,23 +3519,26 @@ internal static partial class Program
             ForceForeground(el); Thread.Sleep(120); // ATAS-Dialog sicher nach vorne (sonst trifft der Klick ein ueberlappendes Fenster)
             System.Windows.Rect r; try { r = el.Current.BoundingRectangle; } catch { return false; }
             if (r.IsEmpty) return false;
-            ClickScreen((int)(r.X + r.Width / 2), (int)(r.Y + r.Height / 2)); Thread.Sleep(280);
-            KeyVk(0x41, ctrl: true);   // Strg+A (alles markieren -> Ersetzmodus)
-            Thread.Sleep(90);
-            KeyVk(0x2E);               // Entf (Feld leeren -> Maske rebaut sauber)
-            Thread.Sleep(90);
+            ClickScreen((int)(r.X + r.Width / 2), (int)(r.Y + r.Height / 2)); Thread.Sleep(280); step?.Invoke("Klick");
+            if (clear)
+            {
+                KeyVk(0x41, ctrl: true);   // Strg+A (alles markieren -> Ersetzmodus)
+                Thread.Sleep(90); step?.Invoke("Strg+A");
+                KeyVk(0x2E);               // Entf (Feld leeren -> Maske rebaut sauber)
+                Thread.Sleep(90); step?.Invoke("Entf");
+            }
             KeyVk(0x24);               // Home -> an Maskenanfang
-            Thread.Sleep(120);
+            Thread.Sleep(120); step?.Invoke("Pos1");
             // In 2er-Gruppen tippen (dd|MM|yyyy|HH|mm|ss) mit Pause an Trenner-Uebergaengen -> Maske verschluckt keine Ziffer.
             int[] grp = { 2, 2, 4, 2, 2 }; int idx = 0;   // dd|MM|yyyy|HH|mm (12 Ziffern)
             foreach (var g in grp)
             {
-                for (int k = 0; k < g && idx < digits.Length; k++, idx++) { SendUnicode(digits[idx]); Thread.Sleep(90); }
+                for (int k = 0; k < g && idx < digits.Length; k++, idx++) { SendUnicode(digits[idx]); Thread.Sleep(90); step?.Invoke($"Ziffer {idx + 1} '{digits[idx]}'"); }
                 Thread.Sleep(220); // Trenner-Uebergang settlen lassen
             }
             Thread.Sleep(220);
             PressTab();                // Commit/Validierung
-            Thread.Sleep(220);
+            Thread.Sleep(220); step?.Invoke("Tab (Feld verlassen)");
             return true;
         }
         catch { return false; }

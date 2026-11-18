@@ -82,6 +82,55 @@ internal static partial class Program
         catch { return ""; }
     }
 
+    // Beschriftungen der Symbolzeile (Start-Modus-Auswahl, Geschwindigkeit). NICHT 'Module laden…' – das steht im
+    // Fortschrittsbalken UNTER der Symbolzeile.
+    private static readonly Regex RxBarRowLabel = new(@"(?i)(ausw(ä|a)hlen|^\d{1,4}\s?x$)", RegexOptions.Compiled);
+
+    /// <summary>1.3.9 (Befund 18.11., Ende nach 'Module laden…'): Kandidaten fuer das X nur in der SYMBOLZEILE der Leiste.
+    /// Die Zeile wird aus den OCR-Beschriftungen ('… auswählen', '100x') bestimmt; der Fortschrittsbalken darunter
+    /// verschmolz sonst spaltenweise mit allen Symbolen, und sein rechtes Ende galt als 'rechtestes Symbol'.
+    /// Ohne erkennbare Zeile: bisheriges Verfahren ueber die ganze Hoehe (die Tooltip-Pruefung entscheidet weiterhin).
+    /// Rein (Bild + OCR-Woerter rein, Kandidaten raus) -> im Regressionstest pruefbar.</summary>
+    internal static List<(int cx, int cy, int w)> BarCloseCandidates(System.Drawing.Bitmap bar, IReadOnlyList<OcrWord> words, out string diag)
+    {
+        // Einzelzeichen-Treffer sind Symbole, kein Text (echtes Bild 18.11.: das X wurde als 'x', '?' als 'o' erkannt und
+        // seine Spalten sonst als Text ausgeblendet).
+        var spans = words.Where(o => o.Text.Trim().Length >= 2).Select(o => (o.X, o.X + o.W)).ToList();
+        var labels = words.Where(o => RxBarRowLabel.IsMatch(o.Text.Trim()) && !o.Text.Contains("laden", StringComparison.OrdinalIgnoreCase)).ToList();
+        List<(int cx, int cy, int w)> blobs; string where;
+        if (labels.Count > 0)
+        {
+            var cys = labels.Select(o => o.Y + o.H / 2).OrderBy(v => v).ToList();
+            int rowCy = cys[cys.Count / 2];
+            int half = Math.Max(10, labels.Max(o => o.H));
+            int y0 = Math.Max(0, rowCy - half), y1 = Math.Min(bar.Height, rowCy + half + 1);
+            using var band = bar.Clone(new System.Drawing.Rectangle(0, y0, bar.Width, Math.Max(1, y1 - y0)), bar.PixelFormat);
+            blobs = FindIconBlobs(band, spans).Select(b => (b.cx, b.cy + y0, b.w)).ToList();
+            where = $"Symbolzeile y{y0}–{y1} (aus {labels.Count} Beschriftung(en))";
+        }
+        else { blobs = FindIconBlobs(bar, spans); where = "ganze Hoehe (keine Zeilenbeschriftung erkannt)"; }
+        var right = blobs.Where(b => b.cx >= bar.Width * 0.85).OrderByDescending(b => b.cx).ToList();
+        diag = $"{blobs.Count} Symbole in {where}, im rechten Rand {right.Count}";
+        return right;
+    }
+
+    /// <summary>Offline-Diagnose (kein ATAS, kein Klick): X-Kandidaten in einem gespeicherten Bild, Ausschnitt x y w h.
+    ///   xblob &lt;bild.png&gt; x y w h</summary>
+    internal static int XBlob(string[] args)
+    {
+        if (args.Length < 6) { Console.WriteLine("xblob <bild.png> x y w h"); return 2; }
+        using var img = new System.Drawing.Bitmap(args[1]);
+        var rc = new System.Drawing.Rectangle(int.Parse(args[2]), int.Parse(args[3]), int.Parse(args[4]), int.Parse(args[5]));
+        using var bar = img.Clone(rc, img.PixelFormat);
+        var words = ScreenOcr.Recognize(bar, 0, 0);
+        Console.WriteLine("OCR: " + string.Join(" | ", words.Select(o => $"'{o.Text}'@{o.X},{o.Y} {o.W}x{o.H}")));
+        var old = FindIconBlobs(bar, words.Select(o => (o.X, o.X + o.W)).ToList()).Where(b => b.cx >= bar.Width * 0.85).OrderByDescending(b => b.cx).ToList();
+        Console.WriteLine($"alt (ganze Hoehe): rechtestes {(old.Count > 0 ? $"@({rc.X + old[0].cx},{rc.Y + old[0].cy}) Breite {old[0].w}" : "keins")}");
+        var neu = BarCloseCandidates(bar, words, out var d);
+        Console.WriteLine($"neu: {d}; rechtestes {(neu.Count > 0 ? $"@({rc.X + neu[0].cx},{rc.Y + neu[0].cy}) Breite {neu[0].w}" : "keins")}");
+        return 0;
+    }
+
     /// <summary>X der Leiste frisch ermitteln. Nur Elemente im Leistencontainer (Hoehe <= 200 px), nie Chart/Hauptfenster.</summary>
     private static CloseTarget? FindBarClose(Action<string> W, FloatWin? fw, bool allowHover = true)
     {
@@ -153,18 +202,17 @@ internal static partial class Program
             //    Tooltip 'Schließen'. Nur wenn die Leiste sichtbar vorn liegt (Fenster unter ihrer Mitte = Leistenfenster).
             var mid = WindowFromPoint(new Point((int)(r.X + r.Width / 2), (int)(r.Y + r.Height / 2)));
             if (!BelongsTo(fw.Hwnd, mid)) { W($"[x] Leiste verdeckt (unter ihrer Mitte liegt 0x{mid.ToInt64():X} '{ClassOf(mid)}') -> keine Symbolsuche."); return null; }
-            List<(int cx, int cy, int w)> blobs;
+            List<(int cx, int cy, int w)> right;
             try
             {
                 using var bmp = CaptureRect(r);
-                List<(int x0, int x1)> spans;
-                try { spans = ScreenOcr.Recognize(bmp, 0, 0).Select(o => (o.X, o.X + o.W)).ToList(); } catch { spans = new(); }
-                blobs = FindIconBlobs(bmp, spans);
+                List<OcrWord> words;
+                try { words = ScreenOcr.Recognize(bmp, 0, 0); } catch { words = new(); }
+                right = BarCloseCandidates(bmp, words, out var diag);
+                W($"[x] Symbolsuche im Leistenfenster: {diag}" +
+                  (right.Count > 0 ? $"; rechtestes @({(int)r.X + right[0].cx},{(int)r.Y + right[0].cy}) Breite {right[0].w}" : ""));
             }
             catch (Exception ex) { W($"[x] Symbolsuche fehlgeschlagen: {ex.Message}"); return null; }
-            var right = blobs.Where(b => b.cx >= r.Width * 0.85).OrderByDescending(b => b.cx).ToList();
-            W($"[x] Symbolsuche im Leistenfenster: {blobs.Count} Symbole, im rechten Rand {right.Count}" +
-              (right.Count > 0 ? $"; rechtestes @({(int)r.X + right[0].cx},{(int)r.Y + right[0].cy}) Breite {right[0].w}" : ""));
             if (right.Count == 0) return null;
             int sx = (int)r.X + right[0].cx, sy = (int)r.Y + right[0].cy;
             if (!allowHover)

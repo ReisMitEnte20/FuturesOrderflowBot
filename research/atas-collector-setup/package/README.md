@@ -1,4 +1,4 @@
-# ATAS Session Collector 1.3.8 – All-in-one-Paket (Vorabversion)
+# ATAS Session Collector 1.3.9 – All-in-one-Paket (Vorabversion)
 
 Zeichnet ATAS-Replay-Trades lokal auf (Research/Simulation-only: keine Orders, keine Broker-Anbindung, keine
 Kontoänderungen). Das Paket enthält alles außer ATAS selbst.
@@ -31,6 +31,27 @@ Recorder hinzufügen → Zeitraum laden → Ladebereich prüfen → abspielen �
 sofort stoppen → Recorder entfernen → Writer-Abschluss prüfen → Daten prüfen und an die gemeinsame CSV anhängen →
 nächster Tag. Ein nicht vollständig abgeschlossener Tag stoppt den Lauf; abgeschlossene Tage bleiben erhalten,
 „Fortsetzen“ überspringt sie.
+
+## Was in 1.3.9 geändert ist (Datum über Monatsgrenzen, X am Replay-Ende)
+
+Lokaler Befund 18.11.2026 (1.3.8, Lauf 05.01.–17.11.2026): Für den 05.01. stand der Start richtig auf 05.01.2026
+15:30, das Ende dreimal auf 05.11.2026 00:00; der Lauf brach vor dem Laden ab (keine Daten gespeichert).
+
+- **Datumsdialog (Phase 6):** Am echten Dialog protokolliert: ATAS übernimmt jeden Abschnitt (Tag, Monat, Jahr, Stunde,
+  Minute) sofort und hält Start < Ende ein, indem es das andere Feld mitschiebt. Ein per Strg+A/Entf geleertes Feld wird
+  nach zwei Ziffern mit „Tag.aktueller Monat.Jahr 00:00“ vorbelegt – dadurch schob der Start das bereits richtige Ende
+  auf den 05.11. Jetzt: Felder nicht mehr leeren, sondern überschreiben; Reihenfolge Start := Zieltag 00:00 → Ende →
+  Start. Nach jedem Schreibvorgang werden beide Felder protokolliert, die Rückleseprüfung bleibt. Am echten Dialog
+  geprüft: 11.11. → 05.11., November → 05.01., 05.01. → 06.01., 06.01. → 17.11., 17.11. → 02.01. (jeweils 15:30–18:00).
+- **X der Replay-Leiste am Ende:** Während „Module laden…“ liegt ein Fortschrittsbalken unter den Symbolen; die
+  Bildsuche hielt sein rechtes Ende für das X (kein Tooltip → kein Klick), ATAS spielte den Tag danach erneut ab. Die
+  Suche gilt jetzt nur der Symbolzeile (aus den Beschriftungen „… auswählen“/„100x“), einzelne OCR-Buchstaben (das X
+  wird als „x“ gelesen) gelten nicht mehr als Text. Tooltip „Schließen“ und Prüfung unter dem Zeiger bleiben.
+
+**Testumfang:** lokal mit echtem ATAS ein Tageslauf 05.01.2026 (NewYork 09:30–12:00 ET, 100×) über die Probe bestanden:
+Ladebereich laut ATAS 14:30–17:00 UTC, X einmal geklickt, Replay verlassen, 485.894 MNQ-Trades, 0 außerhalb des
+Fensters, danach 0 aktive Recorder. Die neue X-Bildsuche am Fehler-Screenshot offline geprüft (im Live-Lauf bot ATAS
+das X per UIA an). **Mehrtägiger Lauf über die Oberfläche und Windows-VM mit 1.3.9 noch ungeprüft.**
 
 ## Was in 1.3.8 geändert ist (Laden am Folgetag)
 
