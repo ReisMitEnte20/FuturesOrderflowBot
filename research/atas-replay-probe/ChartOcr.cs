@@ -50,7 +50,7 @@ internal static partial class Program
     /// <summary>Wort ist ein Instrumenttitel des Ziels (MNQ, MNQZ6, MNQZ26, MNQ-12-26 …), nicht nur ein Teilwort.</summary>
     internal static bool IsTargetToken(string word, string target)
     {
-        var w = (word ?? "").Trim().Trim('(', ')', '[', ']', ',', ';', ':', '.', '"', '\'');
+        var w = (word ?? "").Trim().Trim('(', ')', '[', ']', ',', ';', ':', '.', '"', '\'', '#', '•', '*');   // lokal gelesen: '#MNQZ6'
         return Regex.IsMatch(w, "^" + Regex.Escape(target) + @"([A-Z]\d{1,2}|[-_ ]?\d{1,2}([-_.]\d{2,4})?)?$", RegexOptions.IgnoreCase);
     }
 
@@ -313,10 +313,14 @@ internal static partial class Program
               $" | Flaeche oben: {string.Join(" ", words.Where(o => o.CY >= r.Y && o.Y < r.Y + Math.Min(140, r.Height / 4)).Take(20).Select(o => o.Text))}");
             foreach (var o in words.Where(o => IsTargetToken(o.Text, target)))
             {
-                var (belongs, hi) = o.CY >= r.Y ? HitInSurface(o.CX, o.CY, reg)
-                                               : inner.El != null ? HitInTitleBand(o.CX, o.CY, inner, anc) : (false, "UIA-Element der Flaeche fehlt");
+                bool inSurface = o.CY >= r.Y;
+                var (belongs, hi) = inSurface ? HitInSurface(o.CX, o.CY, reg)
+                                              : inner.El != null ? HitInTitleBand(o.CX, o.CY, inner, anc) : (false, "UIA-Element der Flaeche fehlt");
+                W($"    Titel-Treffer '{o.Text}' @{o.CX},{o.CY} ({(inSurface ? "in der Flaeche" : "Titelzeile")}): {hi}");
+                // Titelzeile ohne belegbares gemeinsames Panel: KEIN Beleg, aber auch kein Gegenbeweis (z. B. fehlen die
+                // WPF-Ebenen im UIA-Baum). In der Flaeche dagegen zeigt ein fremdes Fenster einen Widerspruch.
+                if (!inSurface && !belongs) { W("      -> nicht zuordenbar, zaehlt nicht (weder Beleg noch Widerspruch)"); continue; }
                 hits.Add(new OcrHit(o.Text, o.CX, o.CY, belongs, hi));
-                W($"    Titel-Treffer '{o.Text}' @{o.CX},{o.CY} ({(o.CY >= r.Y ? "in der Flaeche" : "Titelzeile")}): {hi}");
             }
         }
         var v = DecideChartFallback(regions.Count, rel, named, hits, logCharts, target);

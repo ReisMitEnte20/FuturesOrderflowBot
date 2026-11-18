@@ -1,4 +1,4 @@
-# ATAS Session Collector 1.3.6 – All-in-one-Paket (Vorabversion)
+# ATAS Session Collector 1.3.7 – All-in-one-Paket (Vorabversion)
 
 Zeichnet ATAS-Replay-Trades lokal auf (Research/Simulation-only: keine Orders, keine Broker-Anbindung, keine
 Kontoänderungen). Das Paket enthält alles außer ATAS selbst.
@@ -31,6 +31,28 @@ Recorder hinzufügen → Zeitraum laden → Ladebereich prüfen → abspielen �
 sofort stoppen → Recorder entfernen → Writer-Abschluss prüfen → Daten prüfen und an die gemeinsame CSV anhängen →
 nächster Tag. Ein nicht vollständig abgeschlossener Tag stoppt den Lauf; abgeschlossene Tage bleiben erhalten,
 „Fortsetzen“ überspringt sie.
+
+## Was in 1.3.7 geändert ist (Ablauf nach dem Replay-Ende)
+
+VM-Befund 18.11.2026 (1.3.6): Chart-Erkennung, Laden und Play liefen. Nach dem erkannten Ende sendete die Steuerung
+21-mal das Stopp-Kürzel. Nach dem **ersten** zeigte der Fenstertitel „Wiedergabe gestoppt“; die Bestätigung kannte aber
+nur Stopp-Zeilen der Replay-Quelle und wertete den Titel nicht. Der VM-Lauf selbst enthält keine ATAS-Logzeile zum Stopp.
+Aus separaten, lokalen ATAS-Logs ist bekannt, dass ATAS einen Stopp während des Ladens auch unter der Chart-Quelle
+protokolliert (`MNQ 5m Chart: Replay chart state: LoadingModules -> Stopped`); diese Zeilen werden jetzt mit ausgewertet.
+
+- **Höchstens ein Stopp-Kürzel**, nur wenn die Wiedergabe laut Fenstertitel noch läuft oder lädt. Die Wirkung wird über
+  den Titel („gestoppt“) und das Protokoll geprüft, auch über Zeilen der Chart-Quelle. Kein zweites Kürzel.
+- **Replay-Leiste schließen:** Die Leiste wird nach vorn geholt (eigenes Fenster, kein Klick in den Chart). Ihr X wird
+  frisch ermittelt (UIA-Schaltfläche der Leiste, sonst Windows-Treffertest am Leistenfenster) und genau einmal
+  geklickt. Unmittelbar davor wird geprüft, dass unter dem Mauszeiger dieses Schließen-Symbol liegt. Ist es verdeckt
+  oder unklar, wird nicht geklickt; es entsteht ein Diagnosebild.
+- **Wirkung prüfen:** Leiste weg, kein neuer Durchlauf, Chart wieder editierbar. Blendet das X nur die Leiste aus, steht
+  genau das im Protokoll; der Tag wird dann nicht angehängt und kein weiterer Tag gestartet.
+- Danach wie bisher: Recorder entfernen, „Übernehmen“, Writer prüfen, einmal an die gemeinsame CSV anhängen, nächster Tag.
+- **Neuer Befehl `xdiag`** (nur lesen): findet die Replay-Leiste und ihr X und zeigt das Ziel als Bild. Kein Klick,
+  keine Mausbewegung.
+- Chart-Erkennung: `#` vor dem Instrumenttitel wird beim Abgleich entfernt. Ein Titel in der Titelzeile, der keinem
+  Panel zuordenbar ist, zählt nicht mehr als Widerspruch.
 
 ## Was in 1.3.6 geändert ist (Chart-Erkennung in Phase 1)
 
@@ -130,7 +152,8 @@ Recorder-Metadaten der letzten Aufnahmen und die letzten Laufprotokolle. Konto-I
 maskiert; ATAS-Konfigurationsdateien werden nicht kopiert.
 
 Einzelbefehle: `chartdiag <datei>` (nur Chart-Erkennung), `rmrec <datei>` (nur den vorhandenen Recorder entfernen),
-`stoptest` (laufende Wiedergabe/Loop bestätigt beenden; Protokoll auf dem Desktop).
+`stoptest` (Ende-Ablauf mit dem X der Leiste an einer laufenden Wiedergabe testen; Protokoll auf dem Desktop),
+`xdiag` (nur lesen: Replay-Leiste und ihr X finden, Ziel als Bild).
 
 ## Deinstallieren
 

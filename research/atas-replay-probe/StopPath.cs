@@ -200,115 +200,9 @@ internal static partial class Program
     internal sealed record StopResult(bool Stopped, bool NoFurtherPass, string How, long Ms, List<string> StartLinesAfter) { public bool LeftReplayView { get; init; } }
 
 
-    /// <summary>
-    /// Zwei bestaetigte Schritte, beide begrenzt und protokolliert:
-    ///  A) Wiedergabe STOPPEN: ATAS-Kuerzel 'StopMarketReplay' (kein Umschalter; wirkt ohne Transportleiste). Bestaetigt nur,
-    ///     wenn das Protokoll danach '-> Stopped' bzw. 'to online state' zeigt UND waehrend observeSec kein neuer Durchlauf
-    ///     ('Playing from'/'Initialized -> Started') beginnt. Startet ATAS doch neu, wird erneut gestoppt (begrenzt).
-    ///  B) Replay-Ansicht VERLASSEN ('Zur Echtzeit'): UIA-Schaltflaeche, sonst per Tooltip bestaetigtes Symbol, sonst
-    ///     Kuerzel 'DisableEnableMarketReplay' nur bei frisch bestaetigtem Replay-Zustand. Bestaetigt durch 'to online state'
-    ///     im Protokoll oder wieder aktive 'Indikatoren'.
-    /// </summary>
-    internal static StopResult StopReplayConfirmed(Action<string> W, IncrementalAtasLog alog, bool visualMode, int deadlineSec = 60, int observeSec = 7)
-    {
-        var sw = Stopwatch.StartNew();
-        W($"[stop] Beginn {DateTime.Now:HH:mm:ss.fff}  Transport='{ReplayFloatWin32()?.Title ?? "(kein Fenster)"}'  Modus={(visualMode ? "visuell" : "UIA")}");
-        var all = new List<AtasLogLine>();
-        List<AtasLogLine> Pull() { var n = new List<AtasLogLine>(); foreach (var raw in alog.ReadNew()) { var l = AtasLogLine.Parse(raw); if (l != null) { n.Add(l); all.Add(l); } } return n; }
-        bool IsStopped(AtasLogLine l) => l.IsReplaySource && (Regex.IsMatch(l.Message, @"State changed \w+ -> Stopped") || l.Message.Contains("Playing historical data stopped"));
-        bool IsOnline(AtasLogLine l) => l.Message.Contains("to online state", StringComparison.OrdinalIgnoreCase);
-
-        // ---------- A) Stoppen ----------
-        string how = ""; int acts = 0, restarts = 0; bool stopped = false, online = false;
-        DateTime? actedAt = null; var lastAct = DateTime.MinValue;
-        while (sw.Elapsed.TotalSeconds < deadlineSec && !stopped)
-        {
-            foreach (var l in Pull())
-            {
-                if (actedAt == null || l.Ts < actedAt.Value) continue;
-                if (IsOnline(l)) { online = true; stopped = true; W($"[stop] ATAS: {l}"); }
-                else if (IsStopped(l)) { stopped = true; W($"[stop] ATAS: {l}"); }
-            }
-            if (stopped)
-            {
-                // Bestaetigung: in observeSec beginnt kein weiterer Durchlauf.
-                var obs = Stopwatch.StartNew(); AtasLogLine? restart = null;
-                while (obs.Elapsed.TotalSeconds < observeSec && restart == null) { restart = Pull().FirstOrDefault(IsPassStart); if (restart == null) Thread.Sleep(200); }
-                if (restart != null)
-                {
-                    restarts++; stopped = false; online = false; lastAct = DateTime.MinValue;
-                    W($"[stop] ATAS hat nach dem Stopp NEU gestartet ({restart}) -> erneut stoppen ({restarts}).");
-                    if (restarts >= 3) { W("[stop] dreimal neu gestartet - Abbruch des Stoppversuchs."); break; }
-                    continue;
-                }
-                W($"[stop] Wiedergabe gestoppt und {observeSec}s ohne weiteren Durchlauf (t+{sw.ElapsedMilliseconds} ms).");
-                break;
-            }
-            string title = ReplayFloatWin32()?.Title ?? "";
-            if ((DateTime.UtcNow - lastAct).TotalMilliseconds > 2500)
-            {
-                string attempt = "";
-                if (SendAtasHotkey("StopMarketReplay", W)) attempt = "ATAS-Kuerzel 'StopMarketReplay'";
-                else if (!visualMode)
-                {
-                    var b = Bounded("UIA 'Zur Echtzeit wechseln' suchen", () => FindBtnByHelpAny("Zur Echtzeit wechseln"), 3000, null, W);
-                    if (b != null && Bounded("UIA aktiv?", () => IsEnabledSafe(b), 1500, false, W) && Bounded("UIA Invoke", () => Invoke(b), 3000, false, W))
-                        attempt = "UIA-Invoke 'Zur Echtzeit wechseln'";
-                }
-                if (attempt != "")
-                {
-                    acts++; actedAt ??= DateTime.Now.AddMilliseconds(-500); lastAct = DateTime.UtcNow; how = attempt;
-                    W($"[stop] Aktion {acts} t+{sw.ElapsedMilliseconds} ms (Titel '{title}'): {attempt}");
-                }
-                else if (acts == 0 && sw.Elapsed.TotalSeconds > 5) { W("[stop] kein Stop-Weg verfuegbar (Kuerzel nicht belegt, kein UIA-Transport)."); break; }
-            }
-            Thread.Sleep(200);
-        }
-        if (!stopped)
-        {
-            W($"[stop] Stoppen NICHT bestaetigt nach {sw.ElapsedMilliseconds} ms ({acts} Aktion(en), Neustarts {restarts}). Titel '{ReplayFloatWin32()?.Title ?? "-"}'.");
-            FailShot(W, "stop");
-            return new StopResult(false, false, how, sw.ElapsedMilliseconds, all.Where(IsPassStart).Select(l => l.ToString()).ToList());
-        }
-
-        // ---------- B) Replay-Ansicht verlassen ----------
-        if (!online)
-        {
-            var swB = Stopwatch.StartNew(); bool toggled = false; var lastB = DateTime.MinValue;
-            while (swB.Elapsed.TotalSeconds < 45 && !online)
-            {
-                foreach (var l in Pull()) if (IsOnline(l)) { online = true; W($"[stop] ATAS: {l}"); }
-                if (online) break;
-                if (Bounded("Indikatoren aktiv?", IndicatorsEnabled, 3000, false, W)) { online = true; W("[stop] Chart wieder editierbar ('Indikatoren' aktiv)."); break; }
-                if ((DateTime.UtcNow - lastB).TotalMilliseconds < 3000) { Thread.Sleep(200); continue; }
-                lastB = DateTime.UtcNow;
-                string attempt = "";
-                var b = visualMode ? null : Bounded("UIA 'Zur Echtzeit wechseln' suchen", () => FindBtnByHelpAny("Zur Echtzeit wechseln"), 3000, null, W);
-                if (b != null && Bounded("UIA aktiv?", () => IsEnabledSafe(b), 1500, false, W) && Bounded("UIA Invoke", () => Invoke(b), 3000, false, W))
-                    attempt = "UIA-Invoke 'Zur Echtzeit wechseln'";
-                if (attempt == "")
-                {
-                    var fw = ReplayFloatWin32();
-                    if (fw != null && (_transportMap == null || _transportMap.Hwnd != fw.Hwnd || _transportMap.WinRect != fw.Rect))
-                        _transportMap = ScanTransportTooltips(W, 15000);
-                    var pt = _transportMap?.Find(RxToRealtime);
-                    if (fw != null && pt != null && _transportMap!.WinRect == fw.Rect)
-                    { ForceForegroundHwnd(fw.Hwnd); SetCursorPos(pt.Value.x, pt.Value.y); Thread.Sleep(150); ClickScreen(pt.Value.x, pt.Value.y); attempt = $"Klick auf per Tooltip bestaetigtes Symbol 'Zur Echtzeit' @({pt.Value.x},{pt.Value.y})"; }
-                }
-                if (attempt == "" && !toggled)
-                {
-                    // Umschalter nur bei frisch bestaetigtem Replay-Zustand (Indikatoren inaktiv) - genau einmal.
-                    toggled = true;
-                    if (SendAtasHotkey("DisableEnableMarketReplay", W)) attempt = "ATAS-Kuerzel 'DisableEnableMarketReplay' (Replay war bestaetigt aktiv)";
-                }
-                if (attempt != "") W($"[stop] Verlassen t+{sw.ElapsedMilliseconds} ms: {attempt}");
-                else if (toggled) { Thread.Sleep(500); }
-            }
-            if (!online) W($"[stop] Replay-Ansicht nach {swB.ElapsedMilliseconds} ms NICHT verlassen.");
-        }
-        W($"[stop] Ende {DateTime.Now:HH:mm:ss.fff} ({sw.ElapsedMilliseconds} ms): gestoppt=bestaetigt, Replay-Ansicht verlassen={online}");
-        return new StopResult(true, true, how, sw.ElapsedMilliseconds, new List<string>()) { LeftReplayView = online };
-    }
+    // 1.3.7: Der fruehere Stop-Pfad (StopReplayConfirmed: 'StopMarketReplay' alle 2,5 s bis zu 60 s) ist entfernt. VM-Befund
+    // 18.11.: nach dem ERSTEN Kuerzel zeigte der Titel 'gestoppt'; die Bestaetigung kannte nur Replay-Quellen -> 21 Kuerzel.
+    // Ersatz: CloseReplayBarConfirmed (ReplayBarClose.cs).
 
     private static void FailShot(Action<string> W, string tag)
     {
@@ -411,8 +305,8 @@ internal static partial class Program
 
         bool uiaTransport = Bounded("FindReplayTransport", () => FindReplayTransport(out _) != null, 5000, false, W);
         W($"[stoppen] Transport per UIA bedienbar: {uiaTransport}");
-        var res = StopReplayConfirmed(W, alog, visualMode: !uiaTransport, deadlineSec: 60, observeSec: 8);
-        bool editable = res.Stopped && (res.LeftReplayView || WaitChartEditable(W, 20));
+        var res = CloseReplayBarConfirmed(W, alog, visualMode: !uiaTransport);
+        bool editable = res.LeftReplayView;
         W($"\n===== ERGEBNIS Stoptest: gestoppt={res.Stopped} keinWeitererDurchlauf={res.NoFurtherPass} Chart editierbar={editable} Weg='{res.How}' Dauer={res.Ms} ms =====");
         W($"Protokoll: {outFile}");
         return res.Stopped && res.NoFurtherPass && editable ? 0 : 8;

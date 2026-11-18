@@ -38,6 +38,7 @@ internal static partial class Program
                 "chartdiag" => ChartDiag(args.Skip(1).FirstOrDefault(a => !a.StartsWith("-"))),
                 "diagpack" => DiagPack(args.Skip(1).FirstOrDefault(a => !a.StartsWith("-"))),
                 "stoptest" => StopTest(args.Skip(1).FirstOrDefault(a => !a.StartsWith("-"))),
+                "xdiag" => XDiag(args.Skip(1).FirstOrDefault(a => !a.StartsWith("-"))),
                 "drive" => Drive(args.Contains("--go"), args.FirstOrDefault(a => a.EndsWith(".txt"))),
                 "inspect2" => Inspect2(),
                 "inspect-date" => InspectDate(args.FirstOrDefault(a => a.EndsWith(".txt"))),
@@ -1213,6 +1214,28 @@ internal static partial class Program
             Check("Stop: Ausnahme im Aufruf -> Ersatzwert", Bounded<int>("Test Ausnahme", () => throw new InvalidOperationException("x"), 1000, -1) == -1);
             Check("Stop: normaler Aufruf liefert Wert", Bounded("Test ok", () => 42, 1000, 0) == 42);
         }
+        // ---- 1.3.7: Ende -> X der Replay-Leiste (VM 18.11.: 21 Stopp-Kuerzel, obwohl das erste wirkte) ----
+        {
+            AtasLogLine P(string s) => AtasLogLine.Parse(s)!;
+            Check("X: Stopp-Beleg von der CHART-Quelle ('Replay chart state: LoadingModules -> Stopped', Zeile aus lokalem ATAS-Log) wird erkannt",
+                  IsStopEvidence(P("2026-11-18 14:25:28,100 [2         ] INFO  MNQ 5m Chart   : Replay chart state: LoadingModules -> Stopped (connected=True, playContract=False)")));
+            Check("X: Stopp-Beleg der Replay-Quelle ('State changed Started -> Stopped') wird erkannt",
+                  IsStopEvidence(P("2026-11-18 14:25:28,100 [ReplayLoad] INFO  Replay         : State changed Started -> Stopped.")));
+            Check("X: andere Chart-/Replay-Zeilen sind KEIN Stopp-Beleg",
+                  !IsStopEvidence(P("2026-11-18 14:25:28,100 [2         ] INFO  MNQ 5m Chart   : Replay chart state: LoadingHistory -> LoadingModules (connected=True)"))
+                  && !IsStopEvidence(P("2026-11-18 14:25:28,100 [2         ] INFO  Replay         : State changed Stopped -> Initializing.")));
+            Check("X: Titel 'Replay - Wiedergabe gestoppt' = gestoppt; 'Module laden' / 'Historienwiedergabe' nicht",
+                  TitleStopped("Replay - Wiedergabe gestoppt") && !TitleStopped("Replay - Module laden...") && !TitleStopped("Replay - Historienwiedergabe..."));
+            Check("X: Schliessen-Schaltflaeche erkannt (Schließen / Close / PART_CloseButton / x), nicht 'Alle schließen' / 'Schließen und speichern'",
+                  IsCloseControl("Schließen", "", "") && IsCloseControl("Close", "", "") && IsCloseControl("", "PART_CloseButton", "") && IsCloseControl("x", "", "")
+                  && IsCloseControl("", "", "Schließen") && !IsCloseControl("Alle schließen", "", "") && !IsCloseControl("Schließen und speichern", "CloseAllButtonX", "")
+                  && !IsCloseControl("Zur Echtzeit wechseln", "", "") && !IsCloseControl("Play", "PlayButton", ""));
+            Check("X: Leiste weg + editierbar + kein Neustart -> Replay-Ansicht verlassen", JudgeAfterClose(true, true, 0, true).v == AfterCloseVerdict.Left);
+            Check("X: Leiste weg, Chart NICHT editierbar -> 'X blendet nur die Leiste aus' (gemeldet, kein Erfolg)", JudgeAfterClose(true, false, 0, true).v == AfterCloseVerdict.OnlyHidden);
+            Check("X: neuer Durchlauf nach dem X ohne Stopp -> Loop laeuft weiter (kein Erfolg)", JudgeAfterClose(true, true, 1, false).v == AfterCloseVerdict.LoopContinues);
+            Check("X: Durchlauf nach dem X, danach Stopp + editierbar -> verlassen", JudgeAfterClose(true, true, 1, true).v == AfterCloseVerdict.Left);
+            Check("X: Leiste nach dem X noch sichtbar -> kein Erfolg", JudgeAfterClose(false, true, 0, true).v == AfterCloseVerdict.BarStillVisible);
+        }
         // ---- 1.3.5: Instanz-Zuordnung nach dem Laden (VM 17.11.: keine neue Instanz -> stummes Warten) ----
         {
             var d0 = Path.Combine(baseDir, "inst_leer"); Directory.CreateDirectory(d0);
@@ -1372,7 +1395,7 @@ internal static partial class Program
         { var v = SelectChart(new[] { Cc("VulkanChartWpf", x: 100), Cc("VulkanChartWpf", x: 1100, min: true) }); Check("Chart: ein sichtbarer + ein minimierter Chart -> Unique (sichtbarer)", v.Kind == ChartVerdictKind.Unique && v.Chosen!.X == 100); }
         // ---- 1.3.6: Ersatzweg Instrumenttitel (VM 18.11.: keine ChartView, zwei namenlose WinForms-Flaechen gleicher Lage) ----
         Check("ChartOCR: Titelwoerter MNQ / MNQZ6 / MNQZ26 / MNQ-12-26 / (MNQ) erkannt",
-              new[] { "MNQ", "MNQZ6", "MNQZ26", "MNQ-12-26", "(MNQ)", "mnqz6," }.All(t => IsTargetToken(t, "MNQ")));
+              new[] { "MNQ", "MNQZ6", "MNQZ26", "MNQ-12-26", "(MNQ)", "mnqz6,", "#MNQZ6" }.All(t => IsTargetToken(t, "MNQ")));
         Check("ChartOCR: keine Teilwort-/Fremdtreffer (NQ, MNQX123, XMNQ, MNQUARTER)",
               !new[] { "NQ", "MNQX123", "XMNQ", "MNQUARTER", "MN0", "" }.Any(t => IsTargetToken(t, "MNQ")));
         {
@@ -2549,11 +2572,11 @@ internal static partial class Program
             var swStop = Stopwatch.StartNew();
             exec.MarkOurStop(DateTime.Now);
             W($"[9] Stopp-Grund: {stopCause}  -> Wiedergabe jetzt beenden ({DateTime.Now:HH:mm:ss.fff})");
-            // Stop-Pfad: begrenzt, jeder Schritt mit Zeit; Erfolg nur mit ATAS-Bestaetigung + kein weiterer Durchlauf.
-            var stopRes = StopReplayConfirmed(W, alog, visualMode);
-            replayViewLeft = stopRes.Stopped && (stopRes.LeftReplayView || WaitChartEditable(W, 30));
-            W($"[9] Wiedergabe beendet: bestaetigt={stopRes.Stopped} keinWeitererDurchlauf={stopRes.NoFurtherPass} Replay-Ansicht verlassen={replayViewLeft} nach {swStop.ElapsedMilliseconds} ms (Weg: {stopRes.How})");
-            if (!stopRes.Stopped) throw new AbortRun(9, "BLOCKER: Wiedergabe nach dem Ende NICHT bestaetigt gestoppt (siehe [stop]). Keine Veroeffentlichung; bitte in ATAS 'Zur Echtzeit wechseln'.");
+            // 1.3.7: Replay-Leiste nach vorn, ihr X genau einmal, Wirkung pruefen (kein Kuerzel-Serie; siehe ReplayBarClose.cs).
+            var stopRes = CloseReplayBarConfirmed(W, alog, visualMode);
+            replayViewLeft = stopRes.Stopped && stopRes.LeftReplayView;
+            W($"[9] Ende erkannt -> X der Leiste: Replay-Ansicht verlassen={replayViewLeft} keinNeustart={stopRes.NoFurtherPass} nach {swStop.ElapsedMilliseconds} ms (Weg: {stopRes.How})");
+            if (!stopRes.Stopped) throw new AbortRun(9, "BLOCKER: Replay-Ansicht nach dem Ende NICHT nachweislich verlassen (siehe [x]). Keine Veroeffentlichung, kein weiterer Tag.");
 
             // Entscheidung mit Belegen (Originalzeilen, Regel, Zuordnung zur eigenen Ausfuehrung)
             endProven = exec.State == ReplayEnd.NaturalEnd && !rangeMismatch;
@@ -2590,12 +2613,8 @@ internal static partial class Program
             W("[10] Replay-Transport verlassen");
             // ExitReplayView nutzt den Transport-Button 'Zur Echtzeit wechseln' (Transport muss OFFEN sein) und
             // verifiziert das Verlassen UNABHAENGIG daran, dass der chart-gebundene 'Indikatoren'-Button wieder aktiv wird.
-            if (!replayViewLeft)
-            {
-                var r10 = StopReplayConfirmed(W, alog, visualMode, deadlineSec: 45, observeSec: 5);
-                replayViewLeft = r10.Stopped && (r10.LeftReplayView || WaitChartEditable(W, 30));
-            }
-            else W("[10] Replay-Ansicht bereits verlassen (bestaetigt in [9]).");
+            // 1.3.7: kein zweiter Stopp-Versuch hier (frueher erneute Kuerzel-Serie); [9] ist die einzige Stelle.
+            W($"[10] Replay-Ansicht verlassen (bestaetigt in [9]): {replayViewLeft}");
             // ---- Phase 11: Recorder am Zielchart entfernen + Uebernehmen (finalisiert die zugeordnete Instanz) ----
             W("[11] Recorder am Zielchart entfernen");
             RemovalOutcome removal = RemovalOutcome.Failed;

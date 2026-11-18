@@ -216,7 +216,14 @@ internal static partial class Program
         var v = SelectChart(scan.Candidates);
         W($"ERGEBNIS UIA (Kontrollansicht): {v.Kind}  ({v.Reason}){(v.Chosen != null ? " -> " + Describe(v.Chosen) : "")}");
         bool ok = v.Kind == ChartVerdictKind.Unique;
-        if (!ok && v.Kind == ChartVerdictKind.NoneFound && scan.Roots > 0)
+        // Nur zum Testen des Ersatzwegs an einem ATAS, dessen UIA den Chart liefert: Ergebnis wird angezeigt, aendert
+        // die UIA-Entscheidung nicht. Phase 1 der Aufnahme kennt diesen Schalter nicht.
+        if (scan.Roots > 0 && Environment.GetEnvironmentVariable("ATAS_CHARTDIAG_FORCE_FALLBACK") == "1")
+        {
+            var t = ResolveChartFallback(W, outFile != null ? Path.GetDirectoryName(Path.GetFullPath(outFile)) : null);
+            W($"ERGEBNIS Ersatzweg (erzwungen, nur Test): {(t.ok ? "EINDEUTIG" : "NICHT eindeutig")} - {t.desc}");
+        }
+        else if (!ok && v.Kind == ChartVerdictKind.NoneFound && scan.Roots > 0)
         {
             string? dir = outFile != null ? Path.GetDirectoryName(Path.GetFullPath(outFile)) : Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
             var alt = ResolveChartFallback(W, dir);
