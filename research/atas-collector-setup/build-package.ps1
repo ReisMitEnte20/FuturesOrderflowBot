@@ -13,7 +13,7 @@
 # .NET-10-Laufzeit inkl. Windows Desktop. Nichts davon wird auf dem Zielrechner benoetigt.
 param(
     [Parameter(Mandatory = $true)] [string]$PythonDir,
-    [string]$Version = '1.3.4',
+    [string]$Version = '1.3.5',
     [string]$OutDir = '',
     [switch]$AllowDirty
 )

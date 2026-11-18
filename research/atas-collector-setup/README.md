@@ -16,7 +16,7 @@ privater Python-Laufzeit und Recorder-DLL. Nicht Teil von `TradingBot.sln`.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File research\atas-collector-setup\build-package.ps1 -PythonDir <Ordner der privaten Python-Laufzeit>
-powershell -ExecutionPolicy Bypass -File research\atas-collector-setup\test-package.ps1 -Zip artifacts\collector-package\ATAS-Session-Collector-Setup-v1.3.4.zip
+powershell -ExecutionPolicy Bypass -File research\atas-collector-setup\test-package.ps1 -Zip artifacts\collector-package\ATAS-Session-Collector-Setup-v1.3.5.zip
 ```
 
 `build-package.ps1` verlangt einen sauberen Git-Stand unter `research\` (sonst `-AllowDirty`, was im Paket vermerkt

@@ -1,4 +1,4 @@
-# ATAS Session Collector 1.3.4 – All-in-one-Paket (Vorabversion)
+# ATAS Session Collector 1.3.5 – All-in-one-Paket (Vorabversion)
 
 Zeichnet ATAS-Replay-Trades lokal auf (Research/Simulation-only: keine Orders, keine Broker-Anbindung, keine
 Kontoänderungen). Das Paket enthält alles außer ATAS selbst.
@@ -31,6 +31,21 @@ Recorder hinzufügen → Zeitraum laden → Ladebereich prüfen → abspielen �
 sofort stoppen → Recorder entfernen → Writer-Abschluss prüfen → Daten prüfen und an die gemeinsame CSV anhängen →
 nächster Tag. Ein nicht vollständig abgeschlossener Tag stoppt den Lauf; abgeschlossene Tage bleiben erhalten,
 „Fortsetzen“ überspringt sie.
+
+## Was in 1.3.5 geändert ist (Hänger vor Play)
+
+VM-Befund 17.11.2026: ATAS meldete das Laden als abgeschlossen („Initialized“), es entstand aber keine neue
+Recorder-Instanz. Die Steuerung wartete darauf bis zu 450 s **ohne jede Ausgabe** und drückte nie Play.
+
+- **Statuszeile alle 10 s** während des Ladens: neue Instanz, Play bereit, geladen, Chart in der Replay-Ansicht.
+- **Ladeende aus dem ATAS-Protokoll** dieses Ladevorgangs; danach höchstens 15 s Nachfrist für die neue Instanz.
+- **Chart folgt dem Replay nicht** (Indikatoren weiter aktiv): einmal das ATAS-Kürzel „DisableEnableMarketReplay“,
+  danach unabhängig geprüft (Replay-Ansicht + neue Instanz).
+- **ATAS behält die Instanz** vom Hinzufügen: wird nur übernommen, wenn sie die einzige aktive ist und noch **keine**
+  Daten enthält (sonst würden Echtzeitdaten vor die Replay-Daten gemischt). Nach Play erneut geprüft.
+- Sonst **sofortiger Abbruch mit Diagnose** (alle Recorder-Ordner seit Auftragsbeginn mit Zustand) statt stummem Warten.
+- Wurde die Wiedergabe vor dem Play der Steuerung schon gestartet (z. B. manuell), bricht der Auftrag klar ab
+  statt mit einem weiteren Klick zu pausieren.
 
 ## Was in 1.3.4 geändert ist (Stoppen nach dem Replay-Ende)
 
