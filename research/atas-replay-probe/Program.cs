@@ -1,4 +1,4 @@
-using OrderFlowTools;
+﻿using OrderFlowTools;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -1370,6 +1370,58 @@ internal static partial class Program
         { var v = SelectChart(new[] { Cc("VulkanChartWpf", w: 250, h: 150) }); Check("Chart: zu kleine Flaeche -> OnlyHidden", v.Kind == ChartVerdictKind.OnlyHidden); }
         { var v = SelectChart(Array.Empty<ChartCand>()); Check("Chart: nichts gefunden -> NoneFound", v.Kind == ChartVerdictKind.NoneFound); }
         { var v = SelectChart(new[] { Cc("VulkanChartWpf", x: 100), Cc("VulkanChartWpf", x: 1100, min: true) }); Check("Chart: ein sichtbarer + ein minimierter Chart -> Unique (sichtbarer)", v.Kind == ChartVerdictKind.Unique && v.Chosen!.X == 100); }
+        // ---- 1.3.6: Ersatzweg Instrumenttitel (VM 18.11.: keine ChartView, zwei namenlose WinForms-Flaechen gleicher Lage) ----
+        Check("ChartOCR: Titelwoerter MNQ / MNQZ6 / MNQZ26 / MNQ-12-26 / (MNQ) erkannt",
+              new[] { "MNQ", "MNQZ6", "MNQZ26", "MNQ-12-26", "(MNQ)", "mnqz6," }.All(t => IsTargetToken(t, "MNQ")));
+        Check("ChartOCR: keine Teilwort-/Fremdtreffer (NQ, MNQX123, XMNQ, MNQUARTER)",
+              !new[] { "NQ", "MNQX123", "XMNQ", "MNQUARTER", "MN0", "" }.Any(t => IsTargetToken(t, "MNQ")));
+        {
+            string LgC(string t, string src, string msg) => $"2026-11-18 {t},100 [2         ] INFO  {src,-15}: {msg}";
+            var lines = new[] { LgC("09:00:00", "ES 1m Chart", "ApplyTemplate"), LgC("13:17:20", "MNQ 5m Chart", "ApplyTemplate: template.Panels=1"),
+                                LgC("13:21:30", "Chart", "[RenderControl] KeyUp"), LgC("13:22:00", "Replay", "State changed") };
+            var cs = ChartSourcesFromLog(lines, new DateTime(2026, 11, 18, 13, 17, 0));
+            Check("ChartOCR: Chart-Namen nur seit ATAS-Start aus dem Protokoll (alter ES-Chart und 'Chart' ohne Namen ignoriert)",
+                  cs.Count == 1 && cs[0] == "MNQ 5m Chart", string.Join(",", cs));
+        }
+        {
+            System.Windows.Rect R(double x, double y, double w, double h) => new(x, y, w, h);
+            var vm = new List<Surface> {
+                new("", "WindowsForms10.Window.8.app.0.14a4f1c_r3_ad1", "3998704", "Pane", "WinForm", R(363, 187, 1553, 787), 0x111, false),
+                new("", "WindowsForms10.Window.8.app.0.14a4f1c_r3_ad1", "1508644", "Pane", "WinForm", R(363, 187, 1553, 787), 0x222, false),
+                new("RootLayout", "ExtendedDockLayoutManager", "RootLayout", "Group", "WPF", R(0, 157, 1920, 843), 0, false) };
+            var rg = SurfaceRegions(vm);
+            Check("ChartOCR: VM-Fall 18.11. -> Container verworfen, zwei gleiche WinForms-Flaechen = EINE Flaeche", rg.Count == 1 && rg[0].Count == 2);
+            vm.Add(new("", "WindowsForms10.Window.8.app.0.14a4f1c_r3_ad1", "777", "Pane", "WinForm", R(363, 600, 1553, 380), 0x333, false));
+            Check("ChartOCR: zweite, andere Flaeche -> zwei Flaechen (nicht eindeutig)", SurfaceRegions(vm).Count >= 2);
+        }
+        {
+            var ok = new OcrHit("MNQZ6", 400, 200, true, "gehoert zur Flaeche");
+            var logMnq = new[] { "MNQ 5m Chart" };
+            var none = Array.Empty<OcrHit>(); var S = RegionRelation.Single; var N = RegionRelation.Nested;
+            OcrChartVerdict D(int reg, RegionRelation rel, string? named, IReadOnlyList<OcrHit> h, IReadOnlyList<string> lc) => DecideChartFallback(reg, rel, named, h, lc, "MNQ");
+            Check("ChartOCR: eine Flaeche + MNQ-Titel + Zuordnung + Protokoll -> eindeutig", D(1, S, null, new[] { ok }, logMnq).Unique);
+            Check("ChartOCR: gleiche Koordinaten reichen nicht - Titel gehoert nicht zur Flaeche -> unklar",
+                  !D(1, S, null, new[] { ok, new OcrHit("MNQ", 380, 900, false, "andere hwnd") }, logMnq).Unique);
+            Check("ChartOCR: zwei Flaechen -> nicht eindeutig (auch mit Titel)", !D(2, S, null, new[] { ok }, logMnq).Unique);
+            Check("ChartOCR: kein Titel und kein Panel-Name -> nicht eindeutig", !D(1, S, null, none, logMnq).Unique);
+            Check("ChartOCR: Protokoll nennt nur ES-Chart -> Widerspruch, nicht eindeutig", !D(1, S, null, new[] { ok }, new[] { "ES 1m Chart" }).Unique);
+            Check("ChartOCR: Protokoll nennt keinen Chart -> Titel + Zuordnung genuegen", D(1, S, null, new[] { ok }, Array.Empty<string>()).Unique);
+            // Korrektur 17.11.: 'MNQ 5m Chart' war der UIA-Name des umgebenden Panels (CustomLayoutPanel), nicht der ChartView.
+            Check("ChartOCR: UIA-Name des umgebenden Panels 'MNQ 5m Chart' -> eindeutig (auch ohne Texterkennung)",
+                  D(1, S, "MNQ 5m Chart", none, logMnq) is { Unique: true } pv && pv.Signal.Contains("Panel"));
+            Check("ChartOCR: Panel-Name + widersprechender Titeltreffer -> unklar", !D(1, S, "MNQ 5m Chart", new[] { new OcrHit("MNQ", 1, 1, false, "fremd") }, logMnq).Unique);
+            Check("ChartOCR: Titel in der Titelzeile, per UIA demselben Panel zugeordnet -> eindeutig",
+                  D(1, S, null, new[] { new OcrHit("MNQ", 400, 170, true, "UIA: gemeinsamer Vorfahr = dasselbe Chart-Panel") }, logMnq).Unique);
+            // Zwei deckungsgleiche Fenster beweisen weder einen noch zwei Charts:
+            Check("ChartOCR: deckungsgleiche Fenster VERSCHACHTELT (Host + Zeichenflaeche) + Titel -> eindeutig", D(1, N, null, new[] { ok }, logMnq).Unique);
+            Check("ChartOCR: deckungsgleiche Fenster als GESCHWISTER (z. B. Tabs) -> unklar, auch mit Titel", !D(1, RegionRelation.Siblings, "MNQ 5m Chart", new[] { ok }, logMnq).Unique);
+            Check("ChartOCR: Verhaeltnis nicht bestimmbar -> unklar", !D(1, RegionRelation.Unknown, null, new[] { ok }, logMnq).Unique);
+            Check("ChartOCR: Panel-Name-Erkennung 'MNQ 5m Chart' / 'MNQZ6 - 5 Min' ja, 'NQ 5m Chart' / 'MNQX123' nein",
+                  NameHasTarget("MNQ 5m Chart", "MNQ") && NameHasTarget("MNQZ6 - 5 Min", "MNQ") && !NameHasTarget("NQ 5m Chart", "MNQ") && !NameHasTarget("MNQX123 Chart", "MNQ"));
+            var surf = new System.Windows.Rect(363, 187, 1553, 787);
+            Check("ChartOCR: Panel mit Titelzeile ueber der Flaeche gilt als chartgross; Hauptfenster/Layout nicht",
+                  IsPanelOf(new System.Windows.Rect(339, 157, 1577, 840), surf) && !IsPanelOf(new System.Windows.Rect(0, 0, 3840, 2160), surf) && !IsPanelOf(new System.Windows.Rect(400, 187, 1400, 787), surf));
+        }
 
         Check("Bridge-Selbsttest: rc=0 + result ok -> ok", BridgeSelfcheckOk(0, "{\"result\": \"ok\", \"python\": \"3.13.9\"}"));
         Check("Bridge-Selbsttest: ModuleNotFoundError (rc=1, leere Ausgabe) -> NICHT ok", !BridgeSelfcheckOk(1, ""));

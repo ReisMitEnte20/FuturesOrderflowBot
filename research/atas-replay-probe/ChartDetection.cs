@@ -181,6 +181,13 @@ internal static partial class Program
             W($"[1] Zielchart eindeutig bestaetigt: {v.Reason}: {Describe(v.Chosen)}");
             return true;
         }
+        // Nur wenn die Kontrollansicht GAR KEINEN Chart liefert (nicht bei 'mehrere'/'verdeckt'): Rohansicht + Texterkennung.
+        if (v.Kind == ChartVerdictKind.NoneFound && scan.Roots > 0)
+        {
+            W("[1] Kontrollansicht ohne Chart-Flaeche -> pruefe Rohansicht und sichtbaren Instrumenttitel (nur lesen, kein Klick).");
+            var alt = ResolveChartFallback(W, null);
+            if (alt.ok) { _chartDesc = alt.desc; W($"[1] Zielchart eindeutig bestaetigt (Ersatzweg): {alt.desc}"); return true; }
+        }
 
         string why = v.Kind switch
         {
@@ -207,10 +214,19 @@ internal static partial class Program
         W($"# ATAS Chart-Diagnose (nur lesen)  {DateTime.Now:yyyy-MM-dd HH:mm:ss}  Probe {typeof(Program).Assembly.GetName().Version}");
         var scan = ScanChartCandidates();
         var v = SelectChart(scan.Candidates);
-        W($"ERGEBNIS: {v.Kind}  ({v.Reason}){(v.Chosen != null ? " -> " + Describe(v.Chosen) : "")}");
+        W($"ERGEBNIS UIA (Kontrollansicht): {v.Kind}  ({v.Reason}){(v.Chosen != null ? " -> " + Describe(v.Chosen) : "")}");
+        bool ok = v.Kind == ChartVerdictKind.Unique;
+        if (!ok && v.Kind == ChartVerdictKind.NoneFound && scan.Roots > 0)
+        {
+            string? dir = outFile != null ? Path.GetDirectoryName(Path.GetFullPath(outFile)) : Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+            var alt = ResolveChartFallback(W, dir);
+            ok = alt.ok;
+            W(ok ? $"ERGEBNIS: GENAU EIN {TargetInstrument}-CHART (Ersatzweg) - {alt.desc}" : $"ERGEBNIS: KEIN eindeutiger {TargetInstrument}-Chart - {alt.desc}");
+        }
+        else W(ok ? $"ERGEBNIS: GENAU EIN CHART ueber UIA - {v.Signal}" : $"ERGEBNIS: kein eindeutiger Chart ({v.Kind})");
         WriteChartDiagnosis(W, scan);
         Flush(sb, outFile);
-        return v.Kind == ChartVerdictKind.Unique ? 0 : 5;
+        return ok ? 0 : 5;
     }
 
     private static void WriteChartDiagnosis(Action<string> W, ChartScan scan)

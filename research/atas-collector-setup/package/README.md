@@ -1,4 +1,4 @@
-# ATAS Session Collector 1.3.5 – All-in-one-Paket (Vorabversion)
+# ATAS Session Collector 1.3.6 – All-in-one-Paket (Vorabversion)
 
 Zeichnet ATAS-Replay-Trades lokal auf (Research/Simulation-only: keine Orders, keine Broker-Anbindung, keine
 Kontoänderungen). Das Paket enthält alles außer ATAS selbst.
@@ -31,6 +31,25 @@ Recorder hinzufügen → Zeitraum laden → Ladebereich prüfen → abspielen �
 sofort stoppen → Recorder entfernen → Writer-Abschluss prüfen → Daten prüfen und an die gemeinsame CSV anhängen →
 nächster Tag. Ein nicht vollständig abgeschlossener Tag stoppt den Lauf; abgeschlossene Tage bleiben erhalten,
 „Fortsetzen“ überspringt sie.
+
+## Was in 1.3.6 geändert ist (Chart-Erkennung in Phase 1)
+
+Befunde: Am 17.11.2026 enthielt der UIA-Baum das Panel `CustomLayoutPanel` mit dem **Namen** „MNQ 5m Chart“ und darin
+die namenlose Zeichenfläche `ChartView`. Nach einem ATAS-Neustart am 18.11. fehlten beide; an der Chart-Position standen
+nur zwei namenlose, deckungsgleiche WinForms-Flächen. Der Lauf stoppte in Schritt 1.
+
+- **Rohansicht:** Neben der UIA-Kontrollansicht wird jetzt auch die Rohansicht durchsucht (Elemente, die die
+  Kontrollansicht herausfiltert); Anzahl, Fehler und Treffer stehen im Protokoll.
+- **Deckungsgleiche Fenster:** gelten nur dann als *eine* Fläche, wenn sie verschachtelt sind (Host + Zeichenfläche).
+  Liegen sie nebeneinander (z. B. Charts in Tabs), ist die Lage unklar und der Lauf bricht ab.
+- **Instrumentbezug**, in dieser Reihenfolge: (a) UIA-Name eines umgebenden, chartgroßen Panels (z. B. „MNQ 5m Chart“);
+  (b) Texterkennung **in der Fläche und in der Titelzeile darüber**. Ein Titel in der Fläche wird per Windows-Treffertest
+  zugeordnet, ein Titel in der Titelzeile nur, wenn er per UIA im selben Panel wie die Fläche liegt. Gleiche Koordinaten
+  allein reichen nicht. Das ATAS-Protokoll (Chart-Namen seit dem ATAS-Start) darf nicht widersprechen.
+- **Nur eindeutig:** genau eine große Fläche; bei mehreren oder unklaren Flächen kein Ersatz und Abbruch. Es wird nichts
+  angeklickt.
+- `chartdiag` nennt das Ergebnis („GENAU EIN MNQ-CHART … woran“) und legt ein Bild der Fläche daneben.
+- Zielinstrument ist `MNQ` (änderbar über die Umgebungsvariable `ATAS_TARGET_INSTRUMENT`).
 
 ## Was in 1.3.5 geändert ist (Hänger vor Play)
 
