@@ -352,16 +352,21 @@ internal static partial class Program
         {
             using var bmp = CaptureRect(rr);
             List<(int x0, int x1)> spans;
-            try { spans = ScreenOcr.Recognize(bmp, 0, 0).Select(o => (o.X, o.X + o.W)).ToList(); } catch { spans = new(); }
+            try { spans = ScreenOcr.Recognize(bmp, 0, 0).Where(o => o.Text.Trim().Length >= 2).Select(o => (o.X, o.X + o.W)).ToList(); } catch { spans = new(); }
             var blobs = FindIconBlobs(bmp, spans);
             W($"  [rm] Symbole im Zeilenbild (frischer Screenshot): {string.Join(", ", blobs.Select(b => $"x+{b.cx}/y+{b.cy} b={b.w}"))}{(blobs.Count == 0 ? "(keine)" : "")}");
-            foreach (var b in blobs.OrderByDescending(b => b.cx))
+            // 1.4.0: Aktionssymbole (rechter Zeilenbereich) nach Papierkorb-Form ordnen und den besten Kandidaten ZUERST anfahren
+            // (1.3.9 fuhr von rechts nach links und traf zuerst den Favoritenstern). Klick nur nach Tooltip-Bestaetigung.
+            var ranked = RankTrashCandidates(bmp, blobs);
+            W($"  [rm] Papierkorb-Kandidaten (Formwert): {string.Join(", ", ranked.Select(c => $"x+{c.cx}={c.shape?.TrashScore.ToString("0.0") ?? "-"}"))}{(ranked.Count == 0 ? "(keine)" : "")}");
+            int tries = 0;
+            foreach (var b in ranked)
             {
                 int sx = (int)Math.Round(rr.X) + b.cx, sy = (int)Math.Round(rr.Y) + b.cy;
-                SetCursorPos(sx, sy); Thread.Sleep(1300);
+                SetCursorPos(sx, sy); Thread.Sleep(1300); tries++;
                 var tip = CurrentToolTip();
-                W($"    Symbol @({sx},{sy}) Tooltip='{tip ?? "(keiner)"}'");
-                if (tip != null && DeleteWords.IsMatch(tip)) { target = (sx, sy); how = $"Symbol mit Tooltip '{tip}'"; break; }
+                W($"    Symbol {tries}. Wahl x+{b.cx} @({sx},{sy}) Formwert={b.shape?.TrashScore.ToString("0.0") ?? "-"} Tooltip='{tip ?? "(keiner)"}'");
+                if (tip != null && DeleteWords.IsMatch(tip)) { target = (sx, sy); how = $"Symbol mit Tooltip '{tip}' ({tries}. Wahl nach Form)"; break; }
             }
             if (target == null)
             {

@@ -1,4 +1,4 @@
-# ATAS Session Collector 1.3.9 – All-in-one-Paket (Vorabversion)
+# ATAS Session Collector 1.4.0 – All-in-one-Paket (Vorabversion)
 
 Zeichnet ATAS-Replay-Trades lokal auf (Research/Simulation-only: keine Orders, keine Broker-Anbindung, keine
 Kontoänderungen). Das Paket enthält alles außer ATAS selbst.
@@ -32,6 +32,26 @@ sofort stoppen → Recorder entfernen → Writer-Abschluss prüfen → Daten pr�
 nächster Tag. Ein nicht vollständig abgeschlossener Tag stoppt den Lauf; abgeschlossene Tage bleiben erhalten,
 „Fortsetzen“ überspringt sie.
 
+## Was in 1.4.0 geändert ist (Datum ohne Umweg, Papierkorb direkt)
+
+- **Datumsdialog (Phase 6):** Start und Ende werden aus dem Dialog gelesen; getippt wird nur, was sich ändert. Beim
+  typischen Tageswechsel (z. B. 02.01. → 05.01., je 15:30–18:00) sind das zwei Tagesziffern je Feld, die Uhrzeiten bleiben
+  stehen, kein Zwischenschritt über 00:00. Die Reihenfolge wird vorab so geplant, dass jeder Zwischenstand ein gültiges
+  Datum ist und Start < Ende bleibt – dann schiebt ATAS das Gegenfeld nie mit. Neu am echten Dialog belegt: Ein Wert in
+  der Zukunft wird beim Verlassen des Felds verworfen; auch solche Zwischenstände werden vermieden. Nach dem Fokuswechsel
+  müssen beide Felder exakt stimmen. Nur wenn es keinen solchen Weg gibt oder das Ergebnis abweicht, folgt der
+  bewährte Weg aus 1.3.9 über den Zieltag 00:00.
+- **Recorder entfernen (Papierkorb):** Die Recorder-Zeile hat rechts vier Symbole (Duplizieren, Ausblenden, Löschen,
+  Favorit). 1.3.9 fuhr sie von rechts an und kam zuerst über den Favoritenstern. Jetzt werden die Symbole nach Form
+  bewertet (Deckel oben, senkrechter Korpus, spiegelsymmetrisch) und der Papierkorb zuerst angefahren; geklickt wird nur
+  nach Tooltip „Löschen“. Bietet ATAS die Schaltfläche per UIA an, wird sie direkt ausgelöst. Danach unverändert: genau
+  die Recorder-Zeile muss weg sein, alle anderen Indikatoren gleich, erst dann „Übernehmen“, dann Writer-Abschluss prüfen.
+
+**Testumfang beim Bau:** Datumsdialog am echten ATAS ohne Laden geprüft (02.01. → 05.01., 17.11. → 05.01.,
+05.01. → 17.11., 11.11. 14:30–14:50 → 05.11. 15:30–18:00, 05.11.2026 → 30.12.2025 → 02.01.2026), alle direkt.
+Papierkorb im echten Dialog: Form-Rangfolge wählt das Symbol mit Tooltip „Löschen“ als erstes. Der Automatiklauf aus
+diesem Paket wird gesondert abgenommen.
+
 ## Was in 1.3.9 geändert ist (Datum über Monatsgrenzen, X am Replay-Ende)
 
 Lokaler Befund 18.11.2026 (1.3.8, Lauf 05.01.–17.11.2026): Für den 05.01. stand der Start richtig auf 05.01.2026
@@ -51,7 +71,8 @@ Lokaler Befund 18.11.2026 (1.3.8, Lauf 05.01.–17.11.2026): Für den 05.01. sta
 **Testumfang:** lokal mit echtem ATAS ein Tageslauf 05.01.2026 (NewYork 09:30–12:00 ET, 100×) über die Probe bestanden:
 Ladebereich laut ATAS 14:30–17:00 UTC, X einmal geklickt, Replay verlassen, 485.894 MNQ-Trades, 0 außerhalb des
 Fensters, danach 0 aktive Recorder. Die neue X-Bildsuche am Fehler-Screenshot offline geprüft (im Live-Lauf bot ATAS
-das X per UIA an). **Mehrtägiger Lauf über die Oberfläche und Windows-VM mit 1.3.9 noch ungeprüft.**
+das X per UIA an). Danach lokal über die Oberfläche (installiertes 1.3.9, 19.11.2026): 02.01., 05.01. und 06.01.2026
+nacheinander GESAMT-PASS, Ladebereich je 14:30–17:00 UTC. Windows-VM mit 1.3.9 ungeprüft.
 
 ## Was in 1.3.8 geändert ist (Laden am Folgetag)
 

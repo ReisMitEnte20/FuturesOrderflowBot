@@ -65,6 +65,8 @@ internal static partial class Program
                 "setdate" => SetDate(args),
             "datediag" => DateDiag(args),
             "xblob" => XBlob(args),
+            "trashdiag" => TrashDiag(args.FirstOrDefault(a => a.EndsWith(".txt"))),
+            "indtool" => IndTool(args),
                 "series" => Series(args.FirstOrDefault(a => a.EndsWith(".txt"))),
                 "autorun" => AutoRun(args.FirstOrDefault(a => a.EndsWith(".txt"))),
                 "liveproof" => LiveProof(args.FirstOrDefault(a => a.EndsWith(".txt"))),
@@ -1393,6 +1395,84 @@ internal static partial class Program
             Check("Symbolsuche: ohne Symbole -> keine Kandidaten (kein Blindklick)", FindIconBlobs(empty, new List<(int, int)> { (10, 190) }).Count == 0);
         }
         {
+            // 1.4.0 Datum: direkter Weg. Simuliert ATAS (Abschnitt wird bei Vollstaendigkeit uebernommen; Start >= Ende schiebt
+            // das Gegenfeld) und prueft, dass der Plan nie mitschieben laesst und nur Noetiges tippt.
+            DateTime D(string s) => DateTime.ParseExact(s, "dd.MM.yyyy HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+            var now = D("19.11.2026 00:35");
+            (DateTime s, DateTime e, bool pushed) Sim(DateTime s, DateTime e, List<DateStep> plan)
+            {
+                bool pushed = false;
+                foreach (var st in plan)
+                {
+                    var before = st.Start ? s : e;
+                    string cur = (st.Start ? s : e).ToString("ddMMyyyyHHmm");
+                    string typed = st.Digits + cur.Substring(st.Digits.Length);
+                    foreach (var (pos, len) in new[] { (0, 2), (2, 2), (4, 4), (8, 2), (10, 2) })
+                    {
+                        if (pos + len > st.Digits.Length) break;
+                        cur = cur.Substring(0, pos) + typed.Substring(pos, len) + cur.Substring(pos + len);
+                        var v = DateTime.ParseExact(cur, "ddMMyyyyHHmm", System.Globalization.CultureInfo.InvariantCulture);
+                        if (st.Start) { s = v; if (s >= e) { e = s; pushed = true; } } else { e = v; if (e <= s) { s = e.AddMinutes(-30); pushed = true; } }
+                    }
+                    // Verlassen des Felds: Zukunftswert -> ATAS setzt den Wert von vor der Eingabe zurueck (echter Dialog 19.11.)
+                    if (st.Start && s > now) { s = before; pushed = true; }
+                    if (!st.Start && e > now) { e = before; pushed = true; }
+                }
+                return (s, e, pushed);
+            }
+            void PlanCase(string name, string cs, string ce, string ts, string te, int maxDigits)
+            {
+                var p = PlanDateEntry(D(cs), D(ce), D(ts), D(te), notAfter: now);
+                if (p == null) { Check($"Datum direkt: {name}", false, "kein Plan"); return; }
+                var r = Sim(D(cs), D(ce), p);
+                int digits = p.Sum(x => x.Digits.Length);
+                Check($"Datum direkt: {name}", !r.pushed && r.s == D(ts) && r.e == D(te) && digits <= maxDigits && !p.Any(x => x.Digits.EndsWith("0000") && x.Digits.Length == 12 && !te.EndsWith("00:00")),
+                      $"{string.Join(" ; ", p)} -> {r.s:dd.MM.yyyy HH:mm}..{r.e:dd.MM.yyyy HH:mm} pushed={r.pushed} Ziffern={digits}");
+            }
+            PlanCase("02.01. -> 05.01. (nur Tag, Uhrzeiten bleiben)", "02.01.2026 15:30", "02.01.2026 18:00", "05.01.2026 15:30", "05.01.2026 18:00", 4);
+            PlanCase("November -> Januar", "17.11.2026 15:30", "17.11.2026 18:00", "05.01.2026 15:30", "05.01.2026 18:00", 8);
+            PlanCase("Januar -> November", "05.01.2026 15:30", "05.01.2026 18:00", "17.11.2026 15:30", "17.11.2026 18:00", 8);
+            PlanCase("Dialog-Vorgabe 11.11. 14:30-14:50 -> 05.11. 15:30-18:00 (Kollision beider Reihenfolgen)", "11.11.2026 14:30", "11.11.2026 14:50", "05.11.2026 15:30", "05.11.2026 18:00", 30);
+            PlanCase("Jahreswechsel 30.12.2025 -> 02.01.2026", "30.12.2025 15:30", "30.12.2025 18:00", "02.01.2026 15:30", "02.01.2026 18:00", 24);
+            PlanCase("05.11.2026 -> 30.12.2025 (kein Zukunfts-Zwischenstand 30.12.2026)", "05.11.2026 15:30", "05.11.2026 18:00", "30.12.2025 15:30", "30.12.2025 18:00", 24);
+            Check("Datum direkt: Ziel in der Zukunft -> kein direkter Plan (Ersatzweg)", PlanDateEntry(D("05.11.2026 15:30"), D("05.11.2026 18:00"), D("20.11.2026 15:30"), D("20.11.2026 18:00"), notAfter: now) == null);
+            PlanCase("31.03. -> 28.02. (ungueltiger Zwischenstand 31.02. vermieden)", "31.03.2026 15:30", "31.03.2026 18:00", "28.02.2026 15:30", "28.02.2026 18:00", 16);
+            PlanCase("Sommerzeit-Uhrzeit 05.03. 15:30 -> 09.03. 14:30", "05.03.2026 15:30", "05.03.2026 18:00", "09.03.2026 14:30", "09.03.2026 17:00", 24);
+            var same = PlanDateEntry(D("05.01.2026 15:30"), D("05.01.2026 18:00"), D("05.01.2026 15:30"), D("05.01.2026 18:00"));
+            Check("Datum direkt: bereits richtig -> keine Eingabe", same != null && same.Count == 0);
+            Check("Datum direkt: Ziel Start >= Ende -> kein Plan", PlanDateEntry(D("05.01.2026 15:30"), D("05.01.2026 18:00"), D("06.01.2026 18:00"), D("06.01.2026 15:30")) == null);
+            var typical = PlanDateEntry(D("02.01.2026 15:30"), D("02.01.2026 18:00"), D("05.01.2026 15:30"), D("05.01.2026 18:00"));
+            Check("Datum direkt: Tageswechsel = Ende zuerst, je nur 2 Ziffern", typical != null && typical.Count == 2 && !typical[0].Start && typical.All(x => x.Digits.Length == 2),
+                  typical == null ? "null" : string.Join(" ; ", typical));
+        }
+        {
+            // 1.4.0 (Befund echter Dialog 19.11.2026): Zeile 'OF Replay Recorder' mit vier Symbolen rechts:
+            // Duplizieren (zwei Quadrate), Hide (Auge), Löschen (Papierkorb: Griff, Deckel, Korpus mit Rillen), Favorit (Stern).
+            using var row = new System.Drawing.Bitmap(475, 22);
+            var fg = new System.Drawing.Pen(System.Drawing.Color.FromArgb(200, 215, 230), 1);
+            using (var g = System.Drawing.Graphics.FromImage(row))
+            {
+                g.Clear(System.Drawing.Color.FromArgb(22, 92, 150));
+                g.FillRectangle(System.Drawing.Brushes.White, 30, 7, 230, 9);                                    // Text
+                g.DrawRectangle(fg, 395, 5, 8, 8); g.DrawRectangle(fg, 398, 8, 8, 8);                          // Duplizieren
+                g.DrawEllipse(fg, 414, 6, 13, 9); g.DrawEllipse(fg, 418, 8, 5, 5);                              // Hide (Auge)
+                g.DrawLine(fg, 438, 5, 443, 5); g.DrawLine(fg, 435, 6, 446, 6);                                 // Papierkorb: Griff + Deckel
+                g.DrawRectangle(fg, 436, 7, 9, 10); g.DrawLine(fg, 439, 9, 439, 15); g.DrawLine(fg, 442, 9, 442, 15); // Korpus + Rillen
+                g.DrawPolygon(fg, new[] { new System.Drawing.Point(461, 4), new System.Drawing.Point(463, 9), new System.Drawing.Point(468, 9),
+                    new System.Drawing.Point(464, 12), new System.Drawing.Point(466, 17), new System.Drawing.Point(461, 14), new System.Drawing.Point(456, 17),
+                    new System.Drawing.Point(458, 12), new System.Drawing.Point(454, 9), new System.Drawing.Point(459, 9) });                       // Stern
+            }
+            var blobs = FindIconBlobs(row, new List<(int, int)> { (30, 260) });
+            var ranked = RankTrashCandidates(row, blobs);
+            Check("Papierkorb-Form: vier Symbole rechts erkannt", ranked.Count == 4, string.Join(",", ranked.Select(r => $"{r.cx}:{r.shape?.TrashScore}")));
+            Check("Papierkorb-Form: Papierkorb ist 1. Wahl (nicht der Stern ganz rechts)", ranked.Count > 0 && Math.Abs(ranked[0].cx - 440) <= 4,
+                  string.Join(",", ranked.Select(r => $"{r.cx}:{r.shape?.TrashScore}")));
+            Check("Papierkorb-Form: Papierkorb hat eindeutig den hoechsten Formwert (kein Gleichstand)",
+                  ranked.Count == 4 && ranked.Skip(1).All(r => r.shape!.TrashScore < ranked[0].shape!.TrashScore),
+                  string.Join(",", ranked.Select(r => $"{r.cx}:{r.shape?.TrashScore}")));
+            Check("Papierkorb-Form: Textbereich links ist kein Kandidat", ranked.All(r => r.cx > 300));
+        }
+        {
             // 1.3.9 (Befund 18.11.): Leiste waehrend 'Module laden…' – Fortschrittsbalken UNTER der Symbolzeile ueber die ganze Breite.
             using var bar = new System.Drawing.Bitmap(760, 70);
             using (var g = System.Drawing.Graphics.FromImage(bar))
@@ -2354,7 +2434,7 @@ internal static partial class Program
             }
             // 1.3.9: Eingabe ohne Leeren, Reihenfolge Start:=Zieltag 00:00 -> Ende -> Start (siehe SetDialogRange in
             // DateEntry.cs; Befund 18.11.: Ende blieb nach 'Strg+A/Entf' + Mitschieben auf 05.11. 00:00 stehen).
-            SetDialogRange(dStart, dEnd, W, trace: false);
+            SetDialogRangeSmart(dStart, dEnd, W, trace: false);
             {
                 string gs = ValueOf(FindIdAny("StartEdit")), ge = ValueOf(FindIdAny("EndEdit"));
                 bool okS = gs.StartsWith(dStart.Substring(0, 16), StringComparison.Ordinal);
