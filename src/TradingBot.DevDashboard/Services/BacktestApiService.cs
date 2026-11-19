@@ -10,7 +10,10 @@ namespace TradingBot.DevDashboard.Services;
 
 // ---- DTOs (JSON für das React-Dashboard) ----
 public sealed record StrategyParamDef(string Key, string Label, string Type, string Default);
-public sealed record StrategyDef(string Id, string Name, string Description, bool IsReference, IReadOnlyList<StrategyParamDef> Params);
+/// <summary>Strategie-Definition. <see cref="UsesFixedStops"/> = Stop/Ziel kommen aus den Tick-Vorgaben des Laufs (dann sind
+/// StopLossTicks/TakeProfitTicks wirksame Parameter); false = die Strategie setzt Stop/Ziel selbst (z. B. ORB).</summary>
+public sealed record StrategyDef(string Id, string Name, string Description, bool IsReference, IReadOnlyList<StrategyParamDef> Params,
+    bool UsesFixedStops = true);
 public sealed record InstrumentDef(string Symbol, decimal TickSize, decimal TickValue, decimal PointValue, int MaxContracts, int DefaultStopLossTicks, int DefaultTakeProfitTicks);
 /// <summary>Datenquelle. <see cref="DefaultFromUtc"/>/<see cref="DefaultMaxRows"/> beschreiben einen begrenzten,
 /// geeigneten Standard-Ausschnitt für das erste Laden (null = ganze Quelle bzw. Standardgrenze).</summary>
@@ -133,7 +136,7 @@ public sealed class BacktestApiService
             "FESTE ORB-Baseline (Zarattini & Aziz 2023) auf MES: erste 5-Min-Kerze ab 09:30 ET, Richtung aus " +
             "Close vs. Open (Doji = kein Trade), Einstieg am Folgebar-Open, Stop am Gegenextrem, Ziel 10R bzw. " +
             "Session-Ende 16:00 ET, 1 Kontrakt. Keine Varianten; Paper-Renditen werden NICHT auf MES übertragen.",
-            true, Array.Empty<StrategyParamDef>())
+            true, Array.Empty<StrategyParamDef>(), UsesFixedStops: false)
     };
 
     public async Task<IReadOnlyList<InstrumentDef>> GetInstrumentsAsync(CancellationToken ct = default)
@@ -181,7 +184,7 @@ public sealed class BacktestApiService
         try
         {
             ct.ThrowIfCancellationRequested();
-            var (candles, lead, trail, issues, source, tf) = LoadCandles(req, req.Symbol);
+            var (candles, lead, trail, issues, source, tf) = LoadCandlesCached(req, req.Symbol);
             if (candles.Count == 0)
                 return Task.FromResult(new BacktestDataResponse
                 {
@@ -222,7 +225,7 @@ public sealed class BacktestApiService
 
             var fee = await ResolveFeeAsync(req, ct);
 
-            var (candles, leadPartial, trailPartial, issues, source, tf) = LoadCandles(req, instrument.Symbol);
+            var (candles, leadPartial, trailPartial, issues, source, tf) = LoadCandlesCached(req, instrument.Symbol);
             if (candles.Count == 0)
                 return new BacktestRunResponse { Ok = false, Error = "Keine gültigen OHLC-Bars geladen.", DataIssues = issues };
 
@@ -239,6 +242,7 @@ public sealed class BacktestApiService
                 ExcludePartialEdges = req.ExcludePartialEdges
             };
 
+            System.Threading.Interlocked.Increment(ref _engineRuns);
             var result = _engine.Run(candles, strategy, instrument, fee, config, source, tf, leadPartial, trailPartial);
 
             var dto = candles.Select(c => new CandleDto(
@@ -299,22 +303,74 @@ public sealed class BacktestApiService
         bool InstrumentIsExample,
         bool FeeIsExample);
 
-    /// <summary>Lädt Kerzen, Instrument- und Kostenprofil für wiederholte Läufe.</summary>
+    /// <summary>Lädt Kerzen, Instrument- und Kostenprofil für wiederholte Läufe. Die Kerzen werden je Datenanfrage
+    /// (Quelle, Pfad, Symbol, Zeitrahmen, Zeitraum, Zeilenlimit + Dateistempel) zwischengespeichert: viele Analysen
+    /// eines Auftrags auf DENSELBEN Daten lesen die (große) Quelldatei damit nur einmal.</summary>
     public async Task<RunContext> LoadContextAsync(BacktestRunRequest req, CancellationToken ct = default)
     {
         var instrument = (await _instruments.GetAllAsync(ct)).FirstOrDefault(i =>
                              string.Equals(i.Symbol, req.Symbol, StringComparison.OrdinalIgnoreCase))
                          ?? throw new InvalidOperationException($"Kein InstrumentProfile für '{req.Symbol}' in config/instruments.");
         var fee = await ResolveFeeAsync(req, ct);
-        var (candles, lead, trail, issues, source, tf) = LoadCandles(req, instrument.Symbol);
+        var (candles, lead, trail, issues, source, tf) = LoadCandlesCached(req, instrument.Symbol);
         return new RunContext(candles, instrument, fee, lead, trail, source, tf, issues,
             OnlyExampleProfiles(_instrumentsDir), req.FeePerSideOverride is null && OnlyExampleProfiles(_feesDir));
+    }
+
+    // ---- Zwischenspeicher geladener Kerzen (begrenzt, prozessweit) ----
+    private sealed record CachedLoad((List<Candle> candles, bool lead, bool trail, IReadOnlyList<OhlcImportIssue> issues, string source, int tf) Data);
+    private readonly object _cacheLock = new();
+    private readonly LinkedList<(string Key, CachedLoad Load)> _cache = new();
+    private readonly Dictionary<string, (int Loads, int Hits)> _loadStats = new(StringComparer.Ordinal);
+    private const int MaxCachedLoads = 4;
+
+    /// <summary>Lese-/Wiederverwendungszähler je Datenanfrage (für die Herkunftsangabe im Bericht).</summary>
+    public (int Loads, int Hits) GetLoadStats(BacktestRunRequest req)
+    {
+        lock (_cacheLock) return _loadStats.TryGetValue(DataKey(req, req.Symbol), out var s) ? s : (0, 0);
+    }
+
+    private string DataKey(BacktestRunRequest req, string symbol)
+    {
+        string path = req.DataSourceId.StartsWith("csv:", StringComparison.Ordinal) || (req.DataSourceId == "csv" && !string.IsNullOrWhiteSpace(req.Path))
+            ? req.Path ?? Path.Combine(_repoRoot, "samples", "ohlc", req.DataSourceId.Substring(4))
+            : SierraLocalPath;
+        string stamp = File.Exists(path) ? $"{new FileInfo(path).Length}:{File.GetLastWriteTimeUtc(path).Ticks}" : "missing";
+        return string.Join("|", req.DataSourceId, path, symbol.ToUpperInvariant(), req.TimeframeMinutes, req.FromUtc ?? "", req.ToUtc ?? "",
+            req.MaxRows, stamp);
+    }
+
+    private (List<Candle> candles, bool lead, bool trail, IReadOnlyList<OhlcImportIssue> issues, string source, int tf)
+        LoadCandlesCached(BacktestRunRequest req, string symbol)
+    {
+        string key = DataKey(req, symbol);
+        lock (_cacheLock)
+        {
+            for (var node = _cache.First; node is not null; node = node.Next)
+                if (node.Value.Key == key)
+                {
+                    _cache.Remove(node); _cache.AddFirst(node);
+                    var s = _loadStats.TryGetValue(key, out var v) ? v : (0, 0);
+                    _loadStats[key] = (s.Item1, s.Item2 + 1);
+                    return node.Value.Load.Data;
+                }
+        }
+        var data = LoadCandles(req, symbol);
+        lock (_cacheLock)
+        {
+            var s = _loadStats.TryGetValue(key, out var v) ? v : (0, 0);
+            _loadStats[key] = (s.Item1 + 1, s.Item2);
+            _cache.AddFirst((key, new CachedLoad(data)));
+            while (_cache.Count > MaxCachedLoads) _cache.RemoveLast();
+        }
+        return data;
     }
 
     /// <summary>Führt die OHLC-Engine auf einem bereits geladenen Kontext aus (optional auf einem Teilbereich).</summary>
     public OhlcBacktestResult RunEngine(RunContext ctx, IStrategy strategy, OhlcBacktestConfig config,
         FeeProfile? feeOverride = null, IReadOnlyList<Candle>? candlesOverride = null)
     {
+        System.Threading.Interlocked.Increment(ref _engineRuns);
         var candles = candlesOverride ?? ctx.Candles;
         bool lead, trail;
         if (candlesOverride is null)
@@ -336,6 +392,10 @@ public sealed class BacktestApiService
         return _engine.Run(candles, strategy, ctx.Instrument, feeOverride ?? ctx.Fee, config,
             ctx.Source, ctx.TimeframeMinutes, lead, trail);
     }
+
+    private long _engineRuns;
+    /// <summary>Anzahl ausgeführter Engine-Läufe seit Prozessstart (Nachweis: ein Berichtsvergleich rechnet nichts neu).</summary>
+    public long EngineRuns => System.Threading.Interlocked.Read(ref _engineRuns);
 
     /// <summary>Baut eine initialisierte Strategie-Instanz (öffentlich für die Quant-Auswertung).</summary>
     public IStrategy CreateStrategy(BacktestRunRequest req, InstrumentProfile instrument) => BuildStrategy(req, instrument);

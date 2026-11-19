@@ -247,7 +247,8 @@ export interface HoldoutEvaluateRequest {
 // --- Research-Lauf (eine Ablaufsteuerung koordiniert alle Prüfungen) ---
 
 export type ResearchStepStatus =
-  | "Pending" | "Running" | "Completed" | "NotComputable" | "Failed" | "Cancelled" | "Skipped";
+  | "Pending" | "Running" | "Completed" | "NotComputable" | "Failed" | "Cancelled" | "Skipped"
+  | "NotApplicable" | "InsufficientData";
 
 export interface ResearchStepState {
   key: string; label: string; status: ResearchStepStatus;
@@ -269,6 +270,8 @@ export interface ResearchStartRequest {
   overfittingBlocks: number; estimateEffectiveTrials: boolean;
   benchmarkId?: string | null; strategyIsFullyFunded: boolean;
   isDemo: boolean;
+  /** "classic" (bisherige Kette) oder "full" (Ein-Knopf-Backtest-Bericht). */
+  profile?: string;
 }
 
 export interface ResearchHoldoutProposal {

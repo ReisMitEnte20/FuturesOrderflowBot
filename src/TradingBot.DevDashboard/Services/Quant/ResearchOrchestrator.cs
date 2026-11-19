@@ -10,7 +10,7 @@ namespace TradingBot.DevDashboard.Services.Quant;
 /// Ergebnis wieder, statt ihn erneut zu starten (keine doppelten Trials, kein doppeltes Budget). Der finale
 /// Holdout wird NICHT automatisch verbraucht: der Lauf bereitet nur den Kandidaten vor.
 /// </summary>
-public sealed class ResearchOrchestrator
+public sealed partial class ResearchOrchestrator
 {
     private readonly QuantApiService _quant;
     private readonly QuantJobManager _jobs;
@@ -62,14 +62,28 @@ public sealed class ResearchOrchestrator
             return Fail("Mindestens ein Kandidaten-Parametersatz ist erforderlich (vorab festgelegt, keine Generierung).");
 
         // Mehrfachklick/Reload-Schutz: Läuft bereits ein Lauf derselben (Basis-)Kampagne mit aktivem Job, wird
-        // dieser zurückgegeben, statt einen zweiten zu starten.
-        var existingRuns = await _store.ListAsync(null, ct);
-        var active = existingRuns.FirstOrDefault(r =>
-            r.Status == ResearchStepStatus.Running &&
-            string.Equals(r.Config.Campaign.Id, request.Campaign.Id, StringComparison.Ordinal) &&
-            IsLive(r.RunId));
-        if (active is not null)
-            return new ResearchRunResponse { Ok = true, AlreadyRunning = true, JobId = active.JobId, Run = active };
+        // dieser zurückgegeben, statt einen zweiten zu starten. Prüfen + Anlegen geschieht unter einer Sperre, damit
+        // zwei gleichzeitige Klicks nicht beide „kein laufender Auftrag“ sehen. Verglichen wird mit der UNVERÄNDERTEN
+        // Basis-Kampagnen-Id (die gespeicherte Kampagne trägt zusätzlich einen eindeutigen Suffix).
+        await _startGate.WaitAsync(ct);
+        try
+        {
+            var existingRuns = await _store.ListAsync(null, ct);
+            var active = existingRuns.FirstOrDefault(r =>
+                r.Status == ResearchStepStatus.Running &&
+                string.Equals(r.CampaignKey ?? r.Config.Campaign.Id, request.Campaign.Id, StringComparison.Ordinal) &&
+                IsLive(r.RunId));
+            if (active is not null)
+                return new ResearchRunResponse { Ok = true, AlreadyRunning = true, JobId = _activeJobs.TryGetValue(active.RunId, out var aj) ? aj : active.JobId, Run = active };
+            return await CreateAndStartAsync(request, group, ct);
+        }
+        finally { _startGate.Release(); }
+    }
+
+    private readonly SemaphoreSlim _startGate = new(1, 1);
+
+    private async Task<ResearchRunResponse> CreateAndStartAsync(ResearchStartRequest request, ResearchGroupContext? group, CancellationToken ct)
+    {
 
         string runId = "research-" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "-" + Guid.NewGuid().ToString("N")[..8];
         _knownRuns[runId] = 1;
@@ -77,12 +91,14 @@ public sealed class ResearchOrchestrator
         string campaignId = Sanitize(request.Campaign.Id) + "-" + Guid.NewGuid().ToString("N")[..6];
         var effectiveCampaign = request.Campaign with { Id = campaignId };
 
-        var steps = StepDefs.Select(s => new ResearchStepState { Key = s.Key, Label = s.Label, Status = ResearchStepStatus.Pending }).ToList();
+        var defs = string.Equals(request.Profile, "full", StringComparison.OrdinalIgnoreCase) ? FullStepDefs : StepDefs;
+        var steps = defs.Select(s => new ResearchStepState { Key = s.Key, Label = s.Label, Status = ResearchStepStatus.Pending }).ToList();
 
         var record = new ResearchRunRecord
         {
             RunId = runId,
             CampaignId = campaignId,
+            CampaignKey = request.Campaign.Id,
             Config = request with { Campaign = effectiveCampaign },
             IsDemo = request.IsDemo,
             Status = ResearchStepStatus.Running,
@@ -165,7 +181,9 @@ public sealed class ResearchOrchestrator
                 CapitalBarrier = request.CapitalBarrier, RobustnessMetric = request.RobustnessMetric,
                 OverfittingBlocks = request.OverfittingBlocks, EstimateEffectiveTrials = request.EstimateEffectiveTrials,
                 BenchmarkId = request.BenchmarkId, StrategyIsFullyFunded = request.StrategyIsFullyFunded, IsDemo = request.IsDemo,
-                MinComparisonObservations = request.MinComparisonObservations
+                MinComparisonObservations = request.MinComparisonObservations,
+                SessionAligned = request.SessionAligned, TrainSessions = request.TrainSessions,
+                TestSessions = request.TestSessions, SessionCalendar = request.SessionCalendar
             };
             var group = new ResearchGroupContext(groupId, groupKey, fam.Key, fam.Name ?? fam.StrategyId);
             var res = await StartAsync(startReq, group, ct);
@@ -340,6 +358,8 @@ public sealed class ResearchOrchestrator
         var record = await _store.GetAsync(runId, ct)
             ?? throw new InvalidOperationException($"Research-Lauf '{runId}' verschwand vor der Ausführung.");
         var cfg = record.Config;
+        if (string.Equals(cfg.Profile, "full", StringComparison.OrdinalIgnoreCase))
+            return await RunFullReportAsync(record, progress, ct);
 
         async Task SetStep(string key, ResearchStepStatus status, string? reason = null, string? dataBasis = null, bool start = false, bool done = false)
         {
@@ -569,7 +589,9 @@ public sealed class ResearchOrchestrator
         TrainBars = cfg.TrainBars, TestBars = cfg.TestBars, StepBars = cfg.StepBars,
         LabelSpanBars = cfg.LabelSpanBars, EmbargoBars = cfg.EmbargoBars, WarmupBars = cfg.WarmupBars,
         HoldoutFraction = cfg.HoldoutFraction, Candidates = cfg.Candidates, SelectionMetric = cfg.SelectionMetric,
-        Campaign = cfg.Campaign
+        Campaign = cfg.Campaign,
+        SessionAligned = cfg.SessionAligned, TrainSessions = cfg.TrainSessions, TestSessions = cfg.TestSessions,
+        SessionCalendar = cfg.SessionCalendar, MinTrainTrades = cfg.Report?.MinTrainTrades ?? 0
     };
 
     // Robustheit/Monte Carlo laufen auf dem ENTWICKLUNGS-Run (kein Holdout).

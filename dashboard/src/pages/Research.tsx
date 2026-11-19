@@ -168,7 +168,7 @@ const isTerminal = (s: ResearchStepStatus) => s === "Completed" || s === "Failed
 
 // ==============================================================================================
 
-export function Research() {
+export function Research({ hideWorkspace = false }: { hideWorkspace?: boolean } = {}) {
   const [sources, setSources] = useState<DataSourceDef[]>([]);
   const [instruments, setInstruments] = useState<InstrumentDef[]>([]);
   const [benchmarks, setBenchmarks] = useState<string[]>([]);
@@ -212,6 +212,12 @@ export function Research() {
             setCampaign(res);
             if (res.families.some((f) => !isTerminal(f.status))) { setBusy(true); startCampPolling(res.groupId); }
           }
+        }
+        // Direkter Link aus dem Backtest-Bericht (?run=…): genau diesen Lauf öffnen (z. B. für die Holdout-Schlussprüfung).
+        const linked = new URLSearchParams(window.location.search).get("run");
+        if (linked) {
+          const res = await quantApi.research(linked, ac.signal).catch(() => null);
+          if (res?.ok && res.run) { setCampaign(null); setRun(res.run); if (res.run.status === "Running") startPolling(res.run.runId); return; }
         }
         const last = localStorage.getItem(LAST_RUN_KEY);
         if (last && !localStorage.getItem(LAST_CAMPAIGN_KEY)) {
@@ -418,10 +424,10 @@ export function Research() {
         {error && <div className="rounded-lg border border-[var(--red)] bg-[var(--panel)] p-3 text-xs text-[var(--red)]">{error}</div>}
 
         {/* Orderflow-Arbeitsfläche auf AUFGENOMMENEN ATAS-Daten (technischer Test; Reuse ECharts-Komponenten) */}
-        <ResearchWorkspace onOpenInReplay={setReplayFocus} />
+        {!hideWorkspace && <ResearchWorkspace onOpenInReplay={setReplayFocus} />}
 
         {/* Tick-Replay: 5-Minuten-Kerzen bauen sich aus ALLEN echten Trades einer Session auf (read-only, /api/tickreplay) */}
-        <TickReplayPanel focus={replayFocus} onClearFocus={() => setReplayFocus(null)} />
+        {!hideWorkspace && <TickReplayPanel focus={replayFocus} onClearFocus={() => setReplayFocus(null)} />}
 
         {/* Konfiguration — einklappbar; bei der Analyse standardmäßig geschlossen (ändert kein geladenes Ergebnis) */}
         <button
@@ -763,9 +769,12 @@ function StepChip({ step }: { step: ResearchStepState }) {
     Skipped: "border-[var(--line-2)] text-[var(--fg-faint)]",
     Failed: "border-[var(--red)] text-[var(--red)]",
     Cancelled: "border-[var(--gold)] text-[var(--gold)]",
+    NotApplicable: "border-[var(--line-2)] text-[var(--fg-dim)]",
+    InsufficientData: "border-[var(--gold)] text-[var(--gold)]",
   };
   const mark: Record<ResearchStepStatus, string> = {
     Pending: "○", Running: "◍", Completed: "●", NotComputable: "◐", Skipped: "–", Failed: "✕", Cancelled: "⊘",
+    NotApplicable: "–", InsufficientData: "◔",
   };
   return (
     <span title={step.reason ?? step.dataBasis ?? ""} className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px]", color[step.status])}>

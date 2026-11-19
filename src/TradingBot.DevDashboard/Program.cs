@@ -38,6 +38,9 @@ builder.Services.AddSingleton(sp => new ResearchOrchestrator(
     sp.GetRequiredService<QuantApiService>(),
     sp.GetRequiredService<QuantJobManager>(),
     sp.GetRequiredService<ResearchRunStore>()));
+// BACKTESTING (Ein-Knopf-Bericht + Vergleich gespeicherter Berichte) — nutzt Orchestrator/Quant-Bausteine, keine Orders.
+builder.Services.AddSingleton(sp => new TradingBot.DevDashboard.Services.Quant.Report.BacktestingService(
+    sp.GetRequiredService<QuantApiService>(), sp.GetRequiredService<ResearchOrchestrator>()));
 
 // JSON: Enums als Strings (z. B. ExitReason) für das React-Frontend.
 builder.Services.ConfigureHttpJsonOptions(o =>
@@ -280,6 +283,36 @@ quant.MapPost("/research/campaign/{groupId}/holdout/evaluate", async (string gro
     return res.Ok ? Results.Ok(res) : Results.BadRequest(res);
 });
 
+// BACKTESTING — Ein-Knopf-Bericht: Vorschau (Daten/Kosten/mögliche Prüfungen), Start (EIN Auftrag, alle anwendbaren
+// Analysen im Backend), gespeicherte Berichte und Vergleich OHNE Neuberechnung. Simulation-only, keine Orders.
+var bk = app.MapGroup("/api/backtesting").RequireCors(ReactCors);
+bk.MapGet("/strategies", (BacktestApiService s) => Results.Ok(s.GetStrategies()));
+bk.MapPost("/preview", async (TradingBot.DevDashboard.Services.Quant.Report.BacktestingStartRequest body,
+    TradingBot.DevDashboard.Services.Quant.Report.BacktestingService s, CancellationToken ct) =>
+{
+    var res = await s.PreviewAsync(body, ct);
+    return res.Ok ? Results.Ok(res) : Results.BadRequest(res);
+});
+bk.MapPost("/start", async (TradingBot.DevDashboard.Services.Quant.Report.BacktestingStartRequest body,
+    TradingBot.DevDashboard.Services.Quant.Report.BacktestingService s, CancellationToken ct) =>
+{
+    var res = await s.StartAsync(body, ct);
+    return res.Ok ? Results.Ok(res) : Results.BadRequest(res);
+});
+bk.MapGet("/reports", async (TradingBot.DevDashboard.Services.Quant.Report.BacktestingService s, CancellationToken ct) =>
+    Results.Ok(await s.ListAsync(ct)));
+bk.MapGet("/reports/{id}", async (string id, ResearchOrchestrator orch, CancellationToken ct) =>
+{
+    var res = await orch.GetAsync(id, ct);
+    return res.Ok ? Results.Ok(res) : Results.NotFound(res);
+});
+bk.MapPost("/reports/{id}/cancel", (string id, ResearchOrchestrator orch) => Results.Ok(new { cancelled = orch.Cancel(id) }));
+bk.MapPost("/compare", async (CompareRequestDto body, TradingBot.DevDashboard.Services.Quant.Report.BacktestingService s, CancellationToken ct) =>
+{
+    var res = await s.CompareAsync(body.RunIds ?? Array.Empty<string>(), ct);
+    return res.Ok ? Results.Ok(res) : Results.BadRequest(res);
+});
+
 // Paper-Research-Einträge (Quelle, Hypothese, Regeln, dokumentierte Abweichungen).
 quant.MapGet("/papers", async (QuantApiService s, CancellationToken ct) => Results.Ok(await s.ListPapersAsync(ct)));
 quant.MapPost("/papers", async (PaperResearchEntry entry, QuantApiService s, CancellationToken ct) =>
@@ -306,3 +339,6 @@ static async Task<IResult> RithmicCall<T>(Func<Task<T>> call)
         return Results.Json(new { success = false, message = ex.Message }, statusCode: StatusCodes.Status502BadGateway);
     }
 }
+
+/// <summary>Auswahl gespeicherter Berichte für den Vergleich (keine Neuberechnung).</summary>
+internal sealed record CompareRequestDto(IReadOnlyList<string>? RunIds);

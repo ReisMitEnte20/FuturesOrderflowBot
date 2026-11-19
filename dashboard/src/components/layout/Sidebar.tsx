@@ -6,8 +6,8 @@ import { Activity, ChartCandlestick, ChartColumn, FlaskConical, Settings, Workfl
 const NAV: { to: string; icon: LucideIcon; label: string }[] = [
   { to: "/", icon: Activity, label: "Live" },
   { to: "/signals", icon: Zap, label: "Signals" },
-  { to: "/backtest", icon: ChartCandlestick, label: "Backtest" },
-  { to: "/research", icon: FlaskConical, label: "Research" },
+  { to: "/backtesting", icon: FlaskConical, label: "Backtesting" },
+  { to: "/backtest", icon: ChartCandlestick, label: "Chart-Backtest" },
   { to: "/market", icon: ChartColumn, label: "Market" },
   { to: "/pipeline", icon: Workflow, label: "Pipeline" },
 ];
@@ -64,7 +64,7 @@ export function Sidebar() {
         <p className="eyebrow px-4 pb-2">Workspace</p>
         <div className="space-y-0.5">
           {NAV.map((item) => (
-            <NavItem key={item.to} {...item} active={location.pathname === item.to} />
+            <NavItem key={item.to} {...item} active={location.pathname === item.to || (item.to === "/backtesting" && location.pathname === "/research")} />
           ))}
         </div>
       </nav>
