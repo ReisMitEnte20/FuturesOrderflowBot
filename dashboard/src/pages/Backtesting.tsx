@@ -198,7 +198,7 @@ function TestView() {
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Strategie"><Select value={form.strategy} onChange={chooseStrategy} options={strategies.map((s) => ({ value: s.id, label: s.name }))} /></Field>
             <Field label="Instrument"><Select value={form.symbol} onChange={(v) => set("symbol", v)} options={(instruments.length ? instruments.map((i) => i.symbol) : [form.symbol]).map((s) => ({ value: s, label: s }))} /></Field>
-            <Field label="Datensatz"><Select value={form.dataSourceId} onChange={(v) => setForm((f) => ({ ...f, dataSourceId: v, ...(v.startsWith("ticks-csv:") || v.startsWith("atas-collection:") ? { fromUtc: "", toUtc: "" } : {}) }))} options={sources.map((s) => ({ value: s.id, label: s.label + (s.available ? "" : " (nicht vorhanden)") }))} /></Field>
+            <Field label="Datensatz"><Select value={form.dataSourceId} onChange={(v) => setForm((f) => ({ ...f, dataSourceId: v, ...(v.startsWith("ticks-csv:") || v.startsWith("atas-collection:") || v.startsWith("synthetic:") ? { fromUtc: "", toUtc: "" } : {}) }))} options={sources.map((s) => ({ value: s.id, label: s.label + (s.available ? "" : " (nicht vorhanden)") }))} /></Field>
             <Field label="Kerzen (Minuten)"><Input type="number" value={String(form.timeframeMinutes)} onChange={(v) => set("timeframeMinutes", parseInt(v, 10) || 5)} /></Field>
             <Field label="Von (UTC)"><Input type="datetime-local" value={form.fromUtc} onChange={(v) => set("fromUtc", v)} /></Field>
             <Field label="Bis (UTC, exklusiv)"><Input type="datetime-local" value={form.toUtc} onChange={(v) => set("toUtc", v)} /></Field>
@@ -282,7 +282,7 @@ function TestView() {
                   hint={preview.holdoutSessions ? `Holdout ab ${day(preview.holdoutFrom)} reserviert, wird im normalen Lauf nicht ausgewertet` : "kein Holdout"} />
                 <Info label="Kostenprofil" value={preview.costs ? `${money(preview.costs.feePerSide)} je Seite · ${num(preview.costs.slippageTicks)} Ticks Slippage` : "–"}
                   hint={preview.costs ? `${money(preview.costs.feeRoundTrip)} Round-Turn · Tick ${num(preview.costs.tickSize, 4)} = ${money(preview.costs.tickValue)}${preview.feeIsExample ? " · Beispielprofil, keine echten Broker-Kosten" : ""}` : undefined} />
-                <Info label="Umfang" value={preview.engine === "orderflow-ticks" ? "Basislauf, Abschneidetest, Sensitivität, Referenzlauf" : `${preview.candidates} Walk-forward-Kandidaten`} hint={preview.engine === "orderflow-ticks" ? "Läufe über den bestehenden Tick-Orderflow-Pfad auf denselben, einmal geladenen Ticks" : `ca. ${num(preview.estimatedEngineRuns, 0)} Engine-Läufe auf denselben, einmal geladenen Kerzen`} />
+                <Info label="Umfang" value={preview.engine === "orderflow-ticks" ? `${preview.candidates} Delta-Schwellen im Walk-forward-Raster` : `${preview.candidates} Walk-forward-Kandidaten`} hint={preview.engine === "orderflow-ticks" ? "Läufe über den bestehenden Tick-Orderflow-Pfad auf denselben, einmal geladenen Ticks" : `ca. ${num(preview.estimatedEngineRuns, 0)} Engine-Läufe auf denselben, einmal geladenen Kerzen`} />
               </div>
               <ul className="space-y-0.5">
                 {preview.checks.map((c) => (

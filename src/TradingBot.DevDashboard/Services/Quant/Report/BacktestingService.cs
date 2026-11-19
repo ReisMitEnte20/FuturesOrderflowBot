@@ -183,6 +183,19 @@ public sealed class BacktestingService
     internal static List<Dictionary<string, string>> Grid(StrategyDef? def, Dictionary<string, string> p)
     {
         var axes = new List<(string Key, List<string> Values)>();
+        // Tick-Orderflow (DeltaFlow): vorab festgelegtes Raster NUR über die Delta-Schwelle (Basis ±20 %); die Bar-Größe
+        // bleibt fest, weil sie die Bar-Bildung selbst verändert.
+        if (def?.Engine == OrderflowTickBacktest.EngineKind)
+        {
+            int tpb = OrderflowTickBacktest.TicksPerBarOf(p);
+            decimal th = OrderflowTickBacktest.ThresholdOf(p);
+            return new[] { th * 0.8m, th, th * 1.2m }.Select(x => Math.Round(x, MidpointRounding.AwayFromZero)).Where(x => x > 0).Distinct()
+                .Select(x => new Dictionary<string, string>
+                {
+                    [TradingBot.Application.Strategies.OrderFlow.DeltaFlowStrategy.ThresholdParameterKey] = x.ToString("0.######", CultureInfo.InvariantCulture),
+                    [OrderflowTickBacktest.TicksPerBarKey] = tpb.ToString(CultureInfo.InvariantCulture)
+                }).ToList();
+        }
         if (def is not null)
             foreach (var d in def.Params)
             {
@@ -219,11 +232,31 @@ public sealed class BacktestingService
     {
         if (share <= 0 || candles.Count < 2) return (0, 0, null);
         var starts = TradeDateCalendar.SessionStartIndices(candles.Select(c => c.OpenTime).ToList());
-        int s = starts.Count;
-        if (s < 2) return (0, 0, null);
+        return HoldoutForSessions(starts.Select(i => candles[i].OpenTime).ToList(), share);
+    }
+
+    /// <summary>Wie oben, auf Basis der ersten Zeitpunkte je Handelstag (Tick-Pfad: Handelstage der Ticks selbst).</summary>
+    private static (double Fraction, int HoldoutSessions, DateTimeOffset? From) HoldoutForSessions(IReadOnlyList<DateTimeOffset> sessionFirstTimes, double share)
+    {
+        int s = sessionFirstTimes.Count;
+        if (share <= 0 || s < 2) return (0, 0, null);
         int h = Math.Clamp((int)Math.Round(s * share, MidpointRounding.AwayFromZero), 1, s - 1);
-        int firstHoldoutBar = starts[s - h];
-        return ((h + 0.5) / s, h, candles[firstHoldoutBar].OpenTime);
+        return ((h + 0.5) / s, h, sessionFirstTimes[s - h]);
+    }
+
+    /// <summary>Handelstage + Holdout: im Tick-Pfad aus den Ticks (Tag-genau), sonst aus den Kerzen.</summary>
+    private (int Sessions, double Fraction, int HoldoutSessions, DateTimeOffset? From) SessionPlan(BacktestRunRequest run, bool tick,
+        IReadOnlyList<TradingBot.Domain.Models.Candle> candles, double share)
+    {
+        if (tick)
+        {
+            var lt = _quant.Backtest.Ticks.Load(run);
+            var ranges = OrderflowTickBacktest.SessionRanges(lt.Ticks);
+            var (f, h, from) = HoldoutForSessions(ranges.Select(r => lt.Ticks[r.Start].Timestamp).ToList(), share);
+            return (ranges.Count, f, h, from);
+        }
+        var (f2, h2, from2) = HoldoutFor(candles, share);
+        return (candles.Select(c => TradeDateCalendar.Key(c.OpenTime)).Distinct().Count(), f2, h2, from2);
     }
 
     private string StrategyVersion(BacktestRunRequest run, BacktestApiService.RunContext ctx)
@@ -283,8 +316,7 @@ public sealed class BacktestingService
                 };
             var ctx = await _quant.Backtest.LoadContextAsync(run, ct);
             if (ctx.Candles.Count == 0) return new BacktestingPreview { Ok = false, Error = "Keine gültigen Kerzen im gewählten Zeitraum.", Requirements = reqs, ElapsedMs = sw.ElapsedMilliseconds };
-            var sessions = ctx.Candles.Select(c => TradeDateCalendar.Key(c.OpenTime)).Distinct().Count();
-            var (frac, hs, hFrom) = HoldoutFor(ctx.Candles, r.HoldoutShare);
+            var (sessions, frac, hs, hFrom) = SessionPlan(run, tick, ctx.Candles, r.HoldoutShare);
             int dev = sessions - hs;
             var sens = EffectiveNumericParams(def, run.Params);
             var grid = Grid(def, run.Params);
@@ -295,8 +327,8 @@ public sealed class BacktestingService
                 feeSide, feeSide * 2, slip, slip * ctx.Instrument.TickValue, run.ApplyFees, ctx.InstrumentIsExample, ctx.FeeIsExample);
 
             int splitNeed = 8, wfNeed = r.TrainSessions + r.TestSessions;
-            string Need(int need) => dev < need ? "insufficient" : tick ? "notApplicable" : "possible";
-            string? NeedWhy(int need, string? ok) => dev < need ? $"{need} Sessions benötigt, {dev} vorhanden." : tick ? "Walk-forward über den Tick-Orderflow-Pfad noch nicht angebunden." : ok;
+            string Need(int need) => dev < need ? "insufficient" : "possible";
+            string? NeedWhy(int need, string? ok) => dev < need ? $"{need} Sessions benötigt, {dev} vorhanden." : ok;
             var checks = new List<PlannedCheck>
             {
                 new("data", "01 Datenqualität & zeitliche Korrektheit", "possible", null),
@@ -350,7 +382,8 @@ public sealed class BacktestingService
             throw new InvalidOperationException("Datenanforderungen nicht erfüllt: " +
                 string.Join(" · ", reqs.Where(x => !x.Met).Select(x => $"{x.Requirement}: {x.Detail}")));
         var ctx = await _quant.Backtest.LoadContextAsync(run, ct);
-        var (frac, _, _) = HoldoutFor(ctx.Candles, r.HoldoutShare);
+        bool tickRun = def?.Engine == OrderflowTickBacktest.EngineKind;
+        var (_, frac, _, _) = SessionPlan(run, tickRun, ctx.Candles, r.HoldoutShare);
         var grid = Grid(def, run.Params);
         var sens = EffectiveNumericParams(def, run.Params);
         var pairs = new List<string[]>();
@@ -382,7 +415,7 @@ public sealed class BacktestingService
             SelectionMetric = metric,
             Mode = "Rolling",
             SessionAligned = true, SessionCalendar = "tradedate", TrainSessions = r.TrainSessions, TestSessions = r.TestSessions,
-            TrainBars = 1, TestBars = 1, WarmupBars = WarmupFor(grid), LabelSpanBars = 0, EmbargoBars = 0,
+            TrainBars = 1, TestBars = 1, WarmupBars = tickRun ? 0 : WarmupFor(grid), LabelSpanBars = 0, EmbargoBars = 0,
             HoldoutFraction = frac,
             MonteCarloIterations = opts.SimulationIterations, Seed = r.Seed,
             RobustnessMetric = "netprofit", OverfittingBlocks = 16, EstimateEffectiveTrials = true,

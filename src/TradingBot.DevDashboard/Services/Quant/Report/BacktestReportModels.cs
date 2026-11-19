@@ -176,6 +176,26 @@ public sealed record OosFold
     public decimal BaseNet { get; init; }
     public int BaseTrades { get; init; }
     public string? Note { get; init; }
+
+    // --- Tick-Pfad (Session-genau gespeichert) ---
+    /// <summary>Tatsächliche Handelstage (CME-Trade-Date) des Trainings bzw. Tests.</summary>
+    public IReadOnlyList<string> TrainSessionIds { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<string> TestSessionIds { get; init; } = Array.Empty<string>();
+    /// <summary>Werktage im Testzeitraum OHNE Daten (fehlender Datentag ≠ getesteter Tag ohne Trade).</summary>
+    public IReadOnlyList<string> MissingDataDays { get; init; } = Array.Empty<string>();
+    /// <summary>Je getestetem Handelstag: Netto/Trades des eingefrorenen Gewinners (0 Trades = getestet, kein Einstieg).</summary>
+    public IReadOnlyList<SessionResult> TestSessionResults { get; init; } = Array.Empty<SessionResult>();
+    public IReadOnlyList<SessionResult> BaseTestSessionResults { get; init; } = Array.Empty<SessionResult>();
+    /// <summary>Trainingswert (Auswahlkennzahl) je Kandidat; null = nicht teilnahmeberechtigt (z. B. zu wenige Trades).</summary>
+    public IReadOnlyDictionary<string, double?> CandidateTrainValues { get; init; } = new Dictionary<string, double?>();
+    public IReadOnlyDictionary<string, int> CandidateTrainTrades { get; init; } = new Dictionary<string, int>();
+    public IReadOnlyDictionary<string, string>? BaseParameters { get; init; }
+    public decimal? TestFees { get; init; }
+    public int TestSignals { get; init; }
+    /// <summary>Am Ende des Testfensters offene Position des Gewinners (nicht als Trade gezählt, nicht im Netto).</summary>
+    public string? OpenPositionAtTestEnd { get; init; }
+    /// <summary>Trades des eingefrorenen Gewinners im Testfenster (Signale, Fills, Gebühren, Netto) — zum direkten Nachvollzug.</summary>
+    public IReadOnlyList<TradeRow> TestTradeRows { get; init; } = Array.Empty<TradeRow>();
 }
 
 public sealed record OosVariant
@@ -214,6 +234,11 @@ public sealed record ReportOosSection
     public IReadOnlyList<OosVariant> Variants { get; init; } = Array.Empty<OosVariant>();
     /// <summary>Primärvariante (rollend) — Basis für Übersicht, Simulation und Vergleich.</summary>
     public string? PrimaryVariant { get; init; }
+    /// <summary>Tick-Pfad: Handelstage des Entwicklungsbereichs, fehlende Werktage (ohne Daten) und reservierte Holdout-Tage.</summary>
+    public IReadOnlyList<string> DevelopmentSessionIds { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<string> MissingDataDays { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<string> HoldoutSessionIds { get; init; } = Array.Empty<string>();
+    public string? SelectionMetric { get; init; }
 }
 
 // ---- 07 ----

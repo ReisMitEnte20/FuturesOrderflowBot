@@ -449,6 +449,39 @@ function OosSection({ rep, step }: { rep: BacktestReport; step?: ResearchStepSta
               num(f.trainValue ?? null), <span className={(f.testNet ?? 0) >= 0 ? "text-[var(--key)]" : "text-[var(--red)]"}>{money(f.testNet ?? null)}</span>, f.testTrades,
               money(f.baseNet), <span className="whitespace-normal font-sans text-[var(--fg-faint)]">{f.note ?? ""}</span>,
             ])} />
+          {variant.folds.some((f) => (f.testSessionIds?.length ?? 0) > 0) && (
+            <div className="space-y-2">
+              <div className="text-[11px] text-[var(--fg-dim)]">
+                Je Fenster gespeichert: tatsächliche Handelstage, Trainingswert je Kandidat, eingefrorener Gewinner und der Standardparameter auf genau denselben Testtagen.
+                {o.missingDataDays && o.missingDataDays.length > 0 && <> Fehlende Datentage (Werktage ohne Ticks): <b className="text-[var(--gold)]">{o.missingDataDays.join(", ")}</b>.</>}
+                {o.holdoutSessionIds && o.holdoutSessionIds.length > 0 && <> Reservierter Holdout (unbenutzt): {o.holdoutSessionIds.join(", ")}.</>}
+              </div>
+              {variant.folds.map((f) => (
+                <div key={f.index} className="rounded-md border border-[var(--line)] p-2 text-[11px]">
+                  <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-[var(--fg-dim)]">
+                    <span><b className="text-[var(--fg)]">Fenster {f.index + 1}</b></span>
+                    <span>Training: {f.trainSessionIds?.join(", ")}</span>
+                    <span>Test: {f.testSessionIds?.join(", ")}</span>
+                    {f.missingDataDays && f.missingDataDays.length > 0 && <span className="text-[var(--gold)]">fehlender Datentag: {f.missingDataDays.join(", ")}</span>}
+                  </div>
+                  <div className="mt-1 text-[var(--fg-dim)]">
+                    Trainingswert je Kandidat (Netto nach Kosten): {Object.entries(f.candidateTrainValues ?? {}).map(([k, v]) =>
+                      `${k.replace(/_TicksPerBar\d+$/, "")}: ${v == null ? "ausgeschlossen" : money(v)} (${f.candidateTrainTrades?.[k] ?? 0} Tr.)`).join(" · ")}
+                  </div>
+                  <Tbl className="mt-1" head={["Testtag", "Trades (Gewinner)", "Netto (Gewinner)", "Trades (Standard)", "Netto (Standard)"]}
+                    rows={(f.testSessionResults ?? []).map((s, i) => [
+                      s.key, s.trades === 0 ? <span className="text-[var(--fg-faint)]">0 — getestet, kein Einstieg</span> : s.trades,
+                      money(s.net), f.baseTestSessionResults?.[i]?.trades ?? "–", money(f.baseTestSessionResults?.[i]?.net ?? null),
+                    ])} />
+                  <div className="mt-1 text-[var(--fg-faint)]">
+                    Gewinner {f.selectedParameters ? Object.entries(f.selectedParameters).map(([k, v]) => `${k}=${v}`).join(", ") : "–"} · Standard{" "}
+                    {f.baseParameters ? Object.entries(f.baseParameters).map(([k, v]) => `${k}=${v}`).join(", ") : "–"} · Signale {f.testSignals ?? "–"} · Gebühren {money(f.testFees ?? null)}
+                    {f.openPositionAtTestEnd && <> · {f.openPositionAtTestEnd}</>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </>}
         {variant && variant.status !== "Completed" && <p className="text-[11px] text-[var(--gold)]">{variant.label}: {variant.reason}</p>}
       </>}

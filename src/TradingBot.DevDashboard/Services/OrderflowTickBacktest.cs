@@ -44,7 +44,8 @@ public sealed class OrderflowTickBacktest
     public string? CollectionManifest { get; set; }
 
     public static bool IsTickSource(string dataSourceId) =>
-        dataSourceId.StartsWith("ticks-csv:", StringComparison.Ordinal) || dataSourceId.StartsWith("atas-collection:", StringComparison.Ordinal);
+        dataSourceId.StartsWith("ticks-csv:", StringComparison.Ordinal) || dataSourceId.StartsWith("atas-collection:", StringComparison.Ordinal)
+        || dataSourceId.StartsWith("synthetic:", StringComparison.Ordinal);
 
     public static int TicksPerBarOf(IReadOnlyDictionary<string, string>? p) =>
         p is not null && p.TryGetValue(TicksPerBarKey, out var v) && int.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out var n) && n > 0
@@ -58,7 +59,13 @@ public sealed class OrderflowTickBacktest
 
     public IReadOnlyList<DataSourceDef> GetDataSources()
     {
-        var list = new List<DataSourceDef>();
+        var list = new List<DataSourceDef>
+        {
+            new(SyntheticTickFixtures.OneDayId, "ticks-aggressor", "SYNTHETISCH (keine Marktdaten): MNQ-Ticks, 1 Handelstag", true,
+                "Im Code erzeugte Testsequenz (6 Bars à 500 Ticks). Für Walk-forward zu kurz — dient der Prüfung der Ablehnung."),
+            new(SyntheticTickFixtures.MultiDayId, "ticks-aggressor", "SYNTHETISCH (keine Marktdaten): MNQ-Ticks, 11 Handelstage (Walk-forward-Abnahme)", true,
+                "Im Code erzeugte Testsequenz 01.–16.06.2026 (10.06. fehlt absichtlich, 08.06. ohne Einstiegssignal). Kein Marktbezug.")
+        };
         var dir = System.IO.Path.Combine(_repoRoot, "samples", "ticks");
         if (Directory.Exists(dir))
             foreach (var f in Directory.EnumerateFiles(dir, "*.csv").OrderBy(x => x))
@@ -105,6 +112,20 @@ public sealed class OrderflowTickBacktest
             });
             source = "Trade-Ticks " + System.IO.Path.GetFileName(path);
         }
+        else if (req.DataSourceId.StartsWith("synthetic:", StringComparison.Ordinal))
+        {
+            var csv = SyntheticTickFixtures.CsvFor(req.DataSourceId) ?? throw new InvalidOperationException($"Unbekannte synthetische Quelle '{req.DataSourceId}'.");
+            (set, sha) = Cached(req.DataSourceId, () =>
+            {
+                var profile = JsonSerializer.Deserialize<CsvImportProfile>(
+                    File.ReadAllText(System.IO.Path.Combine(_repoRoot, "config", "import-profiles", "atas-tick.example.json")), JsonRead)
+                    ?? throw new InvalidOperationException("Importprofil atas-tick.example.json ungültig.");
+                var hash = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(csv))).ToLowerInvariant();
+                return (new AtasTickCsvImporter(profile).Import(new StringReader(csv)), hash);
+            });
+            path = "(im Code erzeugt) " + req.DataSourceId;
+            source = req.DataSourceId == SyntheticTickFixtures.OneDayId ? "SYNTHETISCHE MNQ-Ticks (1 Tag)" : "SYNTHETISCHE MNQ-Ticks (11 Handelstage)";
+        }
         else if (req.DataSourceId.StartsWith("atas-collection:", StringComparison.Ordinal))
         {
             var manifest = CollectionManifest ?? throw new InvalidOperationException("Keine ATAS-Collection konfiguriert.");
@@ -141,6 +162,42 @@ public sealed class OrderflowTickBacktest
             Symbol = symbol, OpenTime = b.OpenTime, CloseTime = b.CloseTime, Open = b.Open, High = b.High, Low = b.Low, Close = b.Close, Volume = b.TotalVolume
         }).ToList();
         return (candles, bars);
+    }
+
+    // ---- Handelstage ---------------------------------------------------------------------------------
+
+    /// <summary>Zusammenhängende Tick-Bereiche je CME-Handelstag (Ticks sind zeitlich geordnet).</summary>
+    public static List<(string Key, int Start, int End)> SessionRanges(IReadOnlyList<MarketTick> ticks)
+    {
+        var list = new List<(string, int, int)>();
+        int start = 0; string? cur = null;
+        for (int i = 0; i < ticks.Count; i++)
+        {
+            var k = TradingBot.Quant.Report.TradeDateCalendar.Key(ticks[i].Timestamp);
+            if (k != cur) { if (cur is not null) list.Add((cur, start, i)); cur = k; start = i; }
+        }
+        if (cur is not null) list.Add((cur, start, ticks.Count));
+        return list;
+    }
+
+    /// <summary>Holdout nach ganzen Handelstagen der Ticks: die letzten floor(n·fraction) Tage (identisch zum Walk-forward-Planer).</summary>
+    public static int HoldoutSessions(int sessions, double fraction) => fraction is > 0 and < 1 ? (int)Math.Floor(sessions * fraction) : 0;
+
+    /// <summary>Werktage (Mo–Fr) zwischen erstem und letztem Handelstag, für die KEINE Ticks vorliegen (Feiertag oder Datenlücke).</summary>
+    public static IReadOnlyList<string> MissingWeekdays(IReadOnlyList<string> sessionKeys)
+    {
+        if (sessionKeys.Count < 2) return Array.Empty<string>();
+        var have = sessionKeys.ToHashSet(StringComparer.Ordinal);
+        var res = new List<string>();
+        var d = DateOnly.Parse(sessionKeys[0], CultureInfo.InvariantCulture);
+        var end = DateOnly.Parse(sessionKeys[^1], CultureInfo.InvariantCulture);
+        for (; d <= end; d = d.AddDays(1))
+        {
+            if (d.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday) continue;
+            var k = d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            if (!have.Contains(k)) res.Add(k);
+        }
+        return res;
     }
 
     // ---- Datenanforderungen --------------------------------------------------------------------------

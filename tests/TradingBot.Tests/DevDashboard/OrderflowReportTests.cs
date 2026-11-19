@@ -42,21 +42,8 @@ public class OrderflowReportTests : IDisposable
     /// buy/sell/buy/neutral/sell/buy, Preisschritt 0,25, Aggressor je Trade — ATAS-Tickformat.</summary>
     private static readonly Lazy<string> FixturePath = new(() =>
     {
-        var sb = new System.Text.StringBuilder("Time,Instrument,Price,Volume,AggressorSide\n");
-        var t0 = new DateTimeOffset(2026, 6, 23, 13, 30, 0, TimeSpan.Zero);
-        decimal price = 20000m; int idx = 0;
-        foreach (var typ in new[] { "buy", "sell", "buy", "neutral", "sell", "buy" })
-        {
-            for (int i = 0; i < 500; i++)
-            {
-                decimal p = typ == "buy" ? price + i * 0.25m : typ == "sell" ? price - i * 0.25m : price;
-                string ag = typ == "buy" ? "Buy" : typ == "sell" ? "Sell" : (i % 2 == 0 ? "Buy" : "Sell");
-                sb.Append(System.FormattableString.Invariant($"{t0.AddMilliseconds(100 * idx++):yyyy-MM-ddTHH:mm:ss.fff}Z,MNQ,{p:F2},1,{ag}\n"));
-            }
-            price = typ == "buy" ? price + 125m : typ == "sell" ? price - 125m : price;
-        }
         var path = Path.Combine(Path.GetTempPath(), "mnq-deltaflow-synthetic-" + Guid.NewGuid().ToString("N") + ".csv");
-        File.WriteAllText(path, sb.ToString());
+        File.WriteAllText(path, SyntheticTickFixtures.OneDayCsv());
         return path;
     });
     private static string Fixture => FixturePath.Value;

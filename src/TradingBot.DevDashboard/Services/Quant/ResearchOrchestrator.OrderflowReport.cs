@@ -64,11 +64,21 @@ public sealed partial class ResearchOrchestrator
                 return await Finish(record, ResearchStepStatus.Failed, "Datenanforderungen nicht erfüllt: " + why, ct);
             }
 
-            // Entwicklungs-/Holdout-Split nach ganzen Sessions auf den Tick-Bars (wie der OHLC-Bericht); der Holdout bleibt unbenutzt.
-            var split = await _quant.ComputeHoldoutSplitAsync(cfg.Run, cfg.HoldoutFraction, cfg.SessionAligned ? cfg.SessionCalendar : null, ct);
+            // Entwicklungs-/Holdout-Split TAG-GENAU auf den Ticks: die letzten floor(Handelstage·Anteil) CME-Handelstage sind der
+            // reservierte Holdout — dieselbe Regel wie der session-ausgerichtete Walk-forward-Planer. Holdout-Ticks werden ab
+            // hier nicht mehr angefasst (kein Lauf, keine Kennzahl).
             var full = await bt.LoadContextAsync(cfg.Run, ct);
-            var devTicks = lt.Ticks.Take(split.UsableBars * tpb).ToList();
-            var devRun = split.HoldoutBars > 0 && split.DevelopmentToUtc is { } dEnd ? cfg.Run with { ToUtc = dEnd.ToString("o") } : cfg.Run;
+            var ranges = OrderflowTickBacktest.SessionRanges(lt.Ticks);
+            int hSessions = OrderflowTickBacktest.HoldoutSessions(ranges.Count, cfg.HoldoutFraction);
+            int devCount = ranges.Count - hSessions;
+            var devTicks = lt.Ticks.Take(devCount > 0 ? ranges[devCount - 1].End : 0).ToList();
+            var holdoutIds = ranges.Skip(devCount).Select(r => r.Key).ToList();
+            DateTimeOffset? holdoutStart = hSessions > 0 ? lt.Ticks[ranges[devCount].Start].Timestamp : null;
+            int BarsOf(int ticks) => ticks / tpb;
+            var split = new HoldoutSplit(BarsOf(lt.Ticks.Count), hSessions > 0 ? BarsOf(lt.Ticks.Count - devTicks.Count) : 0, BarsOf(devTicks.Count),
+                lt.Ticks.Count > 0 ? lt.Ticks[0].Timestamp : null, lt.Ticks.Count > 0 ? lt.Ticks[^1].Timestamp : null,
+                holdoutStart, holdoutStart, hSessions > 0 ? lt.Ticks[^1].Timestamp : null, holdoutStart?.AddTicks(-1));
+            var devRun = holdoutStart is { } hs0 ? cfg.Run with { ToUtc = hs0.ToString("o") } : cfg.Run;
             record = record with
             {
                 DataFrom = split.DataFrom, DataTo = split.DataTo, DevelopmentToUtc = split.DevelopmentToUtc,
@@ -88,11 +98,11 @@ public sealed partial class ResearchOrchestrator
                 $"{tpb}-Tick-Orderflow-Bars aus {lt.Source}", 0, Array.Empty<OhlcImportIssue>(),
                 full.InstrumentIsExample, full.FeeIsExample);
             var baseTrades = ToReportTrades(synth, dev);
-            var devSessions = devCandles.Select(c => TradeDateCalendar.Key(c.OpenTime)).Distinct().ToList();
+            var devSessions = ranges.Take(devCount).Select(r => r.Key).ToList();
             var fc = new FullCtx { Cfg = cfg, Opt = opt, DevRun = devRun, Dev = dev, Base = synth, BaseTrades = baseTrades, DevSessions = devSessions };
             var ws = baseRun.Workspace.Strategies.Single();
             var diag = baseRun.RunResults.Single().Diagnostics;
-            int holdoutSessions = full.Candles.Select(c => TradeDateCalendar.Key(c.OpenTime)).Distinct().Count() - devSessions.Count;
+            int holdoutSessions = hSessions;
 
             ReportProvenance Prov() => BuildProvenance(record, fc, split, holdoutSessions) with
             {
@@ -204,33 +214,19 @@ public sealed partial class ResearchOrchestrator
                 return (sec.Applicable ? ResearchStepStatus.Completed : ResearchStepStatus.NotApplicable, sec.Reason, devBasis);
             });
 
-            // --- 06 Walk-forward: Sessions prüfen; die Tick-Kandidatenwahl ist (noch) nicht angebunden ---
-            await Section("oos", 0.40, 0.45, () =>
+            // --- 06 Walk-forward über den Tick-Pfad: vorhandener Planer + WalkForwardRunner, jeder Kandidat durch den
+            //        bestehenden OrderflowMultiStrategyRunner. Holdout-Ticks werden nie übergeben. ---
+            await Section("oos", 0.40, 0.55, async () =>
             {
-                int S = devSessions.Count;
-                int splitNeed = opt.FixedSplitMinTrainSessions + opt.FixedSplitMinTestSessions, wfNeed = cfg.TrainSessions + cfg.TestSessions;
-                OosVariant V(string key, string label, int need) => new()
-                {
-                    Key = key, Label = label, SessionsNeeded = need, SessionsAvailable = S,
-                    Status = S < need ? "InsufficientData" : "NotApplicable",
-                    Reason = S < need ? $"{need} Sessions benötigt, {S} vorhanden."
-                                      : "Walk-forward über den Tick-Orderflow-Pfad ist noch nicht angebunden — es wird keine Parameterwahl auf Testdaten behauptet."
-                };
-                var variants = new[] { V("split", "Fester Train/Test-Split", splitNeed), V("rolling", "Rollierender Walk-forward", wfNeed), V("anchored", "Anwachsender Walk-forward", wfNeed) };
-                report = report with
-                {
-                    Oos = new ReportOosSection
-                    {
-                        SelectionRule = "Tick-Pfad: keine Kandidatenwahl (Walk-forward nicht angebunden).", TieRule = "–", MinTrainTrades = opt.MinTrainTrades,
-                        Grid = cfg.Candidates.Select(c => (IReadOnlyDictionary<string, string>)c).ToList(),
-                        LeakageRules = "Kein Training/Test — keine Grenzen, die durchsickern könnten.",
-                        HoldoutNote = split.HoldoutBars > 0 ? "Finaler Holdout reserviert und unbenutzt." : "Kein finaler Holdout reserviert (zu wenige Sessions).",
-                        Variants = variants
-                    }
-                };
-                bool insufficient = variants.All(v => v.Status == "InsufficientData");
-                return Done(insufficient ? ResearchStepStatus.InsufficientData : ResearchStepStatus.NotApplicable,
-                    string.Join(" · ", variants.Select(v => $"{v.Label}: {v.Reason}")), null);
+                var sec = await BuildTickOosAsync(fc, lt, ranges, devCount, holdoutIds, instrument, fee, ct);
+                report = report with { Oos = sec };
+                var completed = sec.Variants.Where(v => v.Status == "Completed").ToList();
+                if (completed.Count == 0)
+                    return (sec.Variants.All(v => v.Status == "InsufficientData") ? ResearchStepStatus.InsufficientData : ResearchStepStatus.Failed,
+                        string.Join(" · ", sec.Variants.Select(v => $"{v.Label}: {v.Reason}")), null);
+                string? partial = sec.Variants.Any(v => v.Status != "Completed")
+                    ? string.Join(" · ", sec.Variants.Where(v => v.Status != "Completed").Select(v => $"{v.Label}: {v.Reason}")) : null;
+                return (ResearchStepStatus.Completed, partial, "Walk-forward-Testdaten: getrennt simulierte Testfenster (Auswahl nur im Training)");
             });
 
             // --- 07 Simulation (Trade-basiert, gleiche Bausteine) ---
@@ -297,10 +293,16 @@ public sealed partial class ResearchOrchestrator
                     Controls = new ReportControlSection
                     {
                         Basis = "Basislauf-Ticks", Rows = rows, Random = random,
-                        Trials = new TrialHistory(fc.SensitivityVariants + 1, 0, 0, new[] { $"Sensitivität: {fc.SensitivityVariants} Varianten über den Tick-Pfad.", "Walk-forward: nicht angebunden (keine Auswahlentscheidungen)." }),
+                        Trials = new TrialHistory(fc.SensitivityVariants + cfg.Candidates.Count, fc.WfSelectionAttempts, 0, new[]
+                        {
+                            $"Sensitivität: {fc.SensitivityVariants} Varianten über den Tick-Pfad.",
+                            $"Walk-forward-Raster: {cfg.Candidates.Count} Delta-Schwellen in {fc.WfVariantsRun} Varianten; {fc.WfSelectionAttempts} Auswahlentscheidungen.",
+                            "Versuche des Tick-Pfads werden (noch) nicht im Versuchsregister erfasst."
+                        }),
                         Notes = new[]
                         {
-                            "PBO/PSR/DSR nicht berechnet: ohne Walk-forward-Kandidatenmatrix im Tick-Pfad keine Grundlage (keine erfundene Overfitting-Wahrscheinlichkeit).",
+                            "PBO/PSR/DSR im Tick-Pfad NICHT angebunden (separate Folgeaufgabe) — keine Overfitting-Wahrscheinlichkeit ausgewiesen.",
+                            "Engine-Neuläufe mit zusätzlicher Slippage/Latenz im Tick-Pfad NICHT angebunden (separate Folgeaufgabe).",
                             "Zufallskontrolle auf den N-Tick-Bars: Einstieg am Open = erster Tick der gezogenen Bar."
                         }
                     }
@@ -349,8 +351,9 @@ public sealed partial class ResearchOrchestrator
             });
 
             await Section("holdout", 0.96, 0.98, () => Done(ResearchStepStatus.NotApplicable,
-                split.HoldoutBars > 0 ? "Reserviert und unbenutzt — ohne Walk-forward im Tick-Pfad gibt es keinen Kandidaten für eine Schlussprüfung."
-                                      : "Kein Holdout reserviert (zu wenige Sessions).", null));
+                hSessions > 0 ? $"Reserviert und unbenutzt: {hSessions} Handelstag(e) ({string.Join(", ", holdoutIds)}). Keine Holdout-Performance berechnet; " +
+                                "die finale Schlussprüfung ist im Tick-Pfad nicht angebunden."
+                              : "Kein Holdout reserviert (zu wenige Handelstage).", null));
 
             report = report with { Provenance = Prov() };
             report = report with { Overview = BuildOverviewStatic(report, fc) };

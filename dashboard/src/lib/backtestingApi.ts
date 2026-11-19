@@ -71,6 +71,11 @@ export interface OosFold {
   index: number; trainFromT: number; trainToT: number; trainSessions: number; testFromT: number; testToT: number; testSessions: number;
   selectedCandidate?: string | null; selectedParameters?: Record<string, string> | null; trainValue?: number | null;
   testNet?: number | null; testTrades: number; baseNet: number; baseTrades: number; note?: string | null;
+  trainSessionIds?: string[]; testSessionIds?: string[]; missingDataDays?: string[];
+  testSessionResults?: SessionResult[]; baseTestSessionResults?: SessionResult[];
+  candidateTrainValues?: Record<string, number | null>; candidateTrainTrades?: Record<string, number>;
+  baseParameters?: Record<string, string> | null; testFees?: number | null; testSignals?: number; openPositionAtTestEnd?: string | null;
+  testTradeRows?: TradeRow[];
 }
 export interface OosVariant {
   key: string; label: string; status: string; reason?: string | null; sessionsNeeded: number; sessionsAvailable: number;
@@ -109,7 +114,8 @@ export interface BacktestReport {
   equity?: { basis: string; closedTrades: DrawdownResult; markToMarket: DrawdownResult; losingStreak?: { longestCount: number; longestSum: number; from?: string | null; to?: string | null; longestSessionCount: number } | null; notes: string[] } | null;
   risk?: { basis: string; frequency: string; periodsPerYear?: number | null; annualizationNote: string; capitalBase: string; metrics: QuantMetric[]; notes: string[] } | null;
   sensitivity?: { basis: string; applicable: boolean; reason?: string | null; minTrades: number; definition: string; sessionKeys: string[]; parameters: SensitivityParam[]; pairs: SensitivityPair[]; engineRuns: number } | null;
-  oos?: { selectionRule: string; tieRule: string; minTrainTrades: number; grid: Record<string, string>[]; warmupBars: number; leakageRules: string; holdoutNote: string; variants: OosVariant[]; primaryVariant?: string | null } | null;
+  oos?: { selectionRule: string; tieRule: string; minTrainTrades: number; grid: Record<string, string>[]; warmupBars: number; leakageRules: string; holdoutNote: string; variants: OosVariant[]; primaryVariant?: string | null;
+    developmentSessionIds?: string[]; missingDataDays?: string[]; holdoutSessionIds?: string[]; selectionMetric?: string | null } | null;
   simulation?: {
     basis: string; basisReason: string; iterations: number; seed: number; methods: SimulationResult[];
     executionStress: { id: string; label: string; net: number; maxDrawdown: number; trades: number; kind: string }[];
