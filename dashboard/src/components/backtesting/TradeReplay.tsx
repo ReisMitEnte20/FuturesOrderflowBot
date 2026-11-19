@@ -88,7 +88,7 @@ export function TradeReplay({ request, trades, focus, pointValue, onClose }: {
       </div>
       {exitReached && (
         <div className="text-[11px] text-[var(--fg-dim)]">
-          Schätzung aus Kerzen, ganzer Trade (Backend): MAE {money(t.mae)} · MFE {money(t.mfe)}{t.excursionLowerBound ? " — Untergrenze" : ""} · {t.excursionBasis}
+          {t.excursionMeasured ? "Gemessen aus Trade-Ticks, ganzer Trade (Backend)" : "Schätzung aus Kerzen, ganzer Trade (Backend)"}: MAE {money(t.mae)} · MFE {money(t.mfe)}{t.excursionLowerBound ? " — Untergrenze" : ""} · {t.excursionBasis}
         </div>
       )}
       <BacktestChart

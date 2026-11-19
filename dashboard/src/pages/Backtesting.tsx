@@ -198,7 +198,7 @@ function TestView() {
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Strategie"><Select value={form.strategy} onChange={chooseStrategy} options={strategies.map((s) => ({ value: s.id, label: s.name }))} /></Field>
             <Field label="Instrument"><Select value={form.symbol} onChange={(v) => set("symbol", v)} options={(instruments.length ? instruments.map((i) => i.symbol) : [form.symbol]).map((s) => ({ value: s, label: s }))} /></Field>
-            <Field label="Datensatz"><Select value={form.dataSourceId} onChange={(v) => set("dataSourceId", v)} options={sources.map((s) => ({ value: s.id, label: s.label + (s.available ? "" : " (nicht vorhanden)") }))} /></Field>
+            <Field label="Datensatz"><Select value={form.dataSourceId} onChange={(v) => setForm((f) => ({ ...f, dataSourceId: v, ...(v.startsWith("ticks-csv:") || v.startsWith("atas-collection:") ? { fromUtc: "", toUtc: "" } : {}) }))} options={sources.map((s) => ({ value: s.id, label: s.label + (s.available ? "" : " (nicht vorhanden)") }))} /></Field>
             <Field label="Kerzen (Minuten)"><Input type="number" value={String(form.timeframeMinutes)} onChange={(v) => set("timeframeMinutes", parseInt(v, 10) || 5)} /></Field>
             <Field label="Von (UTC)"><Input type="datetime-local" value={form.fromUtc} onChange={(v) => set("fromUtc", v)} /></Field>
             <Field label="Bis (UTC, exklusiv)"><Input type="datetime-local" value={form.toUtc} onChange={(v) => set("toUtc", v)} /></Field>
@@ -243,17 +243,46 @@ function TestView() {
             <h3 className="text-[13px] font-medium text-[var(--fg)]">Vor dem Start</h3>
             {previewing && <span className="text-[10px] text-[var(--cyan)] animate-pulse">Daten werden geprüft …</span>}
           </div>
+          {strategy?.dataRequirements && strategy.dataRequirements.length > 0 && (
+            <div className="rounded-md border border-[var(--line)] p-2 text-[11px]">
+              <div className="mb-0.5 font-medium text-[var(--fg)]">Datenanforderungen „{strategy.name}“
+                <span className="ml-2 rounded bg-[var(--panel-3)] px-1 text-[9px] text-[var(--fg-dim)]">{strategy.engine === "orderflow-ticks" ? "Tick-Orderflow-Pfad" : "OHLC-Kerzen-Engine"}</span>
+              </div>
+              <ul className="list-disc pl-4 text-[var(--fg-dim)]">{strategy.dataRequirements.map((d) => <li key={d}>{d}</li>)}</ul>
+            </div>
+          )}
+          {preview?.requirements && preview.requirements.length > 0 && (
+            <ul className="space-y-0.5" aria-label="Prüfung der Datenanforderungen">
+              {preview.requirements.map((r) => (
+                <li key={r.requirement} className="flex items-start gap-2 text-[11px]">
+                  <span className={cn("mt-0.5 rounded px-1 text-[9px] whitespace-nowrap", r.met ? "bg-[rgba(60,240,160,0.15)] text-[var(--key)]" : "bg-[rgba(240,86,106,0.18)] text-[var(--red)]")}>
+                    {r.met ? "erfüllt" : "fehlt"}
+                  </span>
+                  <span className="text-[var(--fg)]">{r.requirement}</span>
+                  <span className="text-[var(--fg-faint)]">— {r.detail}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {preview?.ok && !preview.canStart && (
+            <p className="rounded-md border border-[var(--red)] px-2 py-1 text-[11px] text-[var(--red)]">
+              Start nicht möglich: Der gewählte Datensatz erfüllt die Datenanforderungen nicht (siehe „fehlt“). Es wird nichts geschätzt oder ersetzt.
+            </p>
+          )}
+          {preview?.ok && preview.canStart && preview.signalData && (
+            <div className="text-[11px] text-[var(--fg-dim)]"><b className="text-[var(--fg)]">Signal:</b> {preview.signalData} · <b className="text-[var(--fg)]">Ausführung:</b> {preview.executionData}</div>
+          )}
           {!preview ? <p className="text-[11px] text-[var(--fg-faint)]">Wähle Datensatz und Zeitraum.</p> : !preview.ok ? (
             <p className="text-[11px] text-[var(--red)]">{preview.error}</p>
-          ) : (
+          ) : !preview.canStart ? null : (
             <>
               <div className="grid grid-cols-2 gap-2 text-[11px]">
-                <Info label="Datenumfang" value={`${num(preview.bars, 0)} Kerzen · ${preview.sessions} Handelstage`} hint={`${dt(preview.from)} – ${dt(preview.to)} UTC · ${preview.dataKind}`} />
+                <Info label="Datenumfang" value={`${num(preview.bars, 0)} ${preview.engine === "orderflow-ticks" ? "Tick-Bars" : "Kerzen"} · ${preview.sessions} Handelstage`} hint={`${dt(preview.from)} – ${dt(preview.to)} UTC · ${preview.dataKind}`} />
                 <Info label="Aufteilung" value={`${preview.developmentSessions} Entwicklung · ${preview.holdoutSessions} Holdout`}
                   hint={preview.holdoutSessions ? `Holdout ab ${day(preview.holdoutFrom)} reserviert, wird im normalen Lauf nicht ausgewertet` : "kein Holdout"} />
                 <Info label="Kostenprofil" value={preview.costs ? `${money(preview.costs.feePerSide)} je Seite · ${num(preview.costs.slippageTicks)} Ticks Slippage` : "–"}
                   hint={preview.costs ? `${money(preview.costs.feeRoundTrip)} Round-Turn · Tick ${num(preview.costs.tickSize, 4)} = ${money(preview.costs.tickValue)}${preview.feeIsExample ? " · Beispielprofil, keine echten Broker-Kosten" : ""}` : undefined} />
-                <Info label="Umfang" value={`${preview.candidates} Walk-forward-Kandidaten`} hint={`ca. ${num(preview.estimatedEngineRuns, 0)} Engine-Läufe auf denselben, einmal geladenen Kerzen`} />
+                <Info label="Umfang" value={preview.engine === "orderflow-ticks" ? "Basislauf, Abschneidetest, Sensitivität, Referenzlauf" : `${preview.candidates} Walk-forward-Kandidaten`} hint={preview.engine === "orderflow-ticks" ? "Läufe über den bestehenden Tick-Orderflow-Pfad auf denselben, einmal geladenen Ticks" : `ca. ${num(preview.estimatedEngineRuns, 0)} Engine-Läufe auf denselben, einmal geladenen Kerzen`} />
               </div>
               <ul className="space-y-0.5">
                 {preview.checks.map((c) => (
@@ -272,7 +301,7 @@ function TestView() {
             {running ? (
               <button onClick={cancel} className="h-9 px-4 rounded-md bg-[var(--red)] text-black text-sm font-medium">Auftrag abbrechen</button>
             ) : (
-              <button onClick={start} disabled={starting || !preview?.ok}
+              <button onClick={start} disabled={starting || !preview?.ok || !preview.canStart}
                 className="h-9 px-5 rounded-md bg-grad-brand text-[var(--bg)] text-sm font-semibold disabled:opacity-50">
                 {starting ? "Wird gestartet …" : "Vollständigen Backtest starten"}
               </button>

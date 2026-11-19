@@ -27,6 +27,8 @@ var tickReplayCollection = builder.Configuration["TickReplay:CollectionDir"]
 var tickReplayCache = builder.Configuration["TickReplay:CacheDir"]
     ?? Path.Combine(repoRoot ?? AppContext.BaseDirectory, "artifacts", "tickreplay-cache");
 builder.Services.AddSingleton(new TickReplayService(tickReplayCollection, tickReplayCache));
+// Dieselbe Collection als Tick-Datenquelle im Backtesting (je Handelstag; manifest-geprüfter Import, nur lesend).
+backtestApi.Ticks.CollectionManifest = Path.Combine(tickReplayCollection, "collection_manifest.json");
 // QUANT-RESEARCH (Auswertung, Validierung, Monte Carlo, Overfitting) — rechnet ausschließlich lokal
 // auf den Ergebnissen der OHLC-Engine. Keine Broker-/Marktdaten-Calls, keine Orders.
 builder.Services.AddSingleton(new QuantApiService(backtestApi, repoRoot));

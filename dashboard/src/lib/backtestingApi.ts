@@ -10,7 +10,8 @@ import type {
 
 const BASE = String(((import.meta as any).env ?? {}).VITE_BACKTESTING_API || apiUrl("/api/backtesting"));
 
-export interface StrategyDef extends BaseStrategyDef { usesFixedStops: boolean; }
+export interface StrategyDef extends BaseStrategyDef { usesFixedStops: boolean; engine: string; dataRequirements?: string[] | null; }
+export interface DataRequirementCheck { requirement: string; met: boolean; detail: string; }
 
 export interface BacktestingStartRequest {
   strategy: string; params: Record<string, string>; symbol: string; dataSourceId: string; path?: string | null;
@@ -29,6 +30,7 @@ export interface BacktestingPreview {
   holdoutFrom?: string | null; holdoutFraction: number; costs?: CostProfile | null; feeIsExample: boolean;
   strategy?: StrategyDef | null; candidates: number; sensitivityParameters: string[]; estimatedEngineRuns: number;
   checks: PlannedCheck[]; elapsedMs: number;
+  requirements: DataRequirementCheck[]; canStart: boolean; engine: string; signalData: string; executionData: string;
 }
 
 export interface ReportValue { value: number | null; reason?: string | null; }
@@ -83,6 +85,8 @@ export interface TradeRow {
   index: number; side: string; entryT: number; exitT: number; entryPrice: number; exitPrice: number; entryBar: number; exitBar: number;
   gross: number; fees: number; net: number; exitReason: string; ambiguous: boolean; closedAtEnd: boolean; session: string;
   mae?: number | null; mfe?: number | null; excursionLowerBound: boolean; excursionBasis: string; stopLoss: number; takeProfit: number;
+  entrySignalUtc?: string | null; entrySignalDirection?: string | null; exitSignalUtc?: string | null; exitSignalDirection?: string | null;
+  entryTimeUtc?: string | null; exitTimeUtc?: string | null; excursionMeasured?: boolean;
 }
 
 export interface BacktestReport {
@@ -93,6 +97,7 @@ export interface BacktestReport {
     sessionsUsed: string[]; holdoutSessions: number; parameters: Record<string, string>; quantity: number; initialBalance: number;
     costModel?: CostProfile | null; fillModel: string[]; seeds: Record<string, number>; analysisProfile: Record<string, string>;
     dataFileReads: number; dataCacheHits: number;
+    engineKind?: string; signalData?: string; executionData?: string;
   };
   overview: { figures: OverviewFigure[] };
   data?: {
@@ -100,7 +105,7 @@ export interface BacktestReport {
     medianBarsPerSession: number; dstTransitions: string[]; intraSessionGaps: number; largestGapMinutes: number;
     temporalChecks: CheckResult[]; historyLimits: string[];
   } | null;
-  result?: { basis: string; stats: TradeStats; costs?: CostProfile | null; evaluatedBars: number; signalsGenerated: number; missedEntrySkips: number; invalidStopSkips: number; notes: string[] } | null;
+  result?: { basis: string; stats: TradeStats; costs?: CostProfile | null; evaluatedBars: number; signalsGenerated: number; missedEntrySkips: number; invalidStopSkips: number; ordersSubmitted?: number | null; openPositionAtEnd?: string | null; notes: string[] } | null;
   equity?: { basis: string; closedTrades: DrawdownResult; markToMarket: DrawdownResult; losingStreak?: { longestCount: number; longestSum: number; from?: string | null; to?: string | null; longestSessionCount: number } | null; notes: string[] } | null;
   risk?: { basis: string; frequency: string; periodsPerYear?: number | null; annualizationNote: string; capitalBase: string; metrics: QuantMetric[]; notes: string[] } | null;
   sensitivity?: { basis: string; applicable: boolean; reason?: string | null; minTrades: number; definition: string; sessionKeys: string[]; parameters: SensitivityParam[]; pairs: SensitivityPair[]; engineRuns: number } | null;

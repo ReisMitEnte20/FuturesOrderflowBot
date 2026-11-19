@@ -66,6 +66,13 @@ public sealed record BacktestingPreview
     public IReadOnlyList<string> SensitivityParameters { get; init; } = Array.Empty<string>();
     public int EstimatedEngineRuns { get; init; }
     public IReadOnlyList<PlannedCheck> Checks { get; init; } = Array.Empty<PlannedCheck>();
+    /// <summary>Datenanforderungen der Strategie und ob der gewählte Datensatz sie erfüllt (vor dem Start sichtbar).</summary>
+    public IReadOnlyList<DataRequirementCheck> Requirements { get; init; } = Array.Empty<DataRequirementCheck>();
+    /// <summary>False, wenn eine Anforderung fehlt — dann startet der Auftrag nicht.</summary>
+    public bool CanStart { get; init; } = true;
+    public string Engine { get; init; } = "ohlc";
+    public string SignalData { get; init; } = "";
+    public string ExecutionData { get; init; } = "";
     public long ElapsedMs { get; init; }
 }
 
@@ -237,15 +244,45 @@ public sealed class BacktestingService
         catch { return $"{run.Strategy} @ {code}"; }
     }
 
+    /// <summary>Prüft die Datenanforderungen der Strategie gegen den gewählten Datensatz — fail-closed, nichts wird geschätzt.</summary>
+    private (IReadOnlyList<DataRequirementCheck> Checks, bool CanStart) Requirements(BacktestRunRequest run, StrategyDef? def)
+    {
+        if (def is null) return (new[] { new DataRequirementCheck("Bekannte Strategie", false, $"Strategie '{run.Strategy}' ist nicht registriert.") }, false);
+        bool tickSource = OrderflowTickBacktest.IsTickSource(run.DataSourceId);
+        if (def.Engine == OrderflowTickBacktest.EngineKind)
+        {
+            int tpb = OrderflowTickBacktest.TicksPerBarOf(run.Params);
+            if (!tickSource)
+            {
+                string label = _quant.Backtest.GetDataSources().FirstOrDefault(d => d.Id == run.DataSourceId)?.Label ?? run.DataSourceId;
+                return (OrderflowTickBacktest.Check(null, run.DataSourceId, tpb, label), false);
+            }
+            var checks = OrderflowTickBacktest.Check(_quant.Backtest.Ticks.Load(run), run.DataSourceId, tpb, null);
+            return (checks, checks.All(c => c.Met));
+        }
+        if (tickSource)
+            return (new[] { new DataRequirementCheck("OHLC-Zeitkerzen", false,
+                $"{def.Name} rechnet auf Zeitkerzen; der gewählte Tick-Datensatz liefert N-Tick-Bars ohne feste Dauer — für diese Strategie nicht vorgesehen.") }, false);
+        return (new[] { new DataRequirementCheck("OHLC-Zeitkerzen", true, "Datensatz liefert Zeitkerzen.") }, true);
+    }
+
     public async Task<BacktestingPreview> PreviewAsync(BacktestingStartRequest r, CancellationToken ct = default)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         try
         {
             var run = RunOf(r);
-            var ctx = await _quant.Backtest.LoadContextAsync(run, ct);
-            if (ctx.Candles.Count == 0) return new BacktestingPreview { Ok = false, Error = "Keine gültigen Kerzen im gewählten Zeitraum.", ElapsedMs = sw.ElapsedMilliseconds };
             var def = Def(r.Strategy);
+            var (reqs, canStart) = Requirements(run, def);
+            bool tick = def?.Engine == OrderflowTickBacktest.EngineKind;
+            if (!canStart)
+                return new BacktestingPreview
+                {
+                    Ok = true, CanStart = false, Requirements = reqs, Strategy = def, Engine = def?.Engine ?? "?",
+                    Symbol = r.Symbol, ElapsedMs = sw.ElapsedMilliseconds
+                };
+            var ctx = await _quant.Backtest.LoadContextAsync(run, ct);
+            if (ctx.Candles.Count == 0) return new BacktestingPreview { Ok = false, Error = "Keine gültigen Kerzen im gewählten Zeitraum.", Requirements = reqs, ElapsedMs = sw.ElapsedMilliseconds };
             var sessions = ctx.Candles.Select(c => TradeDateCalendar.Key(c.OpenTime)).Distinct().Count();
             var (frac, hs, hFrom) = HoldoutFor(ctx.Candles, r.HoldoutShare);
             int dev = sessions - hs;
@@ -258,7 +295,8 @@ public sealed class BacktestingService
                 feeSide, feeSide * 2, slip, slip * ctx.Instrument.TickValue, run.ApplyFees, ctx.InstrumentIsExample, ctx.FeeIsExample);
 
             int splitNeed = 8, wfNeed = r.TrainSessions + r.TestSessions;
-            string Need(int need) => dev >= need ? "possible" : "insufficient";
+            string Need(int need) => dev < need ? "insufficient" : tick ? "notApplicable" : "possible";
+            string? NeedWhy(int need, string? ok) => dev < need ? $"{need} Sessions benötigt, {dev} vorhanden." : tick ? "Walk-forward über den Tick-Orderflow-Pfad noch nicht angebunden." : ok;
             var checks = new List<PlannedCheck>
             {
                 new("data", "01 Datenqualität & zeitliche Korrektheit", "possible", null),
@@ -268,22 +306,25 @@ public sealed class BacktestingService
                     dev >= 20 ? "Tagesrenditen, annualisiert mit 252" : $"Für belastbare Kennzahlen 20 Handelstage benötigt, {dev} vorhanden — werden als „nicht definiert“ ausgewiesen."),
                 new("sensitivity", "05 Parametersensitivität", sens.Count > 0 ? "possible" : "notApplicable",
                     sens.Count > 0 ? $"{sens.Count} Parameter: {string.Join(", ", sens)}" : "Keine einstellbaren numerischen Parameter."),
-                new("oos-split", "06 Walk-forward-Testdaten: fester Train/Test-Split", Need(splitNeed), dev >= splitNeed ? null : $"{splitNeed} Sessions benötigt, {dev} vorhanden."),
-                new("oos-rolling", "06 Walk-forward-Testdaten: rollierend", Need(wfNeed), dev >= wfNeed ? $"{r.TrainSessions} Training / {r.TestSessions} Test" : $"{wfNeed} Sessions benötigt, {dev} vorhanden."),
-                new("oos-anchored", "06 Walk-forward-Testdaten: anwachsend", Need(wfNeed), dev >= wfNeed ? null : $"{wfNeed} Sessions benötigt, {dev} vorhanden."),
+                new("oos-split", "06 Walk-forward-Testdaten: fester Train/Test-Split", Need(splitNeed), NeedWhy(splitNeed, null)),
+                new("oos-rolling", "06 Walk-forward-Testdaten: rollierend", Need(wfNeed), NeedWhy(wfNeed, $"{r.TrainSessions} Training / {r.TestSessions} Test")),
+                new("oos-anchored", "06 Walk-forward-Testdaten: anwachsend", Need(wfNeed), NeedWhy(wfNeed, null)),
                 new("simulation", "07 Monte Carlo & Bootstrap", "possible", $"{r.SimulationIterations} Wiederholungen je Verfahren, Seed {r.Seed}"),
                 new("costs", "08 Kosten- & Ausführungsstress", "possible", null),
                 new("stability", "09 Stabilität", "possible", null),
                 new("concentration", "10 Konzentration & Ausreißer", dev >= 5 ? "possible" : "insufficient", dev >= 5 ? null : $"Weglassen je Handelstag: 5 Sessions benötigt, {dev} vorhanden."),
                 new("controls", "11 Benchmarks, Kontrollläufe & Overfitting", "possible", null),
-                new("trades", "12 Einzeltrade-Prüfung", "possible", "MAE/MFE als Schätzung aus Kerzen (nicht tickgenau)"),
-                new("holdout", "Finaler Holdout – unbenutzt", hs > 0 ? "reserved" : "notApplicable", hs > 0 ? $"{hs} Session(s) ab {hFrom:yyyy-MM-dd} reserviert — im normalen Lauf nicht ausgewertet." : "Holdout-Anteil 0.")
+                new("trades", "12 Einzeltrade-Prüfung", "possible", tick ? "MAE/MFE gemessen aus den Trade-Ticks" : "MAE/MFE als Schätzung aus Kerzen (nicht tickgenau)"),
+                new("holdout", "Finaler Holdout – unbenutzt", hs > 0 ? "reserved" : "notApplicable", hs > 0 ? $"{hs} Session(s) ab {hFrom:yyyy-MM-dd} reserviert — im normalen Lauf nicht ausgewertet." : r.HoldoutShare > 0 ? $"Kein Holdout reserviert: {sessions} Session(s) vorhanden, mindestens 2 nötig." : "Holdout-Anteil 0.")
             };
             int pairRuns = (def?.Params.Count >= 2 ? 25 : 0) + (def?.UsesFixedStops == true ? 25 : 0);
             return new BacktestingPreview
             {
                 Ok = true, Source = ctx.Source,
-                DataKind = ctx.Source.StartsWith("Sierra", StringComparison.OrdinalIgnoreCase) ? "OHLC aus Trade-Ticks (Last), keine Quotes" : "OHLC-CSV",
+                DataKind = tick ? "Trade-Ticks mit gemessenem Aggressor, keine Quotes" : ctx.Source.StartsWith("Sierra", StringComparison.OrdinalIgnoreCase) ? "OHLC aus Trade-Ticks (Last), keine Quotes" : "OHLC-CSV",
+                Requirements = reqs, CanStart = true, Engine = def?.Engine ?? "ohlc",
+                SignalData = tick ? $"{OrderflowTickBacktest.TicksPerBarOf(run.Params)}-Tick-Orderflow-Bars, Delta gemessen aus Aggressor je Trade" : $"OHLC-Zeitkerzen ({ctx.TimeframeMinutes} Min)",
+                ExecutionData = tick ? "Bestehende tick-getriebene BacktestEngine: Fill am nächsten Trade-Tick ± Slippage" : "Bar-basierte OHLC-Engine: Fill am Open der Folgekerze ± Slippage",
                 Symbol = ctx.Instrument.Symbol, TimeframeMinutes = ctx.TimeframeMinutes,
                 From = ctx.Candles[0].OpenTime, To = ctx.Candles[^1].CloseTime, Bars = ctx.Candles.Count,
                 Sessions = sessions, DevelopmentSessions = dev, HoldoutSessions = hs, HoldoutFrom = hFrom, HoldoutFraction = frac,
@@ -303,8 +344,12 @@ public sealed class BacktestingService
     public async Task<ResearchStartRequest> BuildStartRequestAsync(BacktestingStartRequest r, CancellationToken ct = default)
     {
         var run = RunOf(r);
-        var ctx = await _quant.Backtest.LoadContextAsync(run, ct);
         var def = Def(r.Strategy);
+        var (reqs, canStart) = Requirements(run, def);
+        if (!canStart)
+            throw new InvalidOperationException("Datenanforderungen nicht erfüllt: " +
+                string.Join(" · ", reqs.Where(x => !x.Met).Select(x => $"{x.Requirement}: {x.Detail}")));
+        var ctx = await _quant.Backtest.LoadContextAsync(run, ct);
         var (frac, _, _) = HoldoutFor(ctx.Candles, r.HoldoutShare);
         var grid = Grid(def, run.Params);
         var sens = EffectiveNumericParams(def, run.Params);
@@ -408,7 +453,11 @@ public sealed class BacktestingService
         Same("Slippage (Ticks)", x => x.Rep.Provenance.CostModel?.SlippageTicks.ToString("0.##", CultureInfo.InvariantCulture));
         Same("Gebühren aktiv", x => x.Rep.Provenance.CostModel?.ApplyFees);
         Same("Zeitrahmen (Min.)", x => x.Rep.Provenance.TimeframeMinutes);
-        Same("Fillmodell", x => x.Rep.Provenance.FillModel.FirstOrDefault()?.Length > 0 ? "OHLC-Bar-Engine" : "–");
+        // Ausführungsmodell/Signaldaten ausdrücklich prüfen: ein Tick-Orderflow-Lauf ist NICHT gleichwertig mit einem Kerzenlauf.
+        Same("Ausführungsmodell", x => string.IsNullOrEmpty(x.Rep.Provenance.EngineKind) || x.Rep.Provenance.EngineKind == "ohlc-bars"
+            ? "OHLC-Bar-Engine (Fill am Open der Folgekerze)" : "Tick-Engine (Fill am nächsten Trade-Tick)");
+        Same("Signaldaten", x => x.Rep.Provenance.EngineKind == OrderflowTickBacktest.EngineKind
+            ? "N-Tick-Orderflow-Bars mit gemessenem Delta" : $"OHLC-Zeitkerzen ({x.Rep.Provenance.TimeframeMinutes} Min)");
         Same("Datenart", x => x.Rep.Provenance.DataKind);
 
         // Gemeinsame OOS-Sessions der Primärvariante.

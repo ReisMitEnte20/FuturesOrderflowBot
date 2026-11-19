@@ -61,6 +61,12 @@ public sealed record ReportProvenance
     public IReadOnlyDictionary<string, string> AnalysisProfile { get; init; } = new Dictionary<string, string>();
     public int DataFileReads { get; init; }
     public int DataCacheHits { get; init; }
+    /// <summary>"ohlc-bars" (bar-basierte OHLC-Engine) oder "orderflow-ticks" (bestehender Tick-Orderflow-Pfad).</summary>
+    public string EngineKind { get; init; } = "";
+    /// <summary>Welche Daten das SIGNAL erzeugt haben.</summary>
+    public string SignalData { get; init; } = "";
+    /// <summary>Welche Daten/Regeln die simulierte AUSFÜHRUNG bestimmt haben.</summary>
+    public string ExecutionData { get; init; } = "";
 }
 
 /// <summary>Eine Übersichtskennzahl mit ausdrücklicher Herkunft (Basislauf, Training, OOS, Simulation).</summary>
@@ -100,6 +106,9 @@ public sealed record ReportResultSection
     public int SignalsGenerated { get; init; }
     public int MissedEntrySkips { get; init; }
     public int InvalidStopSkips { get; init; }
+    /// <summary>Tick-Pfad: von der Engine angenommene Orders bzw. am Datenende offene Position (Diagnostik der Engine).</summary>
+    public int? OrdersSubmitted { get; init; }
+    public string? OpenPositionAtEnd { get; init; }
     public IReadOnlyList<string> Notes { get; init; } = Array.Empty<string>();
 }
 
@@ -275,7 +284,9 @@ public sealed record ReportControlSection
 // ---- 12 ----
 public sealed record TradeRow(int Index, string Side, long EntryT, long ExitT, decimal EntryPrice, decimal ExitPrice,
     int EntryBar, int ExitBar, decimal Gross, decimal Fees, decimal Net, string ExitReason, bool Ambiguous, bool ClosedAtEnd,
-    string Session, double? Mae, double? Mfe, bool ExcursionLowerBound, string ExcursionBasis, decimal StopLoss, decimal TakeProfit);
+    string Session, double? Mae, double? Mfe, bool ExcursionLowerBound, string ExcursionBasis, decimal StopLoss, decimal TakeProfit,
+    string? EntrySignalUtc = null, string? EntrySignalDirection = null, string? ExitSignalUtc = null, string? ExitSignalDirection = null,
+    string? EntryTimeUtc = null, string? ExitTimeUtc = null, bool ExcursionMeasured = false);
 
 public sealed record ReportTradeSection
 {

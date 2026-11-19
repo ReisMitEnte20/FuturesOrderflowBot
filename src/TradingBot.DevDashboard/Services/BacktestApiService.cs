@@ -11,9 +11,11 @@ namespace TradingBot.DevDashboard.Services;
 // ---- DTOs (JSON für das React-Dashboard) ----
 public sealed record StrategyParamDef(string Key, string Label, string Type, string Default);
 /// <summary>Strategie-Definition. <see cref="UsesFixedStops"/> = Stop/Ziel kommen aus den Tick-Vorgaben des Laufs (dann sind
-/// StopLossTicks/TakeProfitTicks wirksame Parameter); false = die Strategie setzt Stop/Ziel selbst (z. B. ORB).</summary>
+/// StopLossTicks/TakeProfitTicks wirksame Parameter); false = die Strategie setzt Stop/Ziel selbst (z. B. ORB).
+/// <see cref="Engine"/>: "ohlc" (bar-basierte OHLC-Engine auf Zeitkerzen) oder "orderflow-ticks" (bestehender Tick-Orderflow-Pfad:
+/// BacktestEngine, Signal auf N-Tick-Bars mit gemessenem Delta). <see cref="DataRequirements"/> nennt, was der Datensatz liefern muss.</summary>
 public sealed record StrategyDef(string Id, string Name, string Description, bool IsReference, IReadOnlyList<StrategyParamDef> Params,
-    bool UsesFixedStops = true);
+    bool UsesFixedStops = true, string Engine = "ohlc", IReadOnlyList<string>? DataRequirements = null);
 public sealed record InstrumentDef(string Symbol, decimal TickSize, decimal TickValue, decimal PointValue, int MaxContracts, int DefaultStopLossTicks, int DefaultTakeProfitTicks);
 /// <summary>Datenquelle. <see cref="DefaultFromUtc"/>/<see cref="DefaultMaxRows"/> beschreiben einen begrenzten,
 /// geeigneten Standard-Ausschnitt für das erste Laden (null = ganze Quelle bzw. Standardgrenze).</summary>
@@ -109,6 +111,7 @@ public sealed class BacktestApiService
         _feesDir = Path.Combine(repoRoot, "config", "fees");
         _instruments = new InstrumentProfileProvider(cfg, _instrumentsDir);
         _fees = new FeeProfileProvider(cfg, _feesDir);
+        Ticks = new OrderflowTickBacktest(repoRoot);
     }
 
     /// <summary>Nur Beispielprofile im Verzeichnis (ausschließlich *.example.json, keine echten Broker-Werte)?</summary>
@@ -136,8 +139,24 @@ public sealed class BacktestApiService
             "FESTE ORB-Baseline (Zarattini & Aziz 2023) auf MES: erste 5-Min-Kerze ab 09:30 ET, Richtung aus " +
             "Close vs. Open (Doji = kein Trade), Einstieg am Folgebar-Open, Stop am Gegenextrem, Ziel 10R bzw. " +
             "Session-Ende 16:00 ET, 1 Kontrakt. Keine Varianten; Paper-Renditen werden NICHT auf MES übertragen.",
-            true, Array.Empty<StrategyParamDef>(), UsesFixedStops: false)
+            true, Array.Empty<StrategyParamDef>(), UsesFixedStops: false,
+            DataRequirements: new[] { "OHLC-Zeitkerzen (5 Minuten) mit New-York-Sessionzeiten" }),
+        new StrategyDef("deltaflow", "DeltaFlow (Orderflow, Tick-Delta)",
+            "Bestehende Orderflow-Teststrategie: Delta der geschlossenen N-Tick-Bar > +Schwelle ⇒ Long, < −Schwelle ⇒ Short, sonst Flat. " +
+            "Läuft über den bestehenden Tick-Orderflow-Pfad (SinglePositionGate, max. 1 Kontrakt). Technischer Funktionsnachweis, keine Edge-Behauptung.",
+            true, new[]
+            {
+                new StrategyParamDef(TradingBot.Application.Strategies.OrderFlow.DeltaFlowStrategy.ThresholdParameterKey, "Delta-Schwelle (Kontrakte)", "decimal", "30"),
+                new StrategyParamDef(OrderflowTickBacktest.TicksPerBarKey, "Ticks je Orderflow-Bar", "int", "500"),
+            }, UsesFixedStops: false, Engine: OrderflowTickBacktest.EngineKind,
+            DataRequirements: OrderflowTickBacktest.DeltaFlowRequirements(OrderflowTickBacktest.DefaultTicksPerBar))
     };
+
+    /// <summary>Tick-Orderflow-Zugang (bestehender Pfad) — Datenquellen, Laden, Lauf.</summary>
+    public OrderflowTickBacktest Ticks { get; }
+
+    public bool IsTickStrategy(string strategyId) =>
+        GetStrategies().FirstOrDefault(s => string.Equals(s.Id, strategyId, StringComparison.OrdinalIgnoreCase))?.Engine == OrderflowTickBacktest.EngineKind;
 
     public async Task<IReadOnlyList<InstrumentDef>> GetInstrumentsAsync(CancellationToken ct = default)
     {
@@ -165,6 +184,7 @@ public sealed class BacktestApiService
             foreach (var f in Directory.EnumerateFiles(ohlcDir, "*.csv").OrderBy(x => x))
                 list.Add(new DataSourceDef("csv:" + Path.GetFileName(f), "ohlc-csv",
                     "OHLC-CSV: " + Path.GetFileName(f), true, null));
+        list.AddRange(Ticks.GetDataSources());
         return list;
     }
 
@@ -334,10 +354,13 @@ public sealed class BacktestApiService
     {
         string path = req.DataSourceId.StartsWith("csv:", StringComparison.Ordinal) || (req.DataSourceId == "csv" && !string.IsNullOrWhiteSpace(req.Path))
             ? req.Path ?? Path.Combine(_repoRoot, "samples", "ohlc", req.DataSourceId.Substring(4))
-            : SierraLocalPath;
+            : req.DataSourceId.StartsWith("ticks-csv:", StringComparison.Ordinal)
+                ? req.Path ?? Path.Combine(_repoRoot, "samples", "ticks", req.DataSourceId["ticks-csv:".Length..])
+                : req.DataSourceId.StartsWith("atas-collection:", StringComparison.Ordinal) ? Ticks.CollectionManifest ?? "" : SierraLocalPath;
         string stamp = File.Exists(path) ? $"{new FileInfo(path).Length}:{File.GetLastWriteTimeUtc(path).Ticks}" : "missing";
         return string.Join("|", req.DataSourceId, path, symbol.ToUpperInvariant(), req.TimeframeMinutes, req.FromUtc ?? "", req.ToUtc ?? "",
-            req.MaxRows, stamp);
+            req.MaxRows, stamp,
+            OrderflowTickBacktest.IsTickSource(req.DataSourceId) ? "tpb=" + OrderflowTickBacktest.TicksPerBarOf(req.Params) : "");
     }
 
     private (List<Candle> candles, bool lead, bool trail, IReadOnlyList<OhlcImportIssue> issues, string source, int tf)
@@ -402,12 +425,16 @@ public sealed class BacktestApiService
 
     private IStrategy BuildStrategy(BacktestRunRequest req, InstrumentProfile instrument)
     {
+        // Keine stille Ersatzstrategie: eine unbekannte Id oder eine Tick-Orderflow-Strategie darf in der OHLC-Engine
+        // NICHT als SMA weiterlaufen (früher Fallback auf MovingAverage).
         var strategy = req.Strategy.ToLowerInvariant() switch
         {
             "movingaverage" or "ma" or "sma" => (IStrategy)new MovingAverageDummyStrategy(),
             "donchian" or "breakout" => new DonchianBreakoutStrategy(),
             "orb" or "openingrange" => new OpeningRangeBreakoutStrategy(),
-            _ => new MovingAverageDummyStrategy()
+            "deltaflow" => throw new InvalidOperationException(
+                "DeltaFlow läuft ausschließlich über den Tick-Orderflow-Pfad (gemessenes Delta je Trade), nicht in der OHLC-Kerzen-Engine."),
+            _ => throw new InvalidOperationException($"Unbekannte Strategie '{req.Strategy}'.")
         };
         strategy.Initialize(new StrategyExecutionContext
         {
@@ -430,6 +457,16 @@ public sealed class BacktestApiService
         DateTimeOffset? fromUtc = ParseUtc(req.FromUtc), toUtc = ParseUtc(req.ToUtc);
         if (fromUtc is DateTimeOffset f0 && toUtc is DateTimeOffset t0 && t0 <= f0)
             throw new ArgumentException("Zeitraum ungültig: 'Bis' muss nach 'Von' liegen.");
+
+        // Tick-Datensatz: Kerzen = volle N-Tick-Orderflow-Bars aus den echten Trade-Ticks (gleiche Bar-Bildung wie der
+        // Orderflow-Lauf). Zeitrahmen 0 = keine Zeitkerzen. Für Chart/Bar-Replay und Session-Aufteilung.
+        if (OrderflowTickBacktest.IsTickSource(req.DataSourceId))
+        {
+            var loaded = Ticks.Load(req);
+            int tpb = OrderflowTickBacktest.TicksPerBarOf(req.Params);
+            var (tickCandles, _) = OrderflowTickBacktest.Bars(loaded.Ticks, tpb, symbol);
+            return (tickCandles, false, false, Array.Empty<OhlcImportIssue>(), $"{tpb}-Tick-Orderflow-Bars aus {loaded.Source}", 0);
+        }
 
         if (req.DataSourceId.StartsWith("csv:", StringComparison.Ordinal) ||
             (req.DataSourceId == "csv" && !string.IsNullOrWhiteSpace(req.Path)))

@@ -35,7 +35,7 @@ public sealed partial class ResearchOrchestrator
         ("stability", "09 Stabilität über Zeit & Marktbedingungen"),
         ("concentration", "10 Konzentration & Ausreißer"),
         ("controls", "11 Benchmarks, Kontrollläufe & Overfitting"),
-        ("trades", "12 Einzeltrade-Prüfung (Journal, Replay, MAE/MFE-Schätzung)"),
+        ("trades", "12 Einzeltrade-Prüfung (Journal, Replay, MAE/MFE)"),
         ("holdout", "Finaler Holdout – unbenutzt (reserviert)")
     };
 
@@ -69,6 +69,9 @@ public sealed partial class ResearchOrchestrator
     private async Task<ResearchRunRecord> RunFullReportAsync(ResearchRunRecord record, IProgress<double>? progress, CancellationToken ct)
     {
         var cfg = record.Config;
+        // Tick-Orderflow-Strategien (z. B. DeltaFlow) laufen über den BESTEHENDEN Tick-Pfad, nicht über die OHLC-Engine.
+        if (_quant.Backtest.IsTickStrategy(cfg.Run.Strategy))
+            return await RunOrderflowReportAsync(record, progress, ct);
         var opt = cfg.Report ?? new FullReportOptions();
         var bt = _quant.Backtest;
         var report = new BacktestReport();
@@ -219,7 +222,8 @@ public sealed partial class ResearchOrchestrator
                 if (analysis is null || !analysis.Ok)
                     return Task.FromResult<(ResearchStepStatus, string?, string?)>((ResearchStepStatus.Failed, analysis?.Error ?? "Basisanalyse fehlt.", null));
                 var keys = new[] { "sharpe", "sortino", "calmar", "cagr", "volatility_annual", "max_drawdown", "expected_shortfall" };
-                var metrics = analysis.MetricsTotal.Where(m => keys.Contains(m.Key)).OrderBy(m => Array.IndexOf(keys, m.Key)).ToList();
+                var metrics = GateShortHistory(analysis.MetricsTotal.Where(m => keys.Contains(m.Key)).OrderBy(m => Array.IndexOf(keys, m.Key)).ToList(),
+                    cfg.Options.MinimumPeriods);
                 bool anyMissing = metrics.Any(m => m.Value is null);
                 report = report with
                 {
@@ -482,7 +486,10 @@ public sealed partial class ResearchOrchestrator
                 ["Parallelität (Engine-Läufe)"] = fc.Opt.MaxParallelism.ToString(CultureInfo.InvariantCulture)
             },
             DataFileReads = statsDev.Loads + statsFull.Loads,
-            DataCacheHits = statsDev.Hits + statsFull.Hits
+            DataCacheHits = statsDev.Hits + statsFull.Hits,
+            EngineKind = "ohlc-bars",
+            SignalData = $"OHLC-Zeitkerzen ({fc.Dev.TimeframeMinutes} Min) aus {fc.Dev.Source} — Signal am Kerzenschluss; kein Orderflow/Delta.",
+            ExecutionData = "Bar-basierte OHLC-Engine: Market-Fill am Open der Folgekerze ± Slippage; Stop/Ziel gegen Hoch/Tief der Kerze (kein Tick-Verlauf)."
         };
     }
 
@@ -1058,6 +1065,16 @@ public sealed partial class ResearchOrchestrator
             Rows = rows, Random = random, Benchmark = analysis?.Benchmark, Trials = trials, Overfitting = of, Notes = notes
         };
     }
+
+    /// <summary>
+    /// Verhältnis-/Annualisierungskennzahlen unterhalb der vorab gespeicherten Mindestperiodenzahl werden NICHT als Zahl
+    /// gezeigt, sondern als „nicht auswertbar“ mit Grund (die Bibliothek liefert z. B. Sortino schon bei einer Periode).
+    /// Der beobachtete Drawdown bleibt sichtbar.
+    /// </summary>
+    internal static IReadOnlyList<QuantMetricDto> GateShortHistory(IReadOnlyList<QuantMetricDto> metrics, int minimumPeriods)
+        => metrics.Select(m => m.Value is not null && m.Key != "max_drawdown" && m.SampleSize < minimumPeriods
+            ? m with { Value = null, UnavailableReason = $"Nicht auswertbar: nur {m.SampleSize} Renditeperiode(n), mindestens {minimumPeriods} vorab festgelegt." }
+            : m).ToList();
 
     /// <summary>Vorab festgelegte Regel für die CSCV-Blockzahl S: größte gerade Zahl ≤ Perioden/2 (mind. 2 Perioden je
     /// Block), höchstens der konfigurierte Wert. Unter 4 Blöcken bleibt PBO ehrlich „nicht ausgewiesen“.</summary>

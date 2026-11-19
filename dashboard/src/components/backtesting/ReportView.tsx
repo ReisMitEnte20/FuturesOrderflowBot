@@ -139,7 +139,7 @@ export function ReportView({ run, onOpenHoldout }: { run: ReportRun; onOpenHoldo
  *  und der finale Holdout sind zwei verschiedene Dinge und werden nie unter einem gemeinsamen Namen geführt. */
 const STEP_LABELS: Record<string, string> = {
   oos: "06 Walk-forward-Testdaten (Out-of-Sample)",
-  trades: "12 Einzeltrade-Prüfung (Journal, Replay, MAE/MFE-Schätzung)",
+  trades: "12 Einzeltrade-Prüfung (Journal, Replay, MAE/MFE)",
   holdout: "Finaler Holdout – unbenutzt (reserviert)",
 };
 export const stepLabel = (s: ResearchStepState) => STEP_LABELS[s.key] ?? s.label;
@@ -173,6 +173,10 @@ function Overview({ rep, run }: { rep: BacktestReport; run: ReportRun }) {
           ))}
         </div>
       )}
+      <div className="mt-2 grid gap-1 text-[11px] text-[var(--fg-dim)] md:grid-cols-2">
+        <div className="rounded-md border border-[var(--line)] px-2 py-1"><b className="text-[var(--fg)]">Daten für das Signal:</b> {p.signalData || `OHLC-Zeitkerzen (${p.timeframeMinutes} Min) aus ${p.dataSource}`}</div>
+        <div className="rounded-md border border-[var(--line)] px-2 py-1"><b className="text-[var(--fg)]">Daten für die simulierte Ausführung:</b> {p.executionData || "Bar-basierte OHLC-Engine: Fill am Open der Folgekerze ± Slippage."}</div>
+      </div>
       <div className="mt-2 rounded-md border border-[var(--purple)] px-2 py-1 text-[11px] text-[var(--fg-dim)]">
         <b className="text-[var(--purple)]">Finaler Holdout – unbenutzt:</b>{" "}
         {p.holdoutFrom
@@ -189,7 +193,7 @@ function Provenance({ rep }: { rep: BacktestReport }) {
     <Section id="provenance" title="Herkunft & Reproduzierbarkeit" defaultOpen={false}>
       <Grid cols={3}>
         <Kv label="Strategieversion" value={<span className="text-[11px]">{p.strategyVersion}</span>} />
-        <Kv label="Engine-Stand" value={<span className="text-[11px]">{p.engineVersion}</span>} />
+        <Kv label="Engine-Stand" value={<span className="text-[11px]">{p.engineVersion}</span>} hint={p.engineKind === "orderflow-ticks" ? "Tick-Orderflow-Pfad" : "OHLC-Kerzen-Engine"} />
         <Kv label="Daten-Hash (SHA-256, Entwicklungsbereich)" value={<span className="text-[11px] break-all">{p.dataSha256}</span>} />
         <Kv label="Datenquelle / -art" value={<span className="text-[11px]">{p.dataSource}</span>} hint={p.dataKind} />
         <Kv label="Zeitraum gesamt" value={<span className="text-[11px]">{dt(p.dataFrom)} – {dt(p.dataTo)} UTC</span>}
@@ -633,11 +637,14 @@ function TradeSection({ rep, step }: { rep: BacktestReport; step?: ResearchStepS
   const t = rep.trades;
   const [focus, setFocus] = useState<number | null>(null);
   const [filter, setFilter] = useState<"all" | "win" | "loss" | "amb">("all");
+  const measured = (t?.trades ?? []).some((r) => r.excursionMeasured);
   const rows = (t?.trades ?? []).filter((r) => filter === "all" || (filter === "win" ? r.net > 0 : filter === "loss" ? r.net < 0 : r.ambiguous));
   return (
-    <Section id="trades" step={step} title="12 Einzeltrade-Prüfung — Journal, Replay, MAE/MFE-Schätzung" basis={t?.basis}>
+    <Section id="trades" step={step} title={`12 Einzeltrade-Prüfung — Journal, Replay, MAE/MFE-${(t?.trades ?? []).some((r) => r.excursionMeasured) ? "Messung aus Ticks" : "Schätzung"}`} basis={t?.basis}>
       {t && <>
-        <p className="text-[11px] text-[var(--gold)]">MAE/MFE sind eine SCHÄTZUNG aus {rep.provenance.timeframeMinutes}-Minuten-Kerzen, nicht tickgenau.</p>
+        {measured
+          ? <p className="text-[11px] text-[var(--key)]">MAE/MFE GEMESSEN aus allen Trade-Ticks zwischen Ein- und Ausstieg.</p>
+          : <p className="text-[11px] text-[var(--gold)]">MAE/MFE sind eine SCHÄTZUNG aus {rep.provenance.timeframeMinutes}-Minuten-Kerzen, nicht tickgenau.</p>}
         <p className="text-[11px] text-[var(--fg-dim)]">{t.excursionDefinition.replace(/^SCHÄTZUNG aus \d+-Minuten-Kerzen \(nicht tickgenau\)\. /, "")}</p>
         <p className="text-[10px] text-[var(--fg-faint)]">{t.tickReplayNote}</p>
         {focus != null && t.candleRequest && (
@@ -651,8 +658,10 @@ function TradeSection({ rep, step }: { rep: BacktestReport; step?: ResearchStepS
           ))}
         </div>
         <div className="max-h-[420px] overflow-y-auto">
-          <Tbl head={["#", "Tag", "Seite", "Einstieg (UTC)", "Ausstieg", "Grund", "Netto", "MAE (Schätzung)", "MFE (Schätzung)", ""]} rows={rows.slice(0, 1500).map((r) => [
-            r.index + 1, r.session, r.side, dt(r.entryT), dt(r.exitT), r.exitReason + (r.ambiguous ? " ⚠" : "") + (r.closedAtEnd ? " (bewertet)" : ""),
+          <Tbl head={["#", "Tag", "Seite", "Einstieg (UTC)", "Ausstieg", "Grund", "Netto", measured ? "MAE (gemessen)" : "MAE (Schätzung)", measured ? "MFE (gemessen)" : "MFE (Schätzung)", ""]} rows={rows.slice(0, 1500).map((r) => [
+            r.index + 1, r.session, r.side,
+            <span title={r.entrySignalUtc ? `Signal ${r.entrySignalDirection} ${r.entrySignalUtc} · Fill ${r.entryTimeUtc}` : ""}>{dt(r.entryT)}</span>,
+            <span title={r.exitSignalUtc ? `Signal ${r.exitSignalDirection} ${r.exitSignalUtc} · Fill ${r.exitTimeUtc}` : ""}>{dt(r.exitT)}</span>, r.exitReason + (r.ambiguous ? " ⚠" : "") + (r.closedAtEnd ? " (bewertet)" : ""),
             <span className={r.net >= 0 ? "text-[var(--key)]" : "text-[var(--red)]"}>{money(r.net)}</span>,
             <span title={r.excursionBasis}>{money(r.mae ?? null)}{r.excursionLowerBound ? "≥" : ""}</span>, <span title={r.excursionBasis}>{money(r.mfe ?? null)}{r.excursionLowerBound ? "≥" : ""}</span>,
             <button className="rounded border border-[var(--line-2)] px-1.5 text-[var(--cyan)]" onClick={() => setFocus(r.index)}>Im Replay ansehen</button>,

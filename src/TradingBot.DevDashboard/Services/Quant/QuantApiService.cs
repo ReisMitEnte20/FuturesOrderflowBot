@@ -1717,7 +1717,7 @@ public sealed class QuantApiService
             ? TradingBot.Quant.Report.TradeDateCalendar.SessionStartIndices(openTimes)
             : TradingBot.Application.Strategies.UsEquitySessionCalendar.OrbSessionStartIndices(openTimes);
 
-    private static PerformanceMetricsOptions MetricOptions(QuantEvaluationOptions o) => new()
+    internal static PerformanceMetricsOptions MetricOptions(QuantEvaluationOptions o) => new()
     {
         AnnualizationBasis = string.Equals(o.AnnualizationBasis, "Fixed", StringComparison.OrdinalIgnoreCase)
             ? AnnualizationBasis.Fixed
@@ -1728,7 +1728,7 @@ public sealed class QuantApiService
         MinimumPeriods = o.MinimumPeriods
     };
 
-    private static ReturnFrequency ParseFrequency(string? s) => s?.ToLowerInvariant() switch
+    internal static ReturnFrequency ParseFrequency(string? s) => s?.ToLowerInvariant() switch
     {
         "bar" => ReturnFrequency.Bar,
         "weekly" => ReturnFrequency.Weekly,
