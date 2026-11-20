@@ -21,15 +21,23 @@ public sealed class BacktestExecutionAdapter : IBrokerExecutionAdapter
     private readonly decimal _slippageTicks;
     private readonly Func<OrderRequest, bool>? _rejectPredicate;
     private readonly List<OrderRequest> _pending = new();
+    private readonly int _fillDelayTicks;
+    // Je offener Order: Anzahl Ticks seit Einreichung (nur relevant bei Verzögerung > 0).
+    private readonly Dictionary<Guid, int> _ticksSeen = new();
 
+    /// <param name="fillDelayTicks">
+    /// Annahme-Szenario: Fill frühestens am (1 + n)-ten Tick nach Einreichung (0 = Folge-Tick, Standard). Fehlt der Tick,
+    /// bleibt die Order ungefüllt (<see cref="PendingCount"/>).
+    /// </param>
     public BacktestExecutionAdapter(
         FillModel fillModel, InstrumentProfile instrument, decimal slippageTicks,
-        Func<OrderRequest, bool>? rejectPredicate = null)
+        Func<OrderRequest, bool>? rejectPredicate = null, int fillDelayTicks = 0)
     {
         _fillModel = fillModel ?? throw new ArgumentNullException(nameof(fillModel));
         _instrument = instrument ?? throw new ArgumentNullException(nameof(instrument));
         _slippageTicks = slippageTicks < 0m ? 0m : slippageTicks;
         _rejectPredicate = rejectPredicate;
+        _fillDelayTicks = fillDelayTicks < 0 ? 0 : fillDelayTicks;
     }
 
     public bool IsConnected { get; private set; }
@@ -75,6 +83,7 @@ public sealed class BacktestExecutionAdapter : IBrokerExecutionAdapter
     public Task<OrderResult> CancelOrderAsync(Guid orderId, CancellationToken cancellationToken = default)
     {
         _pending.RemoveAll(o => o.OrderId == orderId);
+        _ticksSeen.Remove(orderId);
         return Task.FromResult(new OrderResult { OrderId = orderId, Status = OrderStatus.Cancelled });
     }
 
@@ -100,10 +109,18 @@ public sealed class BacktestExecutionAdapter : IBrokerExecutionAdapter
 
         foreach (var order in _pending.ToList())
         {
+            if (_fillDelayTicks > 0)
+            {
+                // Verzögerung: die ersten n Ticks nach Einreichung sind für diese Order nicht zulässig.
+                int seen = _ticksSeen.TryGetValue(order.OrderId, out var c) ? c + 1 : 1;
+                _ticksSeen[order.OrderId] = seen;
+                if (seen <= _fillDelayTicks) continue;
+            }
             var fill = _fillModel.TryFill(order, tick, _instrument, _slippageTicks);
             if (fill is null) continue;
 
             _pending.Remove(order);
+            _ticksSeen.Remove(order.OrderId);
             TotalSlippageCost += fill.SlippageCost;
             Filled?.Invoke(this, fill.Event);
         }

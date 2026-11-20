@@ -397,6 +397,47 @@ function Heatmap({ pair, minTrades }: { pair: NonNullable<BacktestReport["sensit
 }
 
 // ---- 06 ----
+function utcTime(iso?: string | null) {
+  return iso ? iso.replace(/^\d{4}-\d{2}-\d{2}T/, "").replace(/(\.\d{3})\d*Z$/, "$1 UTC") : "–";
+}
+
+/** Kosten-/Verzögerungs-Stress (Tick-Pfad) — Teil desselben Berichts, kein eigener Start. */
+function TickStressBlock({ s }: { s: NonNullable<NonNullable<BacktestReport["oos"]>["tickStress"]> }) {
+  const ex = s.fillExample;
+  return (
+    <div className="space-y-2 rounded-md border border-[var(--line)] p-2">
+      <div className="flex flex-wrap items-center gap-2 text-[12px]">
+        <b className="text-[var(--fg)]">Kosten- und Verzögerungs-Stress (angenommene Szenarien, Engine-Neuläufe)</b>
+        <StatusChip status={s.status} />
+        <span className="text-[10px] text-[var(--fg-faint)]">{s.basis}</span>
+      </div>
+      {s.status !== "Completed" && s.reason && <div className="text-[11px] text-[var(--gold)]">{s.reason}</div>}
+      {s.rows.length > 0 && (
+        <Tbl head={["Szenario", "geschlossene Trades", "offene Endposition", "Gebühren", "Netto inkl. offener Bewertung", "Differenz zur Basis"]}
+          rows={s.rows.map((r) => [
+            <span className="whitespace-normal font-sans">
+              <b className="text-[var(--fg)]">{r.label}</b>
+              <span className="block text-[10px] text-[var(--fg-faint)]">{r.assumption}</span>
+              {r.unfilledOrdersAtEnd > 0 && <span className="block text-[10px] text-[var(--gold)]">{r.unfilledOrdersAtEnd} Order(s) am Fensterende ohne zulässigen Fill-Tick — nicht gefüllt, nichts erfunden</span>}
+            </span>,
+            r.closedTrades, r.openEndPositions, money(r.fees),
+            <span className={r.value >= 0 ? "text-[var(--key)]" : "text-[var(--red)]"} title={`geschlossen ${money(r.closedNet)} + offen ${money(r.openValuation)}`}>{money(r.value)}</span>,
+            r.key === "base" ? (s.baseReproducesWalkForward ? "— (= Walk-forward)" : <span className="text-[var(--red)]">weicht ab</span>) : money(r.diffToBase),
+          ])} />
+      )}
+      {ex && (
+        <div className="text-[11px] text-[var(--fg-dim)]">
+          <b className="text-[var(--fg)]">Ein Trade, verschoben durch die Verzögerung</b> ({ex.window}, {ex.side}): Einstiegssignal {utcTime(ex.entrySignalUtc)} ·
+          Basis-Fill Tick {ex.baseEntryTick ?? "–"} {utcTime(ex.baseEntryUtc)} @ {num(ex.baseEntryPrice)} → verzögert Tick {ex.delayedEntryTick ?? "–"} {utcTime(ex.delayedEntryUtc)} @ {num(ex.delayedEntryPrice)} ·
+          Ausstiegssignal {utcTime(ex.exitSignalUtc)} · Basis-Exit Tick {ex.baseExitTick ?? "–"} @ {num(ex.baseExitPrice)} → verzögert Tick {ex.delayedExitTick ?? "–"} @ {num(ex.delayedExitPrice)} ·
+          Netto {money(ex.baseNet)} → {money(ex.delayedNet)} (Tick-Index im Testfenster)
+        </div>
+      )}
+      <ul className="list-disc pl-4 text-[10px] text-[var(--fg-faint)]">{s.notes.map((n, i) => <li key={i}>{n}</li>)}</ul>
+    </div>
+  );
+}
+
 function OosSection({ rep, step }: { rep: BacktestReport; step?: ResearchStepState }) {
   const o = rep.oos;
   const [sel, setSel] = useState<string | null>(null);
@@ -452,6 +493,11 @@ function OosSection({ rep, step }: { rep: BacktestReport; step?: ResearchStepSta
             { name: "OOS (im Training gewählt)", x: curves.x, y: curves.ya, color: "#22b8f0" },
             { name: "Basisstrategie (unverändert), dieselben Tage", x: curves.x, y: curves.yb, color: "#f0c35a", dashed: true },
           ]} />}
+          {o.tickStress && variant.key === o.tickStress.variant && <TickStressBlock s={o.tickStress} />}
+          {o.tickStress && variant.key !== o.tickStress.variant && o.tickStress.variant && (
+            <div className="text-[10px] text-[var(--fg-faint)]">Kosten-/Verzögerungs-Stress: siehe Primärvariante ({o.tickStress.variant}).</div>
+          )}
+          {o.tickStress && !o.tickStress.variant && o.tickStress.reason && <div className="text-[10px] text-[var(--fg-faint)]">Kosten-/Verzögerungs-Stress: {o.tickStress.reason}</div>}
           {variant.folds.some((f) => f.testValue != null || f.baseValue != null) ? (
             <Tbl head={["Fenster", "Training", "Sess.", "Test", "Sess.", "Gewählt (nur Training)", "Trainingswert (inkl. offen)", "Test geschlossen", "Test offen bewertet", "Test inkl. offen", "Trades", "Basis inkl. offen", "Hinweis"]}
               rows={variant.folds.map((f) => [

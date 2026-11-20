@@ -23,6 +23,9 @@ public sealed record OrderflowRunRequest
     /// <summary>Slippage-Override in Ticks (null = FeeProfile.EstimatedSlippageTicks).</summary>
     public decimal? SlippageTicksOverride { get; init; }
 
+    /// <summary>Annahme-Szenario Ausführungsverzögerung in Trade-Ticks (0 = Fill am Folge-Tick, Standard).</summary>
+    public int FillDelayTicks { get; init; }
+
     public required IReadOnlyList<StrategyCandidate> Candidates { get; init; }
 
     // Provenienz/Qualitaet (werden mit dem Ergebnis gespeichert):

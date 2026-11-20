@@ -81,6 +81,21 @@ export interface OosFold {
   testOpenUnrealized?: number | null; testOpenEntryFees?: number | null; testOpenValuation?: number | null; testValue?: number | null;
   baseOpenValuation?: number | null; baseValue?: number | null; baseOpenPositionAtTestEnd?: string | null;
 }
+/** Kosten-/Verzögerungs-Stress (Tick-Pfad): echte Engine-Neuläufe der eingefrorenen Walk-forward-Gewinner; Szenarien sind Annahmen. */
+export interface TickStressRow {
+  key: string; label: string; assumption: string; closedTrades: number; openEndPositions: number; fees: number;
+  closedNet: number; openValuation: number; value: number; diffToBase: number; unfilledOrdersAtEnd: number; windows: number;
+}
+export interface TickStressFillExample {
+  window: string; side: string; entrySignalUtc?: string | null; baseEntryTick?: number | null; baseEntryUtc?: string | null; baseEntryPrice: number;
+  delayedEntryTick?: number | null; delayedEntryUtc?: string | null; delayedEntryPrice: number; exitSignalUtc?: string | null;
+  baseExitTick?: number | null; baseExitUtc?: string | null; baseExitPrice: number; delayedExitTick?: number | null; delayedExitUtc?: string | null;
+  delayedExitPrice: number; baseNet: number; delayedNet: number;
+}
+export interface TickStressSection {
+  status: string; reason?: string | null; basis: string; variant: string; rows: TickStressRow[]; baseReproducesWalkForward: boolean;
+  fillExample?: TickStressFillExample | null; notes: string[];
+}
 export interface OosVariant {
   key: string; label: string; status: string; reason?: string | null; sessionsNeeded: number; sessionsAvailable: number;
   trainSessions: number; testSessions: number; campaignId?: string | null; trialsRecorded: number; folds: OosFold[];
@@ -121,7 +136,7 @@ export interface BacktestReport {
   sensitivity?: { basis: string; applicable: boolean; reason?: string | null; minTrades: number; definition: string; sessionKeys: string[]; parameters: SensitivityParam[]; pairs: SensitivityPair[]; engineRuns: number } | null;
   oos?: { selectionRule: string; tieRule: string; minTrainTrades: number; grid: Record<string, string>[]; warmupBars: number; leakageRules: string; holdoutNote: string; variants: OosVariant[]; primaryVariant?: string | null;
     developmentSessionIds?: string[]; missingDataDays?: string[]; holdoutSessionIds?: string[]; selectionMetric?: string | null;
-    windowEndRule?: string | null; selectionFigure?: string | null } | null;
+    windowEndRule?: string | null; selectionFigure?: string | null; tickStress?: TickStressSection | null } | null;
   simulation?: {
     basis: string; basisReason: string; iterations: number; seed: number; methods: SimulationResult[];
     executionStress: { id: string; label: string; net: number; maxDrawdown: number; trades: number; kind: string }[];

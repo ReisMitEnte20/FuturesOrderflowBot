@@ -25,6 +25,9 @@ public sealed record StrategyRunInputs
     /// <summary>Slippage-Override in Ticks (null = FeeProfile.EstimatedSlippageTicks).</summary>
     public decimal? SlippageTicksOverride { get; init; }
 
+    /// <summary>Annahme-Szenario: Fill frühestens am (1 + n)-ten Tick nach Einreichung (0 = Folge-Tick, Standard).</summary>
+    public int FillDelayTicks { get; init; }
+
     /// <summary>
     /// Ticks pro OrderFlowBar fuer den Aggregator-Wrapper bei <see cref="IOrderFlowStrategy"/>.
     /// Default 100 (unveraendertes Verhalten bestehender Aufrufer); der Orderflow-Mehrstrategielauf setzt 500.

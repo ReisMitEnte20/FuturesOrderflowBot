@@ -30,6 +30,14 @@ public sealed record FullReportOptions
     public IReadOnlyList<string> SensitivityParameters { get; init; } = Array.Empty<string>();
     /// <summary>Fachlich ausgewählte Parameterpaare für die 2D-Heatmap.</summary>
     public IReadOnlyList<string[]> ParameterPairs { get; init; } = Array.Empty<string[]>();
+
+    // ---- Tick-Pfad: vorab festgelegte Kosten-/Verzögerungs-Szenarien (Annahmen, KEINE Messwerte) ----
+    /// <summary>Szenario „höhere Gebühr“: zusätzliche Gebühr je ausgeführter Seite und Kontrakt (Annahme).</summary>
+    public decimal StressFeeAddPerSide { get; init; } = 0.50m;
+    /// <summary>Szenario „mehr Slippage“: zusätzliche adverse Slippage in Ticks je Fill (Annahme).</summary>
+    public decimal StressExtraSlippageTicks { get; init; } = 1m;
+    /// <summary>Szenario „Verzögerung“: Fill frühestens n zulässige Trade-Ticks später als im Basislauf (Annahme).</summary>
+    public int StressFillDelayTicks { get; init; } = 1;
 }
 
 public sealed record ReportProvenance
@@ -273,6 +281,48 @@ public sealed record ReportOosSection
     public string? WindowEndRule { get; init; }
     /// <summary>Welche Zahl die Parameterauswahl steuert (Tick-Pfad, neue Berichte).</summary>
     public string? SelectionFigure { get; init; }
+    /// <summary>Kosten-/Verzögerungs-Stress als echte Engine-Neuläufe der eingefrorenen Gewinner (Tick-Pfad, neue Berichte).</summary>
+    public ReportTickStressSection? TickStress { get; init; }
+}
+
+/// <summary>Eine Zeile der Stresstabelle (Summe über alle Testfenster der Primärvariante).</summary>
+public sealed record TickStressRow(string Key, string Label, string Assumption, int ClosedTrades, int OpenEndPositions, decimal Fees,
+    decimal ClosedNet, decimal OpenValuation, decimal Value, decimal DiffToBase, int UnfilledOrdersAtEnd, int Windows);
+
+/// <summary>Ein konkreter Trade: welcher Fill sich durch die Verzögerung verschoben hat (Tick-Index im Testfenster, Zeit, Preis).</summary>
+public sealed record TickStressFillExample
+{
+    public string Window { get; init; } = "";
+    public string Side { get; init; } = "";
+    public string? EntrySignalUtc { get; init; }
+    public int? BaseEntryTick { get; init; }
+    public string? BaseEntryUtc { get; init; }
+    public decimal BaseEntryPrice { get; init; }
+    public int? DelayedEntryTick { get; init; }
+    public string? DelayedEntryUtc { get; init; }
+    public decimal DelayedEntryPrice { get; init; }
+    public string? ExitSignalUtc { get; init; }
+    public int? BaseExitTick { get; init; }
+    public string? BaseExitUtc { get; init; }
+    public decimal BaseExitPrice { get; init; }
+    public int? DelayedExitTick { get; init; }
+    public string? DelayedExitUtc { get; init; }
+    public decimal DelayedExitPrice { get; init; }
+    public decimal BaseNet { get; init; }
+    public decimal DelayedNet { get; init; }
+}
+
+public sealed record ReportTickStressSection
+{
+    public string Status { get; init; } = "Pending";
+    public string? Reason { get; init; }
+    public string Basis { get; init; } = "";
+    public string Variant { get; init; } = "";
+    public IReadOnlyList<TickStressRow> Rows { get; init; } = Array.Empty<TickStressRow>();
+    /// <summary>true = die Basiszeile reproduziert das Walk-forward-Ergebnis exakt (Trades, Gebühren, Netto, offene Bewertung).</summary>
+    public bool BaseReproducesWalkForward { get; init; }
+    public TickStressFillExample? FillExample { get; init; }
+    public IReadOnlyList<string> Notes { get; init; } = Array.Empty<string>();
 }
 
 // ---- 07 ----

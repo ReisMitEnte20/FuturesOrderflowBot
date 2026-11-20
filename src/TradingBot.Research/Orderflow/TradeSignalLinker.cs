@@ -35,8 +35,9 @@ public static class TradeSignalLinker
     public static IReadOnlyList<TradeLink> Link(
         IReadOnlyList<MarketTick> ticks, IReadOnlyList<OrderFlowBar> fullBars, int ticksPerBar,
         IReadOnlyList<RecordedSignal> signals, IReadOnlyList<BacktestTrade> trades,
-        decimal tickSize, decimal slippageTicks)
+        decimal tickSize, decimal slippageTicks, int fillDelayTicks = 0)
     {
+        int delay = fillDelayTicks < 0 ? 0 : fillDelayTicks;
         TradeLink None(string why) => new() { Status = why };
         if (trades.Count == 0) return Array.Empty<TradeLink>();
         if (signals.Count == 0) return trades.Select(_ => None("Signale dieses Laufs nicht aufgezeichnet")).ToList();
@@ -65,7 +66,7 @@ public static class TradeSignalLinker
         var closes = new List<int>();
         for (int s = 0; s < signals.Count; s++)
         {
-            if ((barOf[s] + 1) * ticksPerBar >= ticks.Count) continue;
+            if ((barOf[s] + 1) * ticksPerBar + delay >= ticks.Count) continue; // kein zulässiger Fill-Tick mehr (Verzögerung)
             (signals[s].PositionBefore == PositionSide.Flat ? opens : closes).Add(s);
         }
         if (closes.Count != trades.Count || (opens.Count != trades.Count && opens.Count != trades.Count + 1))
@@ -88,7 +89,7 @@ public static class TradeSignalLinker
             { result.Add(None("Schliessendes Signal passt nicht zur offenen Position")); continue; }
 
             int oTick = (barOf[so] + 1) * ticksPerBar - 1, cTick = (barOf[sc] + 1) * ticksPerBar - 1;
-            int ef = oTick + 1, xf = cTick + 1;
+            int ef = oTick + 1 + delay, xf = cTick + 1 + delay;
             if (ef >= ticks.Count || xf >= ticks.Count) { result.Add(None("Kein Folge-Tick fuer den Fill")); continue; }
             // Entry: Long = Kauf (Tick + Slippage), Short = Verkauf (Tick - Slippage); Exit umgekehrt.
             decimal expEntry = longTrade ? ticks[ef].Price + slip : ticks[ef].Price - slip;

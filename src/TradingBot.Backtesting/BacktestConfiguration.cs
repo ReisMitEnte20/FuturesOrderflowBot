@@ -19,6 +19,13 @@ public sealed record BacktestConfiguration
     /// <summary>Überschreibt die Slippage in Ticks; null = nutze FeeProfile.EstimatedSlippageTicks.</summary>
     public decimal? SlippageTicksOverride { get; init; }
 
+    /// <summary>
+    /// Annahme-Szenario Ausführungsverzögerung: eine Order darf frühestens am (1 + n)-ten Trade-Tick NACH ihrer Einreichung
+    /// gefüllt werden (Standard 0 = am Folge-Tick, unverändertes Verhalten). Fehlt dieser Tick, bleibt die Order ungefüllt —
+    /// es wird kein Fill erfunden. Kein gemessener Latenzwert.
+    /// </summary>
+    public int FillDelayTicks { get; init; }
+
     /// <summary>Startkapital für die Equity-Kurve (optional, nur informativ).</summary>
     public decimal InitialBalance { get; init; }
 

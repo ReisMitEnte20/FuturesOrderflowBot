@@ -309,7 +309,7 @@ public sealed partial class ResearchOrchestrator
                         Notes = new[]
                         {
                             "PBO/PSR/DSR im Tick-Pfad NICHT angebunden (separate Folgeaufgabe) — keine Overfitting-Wahrscheinlichkeit ausgewiesen.",
-                            "Engine-Neuläufe mit zusätzlicher Slippage/Latenz im Tick-Pfad NICHT angebunden (separate Folgeaufgabe).",
+                            "Kosten-/Verzögerungs-Stress: echte Engine-Neuläufe der eingefrorenen Walk-forward-Gewinner (höhere Gebühr, +1 Tick Slippage, +1 Trade-Tick Verzögerung) — siehe 06; Annahmen, keine Messwerte.",
                             "Zufallskontrolle auf den N-Tick-Bars: Einstieg am Open = erster Tick der gezogenen Bar."
                         }
                     }

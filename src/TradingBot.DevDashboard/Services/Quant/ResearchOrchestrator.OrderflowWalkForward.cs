@@ -113,6 +113,7 @@ public sealed partial class ResearchOrchestrator
         };
 
         var variants = new List<OosVariant>();
+        List<(int Te0, int Te1, IReadOnlyDictionary<string, string>? Sel, OosFold Fold)>? primaryWindows = null;
         foreach (var sp in specs)
         {
             ct.ThrowIfCancellationRequested();
@@ -147,6 +148,7 @@ public sealed partial class ResearchOrchestrator
             var oosTrades = new List<ReportTrade>(); var baseTradesAll = new List<ReportTrade>();
             var oosSessions = new List<SessionResult>(); var baseSessions = new List<SessionResult>();
             var oosMarks = new List<(DateTimeOffset Time, decimal Value)>(); var baseMarks = new List<(DateTimeOffset Time, decimal Value)>();
+            var windows = new List<(int Te0, int Te1, IReadOnlyDictionary<string, string>? Sel, OosFold Fold)>();
             decimal oosOpen = 0m, baseOpen = 0m; int openEnds = 0;
             foreach (var f in run.Folds)
             {
@@ -196,6 +198,7 @@ public sealed partial class ResearchOrchestrator
                     TestTradeRows = TradeRowsFromRun(selRun),
                     Note = sel is null ? $"Kein Kandidat erfüllte die Auswahlregel im Training (mind. {opt.MinTrainTrades} Trades) — kein Testergebnis." : f.Note
                 });
+                windows.Add((te0, te1, sel?.Parameters, folds[^1]));
             }
             var tStart = oosTrades.Count > 0 ? oosTrades.Min(t => t.EntryTime) : DateTimeOffset.UtcNow;
             var v = v0 with
@@ -214,8 +217,11 @@ public sealed partial class ResearchOrchestrator
                 Reason = folds.Any(x => x.SelectedCandidate is null) ? "In mindestens einem Fenster erfüllte kein Kandidat die Auswahlregel." : null
             };
             variants.Add(v);
-            if (sp.Key == "rolling") { fc.PrimaryOos = v; fc.OosTrades = oosTrades; fc.OosSessions = oosSessions; }
+            if (sp.Key == "rolling") { fc.PrimaryOos = v; fc.OosTrades = oosTrades; fc.OosSessions = oosSessions; primaryWindows = windows; }
         }
+        ReportTickStressSection tickStress = fc.PrimaryOos is { Key: "rolling" } pv && primaryWindows is not null
+            ? await BuildTickStressAsync(fc, lt, ranges, primaryWindows, pv, instrument, fee, ct)
+            : new ReportTickStressSection { Status = "NotApplicable", Reason = "Kein abgeschlossener rollierender Walk-forward — keine eingefrorenen Gewinner für Szenarien." };
         if (fc.PrimaryOos is null && variants.FirstOrDefault(x => x.Status == "Completed") is { } alt) { fc.PrimaryOos = alt; fc.OosSessions = alt.OosSessionResults.ToList(); }
 
         string thresholds = string.Join(" / ", cfg.Candidates.Select(c => c.TryGetValue("DeltaThreshold", out var t) ? t : "?"));
@@ -230,6 +236,7 @@ public sealed partial class ResearchOrchestrator
                             "Trades im Training nehmen nicht teil. Der Gewinner wird eingefroren und unverändert auf das unmittelbar folgende Testfenster angewendet.",
             SelectionFigure = "Netto inkl. offener Bewertung am letzten Trade-Tick des Fensters (geschlossene Trades nach Kosten + unrealisiert brutto − bereits gezahlte Einstiegsgebühr).",
             WindowEndRule = WindowValuation.Rule,
+            TickStress = tickStress,
             TieRule = "Lexikografisch kleinste Kandidaten-Id (deterministisch, vorab festgelegt). Kandidaten ohne gültigen Wert zählen nicht als schlechtestes Ergebnis.",
             MinTrainTrades = opt.MinTrainTrades,
             Grid = cfg.Candidates.Select(c => (IReadOnlyDictionary<string, string>)c).ToList(),
@@ -275,6 +282,101 @@ public sealed partial class ResearchOrchestrator
                 TradeDateCalendar.Key(t.EntryTime), null, null, false, "", 0, 0,
                 w.EntrySignal?.TimeUtc, w.EntrySignal?.Direction, w.ExitSignal?.TimeUtc, w.ExitSignal?.Direction, w.EntryTimeUtc, w.ExitTimeUtc);
         }).ToList();
+    }
+
+    /// <summary>
+    /// Kosten-/Verzögerungs-Stress als ECHTE Neuläufe der bestehenden Tick-Engine: je Testfenster der Primärvariante läuft der im
+    /// Training eingefrorene Gewinner (keine Neuoptimierung) auf genau denselben Testtagen, mit derselben Kontraktzahl und derselben
+    /// Fensterend-Regel. Szenarien sind vorab festgelegte ANNAHMEN (ohne Quotes kein gemessener Spread, keine gemessene Latenz).
+    /// </summary>
+    private async Task<ReportTickStressSection> BuildTickStressAsync(FullCtx fc, LoadedTicks lt, List<(string Key, int Start, int End)> ranges,
+        List<(int Te0, int Te1, IReadOnlyDictionary<string, string>? Sel, OosFold Fold)> windows, OosVariant primary,
+        InstrumentProfile instrument, FeeProfile fee, CancellationToken ct)
+    {
+        var cfg = fc.Cfg; var opt = fc.Opt; var ticks = lt.Ticks;
+        decimal feeSide = cfg.Run.FeePerSideOverride ?? (fee.CommissionPerSide + fee.ExchangeFeePerSide + fee.ClearingFeePerSide
+                                                         + fee.RoutingFeePerSide + fee.NfaFeePerSide + fee.OtherFeePerSide);
+        decimal slip = cfg.Run.SlippageTicks ?? fee.EstimatedSlippageTicks;
+        var scen = new (string Key, string Label, string Assumption, BacktestRunRequest Run, int Delay)[]
+        {
+            ("base", "Basis (wie Walk-forward)", $"Gebühr {feeSide:0.00} je Seite, Slippage {slip:0.##} Tick(s), Fill am nächsten Trade-Tick", cfg.Run, 0),
+            ("fee", $"Höhere Gebühr (+{opt.StressFeeAddPerSide:0.00} je Seite)", $"Annahme: Gebühr {feeSide + opt.StressFeeAddPerSide:0.00} statt {feeSide:0.00} je ausgeführter Seite und Kontrakt",
+                cfg.Run with { FeePerSideOverride = feeSide + opt.StressFeeAddPerSide }, 0),
+            ("slippage", $"Mehr Slippage (+{opt.StressExtraSlippageTicks:0.##} Tick je Fill)", $"Annahme: {slip + opt.StressExtraSlippageTicks:0.##} statt {slip:0.##} Tick(s) adverse Slippage je Fill — kein gemessener Spread",
+                cfg.Run with { SlippageTicks = slip + opt.StressExtraSlippageTicks }, 0),
+            ("delay", $"Verzögerung (+{opt.StressFillDelayTicks} Trade-Tick)", $"Annahme: Fill frühestens {opt.StressFillDelayTicks} zulässige(n) Trade-Tick(s) später; fehlt der Tick im Fenster, bleibt die Order ungefüllt — keine gemessene Latenz",
+                cfg.Run, opt.StressFillDelayTicks)
+        };
+        var active = windows.Where(w => w.Sel is not null).ToList();
+        if (active.Count == 0)
+            return new ReportTickStressSection { Status = "InsufficientData", Reason = "In keinem Testfenster gab es einen eingefrorenen Gewinner." };
+
+        var runs = new Dictionary<string, List<OrderflowRunResult>>();
+        var rows = new List<TickStressRow>();
+        decimal baseValue = 0m;
+        foreach (var s in scen)
+        {
+            ct.ThrowIfCancellationRequested();
+            var list = new List<OrderflowRunResult>();
+            foreach (var w in active)
+            {
+                int t0 = ranges[w.Te0].Start, t1 = ranges[w.Te1 - 1].End;
+                var slice = new List<MarketTick>(t1 - t0);
+                for (int i = t0; i < t1; i++) slice.Add(ticks[i]);
+                var req = _quant.Backtest.Ticks.BuildRequest(s.Run, slice, instrument, fee, lt.Source, lt.Sha256, new Dictionary<string, string>(w.Sel!))
+                          with { FillDelayTicks = s.Delay };
+                list.Add(await OrderflowTickBacktest.RunAsync(req, ct));
+            }
+            runs[s.Key] = list;
+            var vals = list.Select(WindowValuation.Of).ToList();
+            var trades = list.SelectMany(r => r.RunResults.Single().Trades).ToList();
+            decimal closed = vals.Sum(x => x.ClosedNet), open = vals.Sum(x => x.OpenValuation), value = closed + open;
+            decimal fees = trades.Sum(t => t.Fees) + vals.Sum(x => x.IsOpen ? x.OpenEntryFees : 0m); // je tatsächlich ausgeführter Seite
+            if (s.Key == "base") baseValue = value;
+            rows.Add(new TickStressRow(s.Key, s.Label, s.Assumption, trades.Count, vals.Count(x => x.IsOpen), fees, closed, open, value, value - baseValue,
+                list.Sum(r => r.RunResults.Single().Diagnostics?.OrdersUnfilledAtEnd ?? 0), list.Count));
+        }
+
+        var b = rows[0];
+        bool reproduces = b.ClosedTrades == primary.OosTrades && b.ClosedNet == primary.OosNet && b.OpenValuation == (primary.OosOpenValuation ?? 0m)
+                          && b.Value == (primary.OosValue ?? primary.OosNet);
+
+        // Ein konkreter Trade: erster Trade des ersten Fensters mit Trades — Basis- vs. verzögerter Fill.
+        TickStressFillExample? ex = null;
+        for (int i = 0; i < active.Count && ex is null; i++)
+        {
+            var bt = runs["base"][i].Workspace.Strategies.Single().Trades;
+            var dt = runs["delay"][i].Workspace.Strategies.Single().Trades;
+            if (bt.Count == 0 || dt.Count == 0) continue;
+            var x = bt[0]; var y = dt[0];
+            ex = new TickStressFillExample
+            {
+                Window = string.Join(", ", active[i].Fold.TestSessionIds), Side = x.Side,
+                EntrySignalUtc = x.EntrySignal?.TimeUtc, BaseEntryTick = x.EntryTickIndex, BaseEntryUtc = x.EntryTimeUtc, BaseEntryPrice = x.EntryPrice,
+                DelayedEntryTick = y.EntryTickIndex, DelayedEntryUtc = y.EntryTimeUtc, DelayedEntryPrice = y.EntryPrice,
+                ExitSignalUtc = x.ExitSignal?.TimeUtc, BaseExitTick = x.ExitTickIndex, BaseExitUtc = x.ExitTimeUtc, BaseExitPrice = x.ExitPrice,
+                DelayedExitTick = y.ExitTickIndex, DelayedExitUtc = y.ExitTimeUtc, DelayedExitPrice = y.ExitPrice,
+                BaseNet = x.NetPnL, DelayedNet = y.NetPnL
+            };
+        }
+
+        var notes = new List<string>
+        {
+            "Echte Neuläufe der bestehenden tick-getriebenen Engine je Testfenster mit dem im Training eingefrorenen Gewinner — keine Neuoptimierung je Szenario, " +
+            "dieselben Testtage, dieselbe Kontraktzahl (max. 1), dieselbe Fensterend-Regel (offene Position zum letzten Trade-Tick bewertet, abzgl. Einstiegsgebühr).",
+            "Alle Szenarien sind ANNAHMEN: ohne Quotes/Orderbuch gibt es keinen gemessenen Spread und keine gemessene Latenz.",
+            "Gebühren = je tatsächlich ausgeführter Seite und Kontrakt (geschlossene Trades zwei Seiten, offene Endposition eine Seite).",
+            "Verzögerung: eine Order darf erst am (1 + n)-ten Trade-Tick nach dem Signal gefüllt werden; fehlt dieser Tick im Fenster, bleibt sie ungefüllt (Spalte „ungefüllt am Ende“) — kein Fill wird erfunden."
+        };
+        if (!cfg.Run.ApplyFees) notes.Add("Gebühren sind für diesen Lauf ausgeschaltet (brutto) — das Gebührenszenario ändert daher nichts.");
+        if (!reproduces) notes.Add("WARNUNG: Die Basiszeile reproduziert das Walk-forward-Ergebnis NICHT exakt — Szenarien nicht verwenden.");
+        return new ReportTickStressSection
+        {
+            Status = reproduces ? "Completed" : "Failed",
+            Reason = reproduces ? null : "Basis reproduziert den Walk-forward nicht exakt.",
+            Basis = $"Walk-forward-Testdaten (OOS) — {primary.Label}, {active.Count} Testfenster, eingefrorene Gewinner",
+            Variant = primary.Key, Rows = rows, BaseReproducesWalkForward = reproduces, FillExample = ex, Notes = notes
+        };
     }
 
     /// <summary>

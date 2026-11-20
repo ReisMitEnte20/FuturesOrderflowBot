@@ -60,6 +60,7 @@ public sealed class OrderflowMultiStrategyRunner
                 Risk = req.Risk,
                 Account = req.Account,
                 SlippageTicksOverride = req.SlippageTicksOverride,
+                FillDelayTicks = req.FillDelayTicks,
                 OrderFlowTicksPerBar = tpb,
                 DataQualityOk = req.CapabilitiesSufficient,
                 CapabilitiesSufficient = req.CapabilitiesSufficient
@@ -111,7 +112,7 @@ public sealed class OrderflowMultiStrategyRunner
         for (int ri = 0; ri < runResults.Count; ri++)
         {
             var rr = runResults[ri];
-            var links = TradeSignalLinker.Link(ticks, fullBarList, tpb, signalLogs[ri], rr.Trades, req.Instrument.TickSize, slipTicksUsed);
+            var links = TradeSignalLinker.Link(ticks, fullBarList, tpb, signalLogs[ri], rr.Trades, req.Instrument.TickSize, slipTicksUsed, req.FillDelayTicks);
             var trades = new List<WsTrade>(rr.Trades.Count);
             int k = 0;
             decimal net = 0m, fees = 0m;
