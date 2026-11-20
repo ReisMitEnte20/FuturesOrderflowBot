@@ -451,6 +451,7 @@ public sealed partial class ResearchOrchestrator
             DataSource = fc.Dev.Source,
             DataKind = DataKindOf(fc.Dev.Source).Kind,
             Symbol = fc.Dev.Instrument.Symbol,
+            InstrumentCheck = _quant.Backtest.DataInstrument(cfg.Run).Describe(fc.Dev.Instrument.Symbol),
             TimeframeMinutes = fc.Dev.TimeframeMinutes,
             DataFrom = split.DataFrom, DataTo = split.DataTo, DevelopmentTo = split.DevelopmentToUtc,
             HoldoutFrom = split.HoldoutFrom, HoldoutTo = split.HoldoutTo,

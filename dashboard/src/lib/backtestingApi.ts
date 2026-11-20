@@ -31,6 +31,8 @@ export interface BacktestingPreview {
   strategy?: StrategyDef | null; candidates: number; sensitivityParameters: string[]; estimatedEngineRuns: number;
   checks: PlannedCheck[]; elapsedMs: number;
   requirements: DataRequirementCheck[]; canStart: boolean; engine: string; signalData: string; executionData: string;
+  /** Instrument laut Datensatz (Tick-Daten: aus den Ticks selbst). */
+  dataInstrument?: { symbol?: string | null; basis: string; found: string[]; ambiguous: boolean } | null;
 }
 
 export interface ReportValue { value: number | null; reason?: string | null; }
@@ -120,7 +122,7 @@ export interface BacktestReport {
     dataSha256: string; dataSource: string; dataKind: string; symbol: string; timeframeMinutes: number;
     dataFrom?: string | null; dataTo?: string | null; developmentTo?: string | null; holdoutFrom?: string | null; holdoutTo?: string | null;
     sessionsUsed: string[]; holdoutSessions: number; parameters: Record<string, string>; quantity: number; initialBalance: number;
-    costModel?: CostProfile | null; fillModel: string[]; seeds: Record<string, number>; analysisProfile: Record<string, string>;
+    costModel?: CostProfile | null; instrumentCheck?: string | null; fillModel: string[]; seeds: Record<string, number>; analysisProfile: Record<string, string>;
     dataFileReads: number; dataCacheHits: number;
     engineKind?: string; signalData?: string; executionData?: string;
   };
@@ -172,6 +174,8 @@ export interface ReportSummary {
   strategy: string; strategyName: string; parameters: Record<string, string>; symbol: string; fromUtc?: string | null; toUtc?: string | null;
   /** Tatsächlich geladener Datenbereich (falls im gespeicherten Lauf vorhanden). */
   dataFrom?: string | null; dataTo?: string | null;
+  /** Widerspruch Lauf-Instrument ↔ bekanntes Datensatz-Instrument (Lese-Hinweis; gespeicherter Lauf unverändert). */
+  instrumentNote?: string | null;
   dataSha256?: string | null; stepsDone: number; stepsTotal: number; jobId?: string | null; figures: OverviewFigure[];
 }
 

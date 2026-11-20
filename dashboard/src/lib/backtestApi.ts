@@ -15,6 +15,8 @@ export interface InstrumentDef {
 export interface DataSourceDef {
   id: string; kind: string; label: string; available: boolean; note?: string | null;
   defaultFromUtc?: string | null; defaultMaxRows?: number | null;
+  /** Eindeutig bekanntes Instrument des Datensatzes (null = Datensatz legt keins fest → frei wählbar, keine Vermutung). */
+  instrument?: string | null; instrumentBasis?: string | null;
 }
 
 export interface RunRequest {

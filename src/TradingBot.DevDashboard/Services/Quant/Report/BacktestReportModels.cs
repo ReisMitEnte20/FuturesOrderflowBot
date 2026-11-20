@@ -64,6 +64,8 @@ public sealed record ReportProvenance
     public int Quantity { get; init; }
     public decimal InitialBalance { get; init; }
     public CostProfileDto? CostModel { get; init; }
+    /// <summary>Instrument-Prüfung zum Startzeitpunkt (Formular-Instrument gegen Datensatz). null = älterer Bericht ohne Prüfung.</summary>
+    public string? InstrumentCheck { get; init; }
     public IReadOnlyList<string> FillModel { get; init; } = Array.Empty<string>();
     public IReadOnlyDictionary<string, int> Seeds { get; init; } = new Dictionary<string, int>();
     public IReadOnlyDictionary<string, string> AnalysisProfile { get; init; } = new Dictionary<string, string>();

@@ -20,7 +20,23 @@ public sealed record InstrumentDef(string Symbol, decimal TickSize, decimal Tick
 /// <summary>Datenquelle. <see cref="DefaultFromUtc"/>/<see cref="DefaultMaxRows"/> beschreiben einen begrenzten,
 /// geeigneten Standard-Ausschnitt für das erste Laden (null = ganze Quelle bzw. Standardgrenze).</summary>
 public sealed record DataSourceDef(string Id, string Kind, string Label, bool Available, string? Note,
-    string? DefaultFromUtc = null, long? DefaultMaxRows = null);
+    string? DefaultFromUtc = null, long? DefaultMaxRows = null, string? Instrument = null, string? InstrumentBasis = null);
+
+/// <summary>
+/// Instrument eines Datensatzes. <see cref="Symbol"/> null = der Datensatz legt kein Instrument fest (dann gilt das gewählte,
+/// es wird nichts vermutet). <see cref="Found"/> = tatsächlich gefundene Symbole (bei Tick-Daten aus den Ticks selbst).
+/// </summary>
+public sealed record DataInstrumentInfo(string? Symbol, string Basis, IReadOnlyList<string> Found)
+{
+    public bool Ambiguous => Found.Count > 1;
+    public bool Conflicts(string requested) => Ambiguous || (Symbol is not null && !string.Equals(Symbol, requested, StringComparison.OrdinalIgnoreCase));
+
+    public string Describe(string requested) =>
+        Ambiguous ? $"Datensatz enthält mehrere Instrumente ({string.Join(", ", Found)}) — kein eindeutiges Instrument."
+        : Symbol is null ? $"Datensatz legt kein Instrument fest ({Basis}) — gewählt: {requested}; nicht aus den Daten prüfbar."
+        : Conflicts(requested) ? $"Datensatz enthält {Symbol} ({Basis}), angefragt ist {requested}."
+        : $"Instrument {Symbol} = Datensatz ({Basis}).";
+}
 public sealed record CandleDto(long T, decimal O, decimal H, decimal L, decimal C, decimal V);
 
 /// <summary>Herkunft/Umfang geladener OHLC-Bars (ohne Strategielauf).</summary>
@@ -177,7 +193,8 @@ public sealed class BacktestApiService
             sierra ? "Aggregiert echte Handelskerzen (Last). Randkerzen werden ausgeschlossen."
                    : "Lokale Sierra-Datei nicht gefunden.",
             DefaultFromUtc: sierra ? SierraDefaultFromUtc : null,
-            DefaultMaxRows: sierra ? SierraDefaultMaxRows : null));
+            DefaultMaxRows: sierra ? SierraDefaultMaxRows : null,
+            Instrument: SierraInstrument, InstrumentBasis: SierraInstrumentBasis));
 
         var ohlcDir = Path.Combine(_repoRoot, "samples", "ohlc");
         if (Directory.Exists(ohlcDir))
@@ -186,6 +203,41 @@ public sealed class BacktestApiService
                     "OHLC-CSV: " + Path.GetFileName(f), true, null));
         list.AddRange(Ticks.GetDataSources());
         return list;
+    }
+
+    /// <summary>Instrument der festen lokalen Sierra-Quelle (Kontrakt MESM26; die Datei selbst hat kein Symbolfeld).</summary>
+    public const string SierraInstrument = "MES";
+    public const string SierraInstrumentBasis = "Kontrakt MESM26 der lokalen Sierra-Datei";
+
+    /// <summary>
+    /// Instrument des gewählten Datensatzes: Tick-Quellen aus den Ticks selbst (Symbol jedes Ticks), die feste Sierra-Quelle aus
+    /// ihrem Kontrakt; OHLC-CSV ohne Symbolfeld → kein Instrument (keine Vermutung).
+    /// </summary>
+    public DataInstrumentInfo DataInstrument(BacktestRunRequest req)
+    {
+        if (OrderflowTickBacktest.IsTickSource(req.DataSourceId))
+        {
+            var lt = Ticks.Load(req);
+            var found = Ticks.Symbols(lt);
+            return new DataInstrumentInfo(found.Count == 1 ? found[0] : null,
+                found.Count == 1 ? $"Symbol aller {lt.Set.Ticks.Count:N0} Ticks" : found.Count == 0 ? "keine Ticks" : "mehrere Symbole", found);
+        }
+        if (req.DataSourceId == "sierra-mesm26")
+            return new DataInstrumentInfo(SierraInstrument, SierraInstrumentBasis, new[] { SierraInstrument });
+        return new DataInstrumentInfo(null, "OHLC-CSV ohne Symbolfeld", Array.Empty<string>());
+    }
+
+    /// <summary>
+    /// Harte Sperre vor jedem Engine-Lauf: ein Request, dessen Instrument dem Datensatz widerspricht, wird NICHT gerechnet
+    /// (sonst falsches Instrument-/Kostenprofil bzw. im Tick-Pfad ein leerer Lauf, weil die Engine die Ticks nach Symbol filtert).
+    /// </summary>
+    public void EnsureInstrumentMatches(BacktestRunRequest req)
+    {
+        var di = DataInstrument(req);
+        if (di.Conflicts(req.Symbol))
+            throw new InvalidOperationException(
+                $"Instrument-Widerspruch: {di.Describe(req.Symbol)} Es wird nicht mit einem fremden Instrument- und Kostenprofil gerechnet — " +
+                (di.Symbol is not null ? $"Instrument {di.Symbol} wählen oder einen {req.Symbol}-Datensatz verwenden." : "einen Datensatz mit genau einem Instrument wählen."));
     }
 
     /// <summary>Standard-Startzeitpunkt für das erste Laden der lokalen Sierra-Datei (UTC).</summary>
@@ -238,6 +290,7 @@ public sealed class BacktestApiService
     {
         try
         {
+            EnsureInstrumentMatches(req);   // auch der Chart-Backtest rechnet nie mit einem fremden Instrument
             var instrument = (await _instruments.GetAllAsync(ct)).FirstOrDefault(i =>
                 string.Equals(i.Symbol, req.Symbol, StringComparison.OrdinalIgnoreCase));
             if (instrument is null)
@@ -328,6 +381,7 @@ public sealed class BacktestApiService
     /// eines Auftrags auf DENSELBEN Daten lesen die (große) Quelldatei damit nur einmal.</summary>
     public async Task<RunContext> LoadContextAsync(BacktestRunRequest req, CancellationToken ct = default)
     {
+        EnsureInstrumentMatches(req);   // vor Profil-Auflösung und jedem Engine-Lauf
         var instrument = (await _instruments.GetAllAsync(ct)).FirstOrDefault(i =>
                              string.Equals(i.Symbol, req.Symbol, StringComparison.OrdinalIgnoreCase))
                          ?? throw new InvalidOperationException($"Kein InstrumentProfile für '{req.Symbol}' in config/instruments.");

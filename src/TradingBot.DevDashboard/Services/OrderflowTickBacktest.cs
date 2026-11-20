@@ -62,9 +62,11 @@ public sealed class OrderflowTickBacktest
         var list = new List<DataSourceDef>
         {
             new(SyntheticTickFixtures.OneDayId, "ticks-aggressor", "SYNTHETISCH (keine Marktdaten): MNQ-Ticks, 1 Handelstag", true,
-                "Im Code erzeugte Testsequenz (6 Bars à 500 Ticks). Für Walk-forward zu kurz — dient der Prüfung der Ablehnung."),
+                "Im Code erzeugte Testsequenz (6 Bars à 500 Ticks). Für Walk-forward zu kurz — dient der Prüfung der Ablehnung.",
+                Instrument: SyntheticTickFixtures.Symbol, InstrumentBasis: "im Code erzeugte MNQ-Ticks"),
             new(SyntheticTickFixtures.MultiDayId, "ticks-aggressor", "SYNTHETISCH (keine Marktdaten): MNQ-Ticks, 11 Handelstage (Walk-forward-Abnahme)", true,
-                "Im Code erzeugte Testsequenz 01.–16.06.2026 (10.06. fehlt absichtlich, 08.06. ohne Einstiegssignal). Kein Marktbezug.")
+                "Im Code erzeugte Testsequenz 01.–16.06.2026 (10.06. fehlt absichtlich, 08.06. ohne Einstiegssignal). Kein Marktbezug.",
+                Instrument: SyntheticTickFixtures.Symbol, InstrumentBasis: "im Code erzeugte MNQ-Ticks")
         };
         var dir = System.IO.Path.Combine(_repoRoot, "samples", "ticks");
         if (Directory.Exists(dir))
@@ -85,7 +87,8 @@ public sealed class OrderflowTickBacktest
                     var day = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(start, ny).DateTime);
                     list.Add(new DataSourceDef("atas-collection:" + day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), "ticks-aggressor",
                         $"ATAS-Collection MNQ New York {day:yyyy-MM-dd} (Trade-Ticks)", true,
-                        "Echte Aufnahme (manifest-geprüfter Import). Trade-Ticks mit Aggressor; keine Quotes/kein Orderbuch."));
+                        "Echte Aufnahme (manifest-geprüfter Import). Trade-Ticks mit Aggressor; keine Quotes/kein Orderbuch.",
+                        Instrument: "MNQ", InstrumentBasis: "Manifest der ATAS-Collection (Importer verlangt MNQ)"));
                 }
             }
             catch (Exception) { /* Manifest unlesbar → keine Collection-Quellen anbieten */ }
@@ -94,6 +97,13 @@ public sealed class OrderflowTickBacktest
     }
 
     // ---- Laden ---------------------------------------------------------------------------------------
+
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<ImportedMarketDataSet, IReadOnlyList<string>> _symbols = new();
+
+    /// <summary>Tatsächlich in den Ticks enthaltene Symbole (ganzer Datensatz, nicht nur der Zeitraum), sortiert; je Datensatz einmal ermittelt.</summary>
+    public IReadOnlyList<string> Symbols(LoadedTicks lt) =>
+        _symbols.GetValue(lt.Set, s => s.Ticks.Select(t => t.Symbol).Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.Ordinal).ToList());
 
     public LoadedTicks Load(BacktestRunRequest req)
     {

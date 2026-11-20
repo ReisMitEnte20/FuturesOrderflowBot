@@ -73,6 +73,8 @@ public sealed record BacktestingPreview
     public string Engine { get; init; } = "ohlc";
     public string SignalData { get; init; } = "";
     public string ExecutionData { get; init; } = "";
+    /// <summary>Instrument laut Datensatz (null = Datensatz legt keins fest); Grundlage der Instrument-Prüfung.</summary>
+    public DataInstrumentInfo? DataInstrument { get; init; }
     public long ElapsedMs { get; init; }
 }
 
@@ -93,6 +95,8 @@ public sealed record ReportSummary
     /// <summary>Tatsächlich geladener Datenbereich des Laufs (erste/letzte Kerze bzw. Tick; nur lesend aus dem gespeicherten Lauf).</summary>
     public DateTimeOffset? DataFrom { get; init; }
     public DateTimeOffset? DataTo { get; init; }
+    /// <summary>Gesetzt, wenn das Instrument des Laufs dem bekannten Instrument des Datensatzes widerspricht (Lese-Hinweis, nicht umgeschrieben).</summary>
+    public string? InstrumentNote { get; init; }
     public string? DataSha256 { get; init; }
     public int StepsDone { get; init; }
     public int StepsTotal { get; init; }
@@ -284,6 +288,21 @@ public sealed class BacktestingService
     private (IReadOnlyList<DataRequirementCheck> Checks, bool CanStart) Requirements(BacktestRunRequest run, StrategyDef? def)
     {
         if (def is null) return (new[] { new DataRequirementCheck("Bekannte Strategie", false, $"Strategie '{run.Strategy}' ist nicht registriert.") }, false);
+        // Instrument zuerst: widerspricht das gewählte Instrument dem Datensatz, wird nichts weiter geprüft und nichts gerechnet.
+        DataInstrumentInfo di;
+        try { di = _quant.Backtest.DataInstrument(run); }
+        catch (Exception ex) { return (new[] { new DataRequirementCheck("Datensatz ladbar", false, ex.Message) }, false); }
+        var instr = new DataRequirementCheck("Instrument passt zum Datensatz", !di.Conflicts(run.Symbol),
+            di.Conflicts(run.Symbol)
+                ? $"{di.Describe(run.Symbol)} Gerechnet würde mit dem {run.Symbol}-Instrument- und Kostenprofil — Start gesperrt."
+                : di.Describe(run.Symbol));
+        if (!instr.Met) return (new[] { instr }, false);
+        var (rest, ok) = RequirementsFor(run, def);
+        return (new[] { instr }.Concat(rest).ToList(), ok);
+    }
+
+    private (IReadOnlyList<DataRequirementCheck> Checks, bool CanStart) RequirementsFor(BacktestRunRequest run, StrategyDef def)
+    {
         bool tickSource = OrderflowTickBacktest.IsTickSource(run.DataSourceId);
         if (def.Engine == OrderflowTickBacktest.EngineKind)
         {
@@ -315,7 +334,7 @@ public sealed class BacktestingService
                 return new BacktestingPreview
                 {
                     Ok = true, CanStart = false, Requirements = reqs, Strategy = def, Engine = def?.Engine ?? "?",
-                    Symbol = r.Symbol, ElapsedMs = sw.ElapsedMilliseconds
+                    Symbol = r.Symbol, DataInstrument = TryDataInstrument(run), ElapsedMs = sw.ElapsedMilliseconds
                 };
             var ctx = await _quant.Backtest.LoadContextAsync(run, ct);
             if (ctx.Candles.Count == 0) return new BacktestingPreview { Ok = false, Error = "Keine gültigen Kerzen im gewählten Zeitraum.", Requirements = reqs, ElapsedMs = sw.ElapsedMilliseconds };
@@ -365,7 +384,7 @@ public sealed class BacktestingService
                 Sessions = sessions, DevelopmentSessions = dev, HoldoutSessions = hs, HoldoutFrom = hFrom, HoldoutFraction = frac,
                 Costs = costs, FeeIsExample = ctx.FeeIsExample, Strategy = def, Candidates = grid.Count, SensitivityParameters = sens,
                 EstimatedEngineRuns = 2 + sens.Count * 5 + pairRuns + grid.Count * 2 * 3 * Math.Max(1, dev / Math.Max(1, r.TestSessions)) + 8,
-                Checks = checks, ElapsedMs = sw.ElapsedMilliseconds
+                Checks = checks, DataInstrument = TryDataInstrument(run), ElapsedMs = sw.ElapsedMilliseconds
             };
         }
         catch (OperationCanceledException) { throw; }
@@ -373,6 +392,20 @@ public sealed class BacktestingService
         {
             return new BacktestingPreview { Ok = false, Error = ex.Message, ElapsedMs = sw.ElapsedMilliseconds };
         }
+    }
+
+    private DataInstrumentInfo? TryDataInstrument(BacktestRunRequest run)
+    {
+        try { return _quant.Backtest.DataInstrument(run); } catch { return null; }
+    }
+
+    /// <summary>Instrument-Hinweis für die Laufliste — nur aus der Quellen-ID, ohne Daten zu laden; nichts wird umgeschrieben.</summary>
+    private string? InstrumentNote(ResearchRunRecord x)
+    {
+        var src = _quant.Backtest.GetDataSources().FirstOrDefault(d => d.Id == x.Config.Run.DataSourceId);
+        if (src?.Instrument is not { } known) return null;
+        return string.Equals(known, x.Config.Run.Symbol, StringComparison.OrdinalIgnoreCase) ? null
+            : $"Instrument-Widerspruch: Lauf mit {x.Config.Run.Symbol}, Datensatz enthält {known} ({src.InstrumentBasis}). Gestartet vor der Instrument-Prüfung — Ergebnis nicht verwendbar.";
     }
 
     /// <summary>Baut die eingefrorene Konfiguration des Ein-Knopf-Auftrags.</summary>
@@ -445,6 +478,7 @@ public sealed class BacktestingService
             StrategyName = defs.FirstOrDefault(d => d.Id == x.Config.Run.Strategy)?.Name ?? x.Config.Run.Strategy,
             Parameters = x.Config.Run.Params, Symbol = x.Config.Run.Symbol, FromUtc = x.Config.Run.FromUtc, ToUtc = x.Config.Run.ToUtc,
             DataFrom = x.DataFrom, DataTo = x.DataTo,
+            InstrumentNote = InstrumentNote(x),
             DataSha256 = x.Report?.Provenance.DataSha256, JobId = x.JobId,
             StepsDone = x.Steps.Count(s => s.Status is not (ResearchStepStatus.Pending or ResearchStepStatus.Running)),
             StepsTotal = x.Steps.Count, Figures = x.Report?.Overview.Figures ?? Array.Empty<OverviewFigure>()

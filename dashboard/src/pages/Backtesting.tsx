@@ -134,7 +134,11 @@ function TestView() {
       .then(([st, src, inst]) => {
         setStrategies(st); setSources(src); setInstruments(inst);
         const first = src.find((s) => s.available) ?? src[0];
-        if (first) setForm((f) => ({ ...f, dataSourceId: f.dataSourceId || first.id, symbol: inst.find((i) => i.symbol === f.symbol)?.symbol ?? inst[0]?.symbol ?? f.symbol }));
+        if (first) setForm((f) => {
+          const id = f.dataSourceId || first.id;
+          const known = src.find((s) => s.id === id)?.instrument;
+          return { ...f, dataSourceId: id, symbol: known ?? inst.find((i) => i.symbol === f.symbol)?.symbol ?? inst[0]?.symbol ?? f.symbol };
+        });
       })
       .catch((e) => !ac.signal.aborted && setError(String(e)));
     return () => ac.abort();
@@ -178,25 +182,32 @@ function TestView() {
 
   const strategy = strategies.find((s) => s.id === form.strategy);
   const request = useMemo(() => toRequest(form), [form]);
+  const requestKey = useMemo(() => JSON.stringify(request), [request]);
+  const [previewKey, setPreviewKey] = useState<string | null>(null);
 
-  // Vorschau (Datenumfang, Kostenprofil, mögliche Prüfungen) — verzögert nach Änderungen.
+  // Vorschau (Datenumfang, Kostenprofil, mögliche Prüfungen) — verzögert nach Änderungen. Eine verspätete Antwort zu einer
+  // älteren Auswahl wird verworfen; Entscheidung und Start nutzen nur eine Vorschau, die GENAU zur aktuellen Auswahl gehört.
   useEffect(() => {
     if (!form.dataSourceId) return;
     const ac = new AbortController();
+    const key = requestKey;
     const h = window.setTimeout(() => {
       setPreviewing(true);
-      backtestingApi.preview(request, ac.signal).then((p) => setPreview(p)).catch((e) => !ac.signal.aborted && setPreview({ ok: false, error: String(e) } as BacktestingPreview))
+      backtestingApi.preview(request, ac.signal)
+        .then((p) => { if (!ac.signal.aborted) { setPreview(p); setPreviewKey(key); } })
+        .catch((e) => { if (!ac.signal.aborted) { setPreview({ ok: false, error: String(e) } as BacktestingPreview); setPreviewKey(key); } })
         .finally(() => !ac.signal.aborted && setPreviewing(false));
     }, 500);
     return () => { clearTimeout(h); ac.abort(); };
-  }, [request, form.dataSourceId]);
+  }, [request, requestKey, form.dataSourceId]);
+  const freshPreview = previewKey === requestKey ? preview : null;
 
   const chooseStrategy = (id: string) => {
     const s = strategies.find((x) => x.id === id);
     setForm((f) => ({ ...f, strategy: id, params: Object.fromEntries((s?.params ?? []).map((p) => [p.key, p.default])) }));
   };
 
-  const decision = startDecision(preview);
+  const decision = startDecision(freshPreview);
   const anyRunning = (run != null && !isTerminal(run.status)) || (reports.list ?? []).some((r) => !isTerminal(r.status));
   const start = useCallback(async () => {
     if (startLock.current) return;            // Doppelklick: kein zweiter Auftrag (zusätzlich serverseitig abgesichert)
@@ -223,6 +234,18 @@ function TestView() {
   const cancelRun = async (id: string) => { await backtestingApi.cancel(id).catch(() => {}); reports.load(); };
 
   const sourceOptions = sources.map((s) => ({ value: s.id, label: s.label + (s.available ? "" : " (nicht vorhanden)") }));
+  const source = sources.find((s) => s.id === form.dataSourceId);
+  const knownInstrument = source?.instrument ?? null;
+  // Quellenwechsel: Datensatz und (bekanntes) Instrument in EINEM Schritt setzen — Vorschau und Start sehen nie eine Mischung.
+  const chooseSource = (v: string) => {
+    const src = sources.find((s) => s.id === v);
+    setForm((f) => ({
+      ...f, dataSourceId: v, ...(src?.instrument ? { symbol: src.instrument } : {}),
+      ...(v.startsWith("ticks-csv:") || v.startsWith("atas-collection:") || v.startsWith("synthetic:") ? { fromUtc: "", toUtc: "" } : {}),
+    }));
+  };
+  const dataInstr = freshPreview?.dataInstrument;
+  const adoptInstrument = dataInstr?.symbol && !dataInstr.ambiguous && dataInstr.symbol !== form.symbol && !knownInstrument ? dataInstr.symbol : null;
   const isTickStrategy = strategy?.engine === "orderflow-ticks";
 
   return (
@@ -235,14 +258,35 @@ function TestView() {
         <section aria-label="Neue Konfiguration" className="self-start rounded-lg border border-[var(--line)] bg-[var(--panel)] p-3 space-y-2.5">
           <h2 className="text-[13px] font-medium text-[var(--fg)]">Neuer Backtest</h2>
           <Field label="Strategie"><Select value={form.strategy} onChange={chooseStrategy} options={strategies.map((s) => ({ value: s.id, label: s.name }))} /></Field>
-          <Field label="Datensatz"><Select value={form.dataSourceId} onChange={(v) => setForm((f) => ({ ...f, dataSourceId: v, ...(v.startsWith("ticks-csv:") || v.startsWith("atas-collection:") || v.startsWith("synthetic:") ? { fromUtc: "", toUtc: "" } : {}) }))} options={sourceOptions} /></Field>
+          <Field label="Datensatz"><Select value={form.dataSourceId} onChange={chooseSource} options={sourceOptions} /></Field>
           <div className="grid grid-cols-2 gap-2">
             <Field label="Von (UTC)"><Input type="datetime-local" value={form.fromUtc} onChange={(v) => set("fromUtc", v)} /></Field>
             <Field label="Bis (UTC, exklusiv)"><Input type="datetime-local" value={form.toUtc} onChange={(v) => set("toUtc", v)} /></Field>
           </div>
           {!form.fromUtc && !form.toUtc && <p className="-mt-1 text-[10px] text-[var(--fg-faint)]">Kein Zeitraum gesetzt — der ganze Datensatz wird verwendet.</p>}
+          {!knownInstrument && source && (
+            <p className="-mt-1 text-[10px] text-[var(--fg-faint)]">
+              Dieser Datensatz legt kein Instrument fest — das gewählte Instrument wird verwendet und vor dem Start gegen die Daten geprüft, soweit sie ein Symbol enthalten.
+            </p>
+          )}
+          {adoptInstrument && (
+            <p className="-mt-1 text-[11px] text-[var(--gold)]">
+              Die Daten enthalten {adoptInstrument}, gewählt ist {form.symbol}.{" "}
+              <button onClick={() => set("symbol", adoptInstrument)} className="underline text-[var(--key)]">{adoptInstrument} übernehmen</button>
+            </p>
+          )}
           <div className="flex flex-wrap items-end gap-2">
-            <div className="w-[96px]"><Field label="Instrument"><Select value={form.symbol} onChange={(v) => set("symbol", v)} options={(instruments.length ? instruments.map((i) => i.symbol) : [form.symbol]).map((s) => ({ value: s, label: s }))} /></Field></div>
+            {knownInstrument ? (
+              <div className="w-[150px]">
+                <span className="mb-0.5 block text-[10px] text-[var(--fg-faint)]">Instrument</span>
+                <div data-testid="instrument-from-data" title={`Festgelegt durch den Datensatz: ${source?.instrumentBasis ?? ""}`}
+                  className="flex h-8 items-center gap-1.5 rounded-md border border-[var(--line)] bg-[var(--bg-2)] px-2 text-xs">
+                  <b className="text-[var(--fg)]">{knownInstrument}</b><span className="text-[var(--fg-faint)]">· aus Datensatz</span>
+                </div>
+              </div>
+            ) : (
+              <div className="w-[96px]"><Field label="Instrument (wählen)"><Select value={form.symbol} onChange={(v) => set("symbol", v)} options={(instruments.length ? instruments.map((i) => i.symbol) : [form.symbol]).map((s) => ({ value: s, label: s }))} /></Field></div>
+            )}
             <div className="w-[96px]"><Field label={isTickStrategy ? "Kerzen (Min., ungenutzt)" : "Kerzen (Minuten)"}><Input type="number" value={String(form.timeframeMinutes)} onChange={(v) => set("timeframeMinutes", parseInt(v, 10) || 5)} /></Field></div>
             {strategy && (
               <div className="min-w-0 flex-1">
@@ -300,7 +344,7 @@ function TestView() {
         </section>
 
         {/* ---- Entscheidung ---- */}
-        <StartDecisionCard preview={preview} previewing={previewing} decision={decision} strategy={strategy} form={form} />
+        <StartDecisionCard preview={freshPreview} previewing={previewing || (preview != null && freshPreview == null)} decision={decision} strategy={strategy} form={form} />
 
         {/* ---- Gespeicherte Läufe (getrennt von der neuen Konfiguration) ---- */}
         <RecentRuns list={reports.list} err={reports.err} openId={runId} onOpen={openReport} onCancel={cancelRun}
@@ -511,7 +555,9 @@ function RunRow({ r, open, progress, onOpen, onCancel }: {
           <span className="font-medium text-[var(--fg)]">{r.strategyName}</span>
           {r.profile !== "full" && <span className="ml-1 text-[10px] text-[var(--fg-faint)]">(klassisch)</span>}
         </span>
-        <span className="text-[var(--fg-dim)]">{r.symbol}</span>
+        <span className={cn(r.instrumentNote ? "text-[var(--red)] font-medium" : "text-[var(--fg-dim)]")} title={r.instrumentNote ?? undefined}>
+          {r.symbol}{r.instrumentNote && " ⚠"}
+        </span>
         <span className="whitespace-nowrap font-semibold text-[var(--fg)] mono text-[11px]" title="getesteter Zeitraum">{testedPeriod(r.fromUtc, r.toUtc, r.dataFrom, r.dataTo)}</span>
         <StatusChip status={r.status} />
         {open ? <span className="w-[92px] text-right text-[10px] text-[var(--fg-faint)]">geöffnet ↓</span>
@@ -536,6 +582,7 @@ function RunRow({ r, open, progress, onOpen, onCancel }: {
           {r.statusReason && <div>{r.statusReason}</div>}
         </div>
       )}
+      {r.instrumentNote && <div className="mt-0.5 text-[10px] text-[var(--red)]">{r.instrumentNote}</div>}
     </li>
   );
 }
@@ -573,6 +620,9 @@ function RunHeader({ run, request, summary, onClose, onOpenHistory }: {
         {live && " Fortschritt und Abbruch unter „Letzte Läufe“."}
       </p>
       {run.statusReason && <p className="text-[11px] text-[var(--fg-dim)]">{run.statusReason}</p>}
+      {summary?.instrumentNote ? <p className="text-[11px] text-[var(--red)]">{summary.instrumentNote}</p>
+        : prov?.instrumentCheck ? <p className="text-[11px] text-[var(--fg-dim)]">Instrument: {prov.instrumentCheck}{prov.costModel ? ` · Punktwert ${money(prov.costModel.pointValue)} ${prov.costModel.currency} · Tickwert ${money(prov.costModel.tickValue)}` : ""}</p>
+        : prov ? <p className="text-[11px] text-[var(--fg-faint)]">Instrument {prov.symbol}: Prüfung gegen den Datensatz ist in diesem älteren Bericht nicht hinterlegt — welches Profil zu den Daten passte, wird nicht nachträglich behauptet.</p> : null}
       <details className="text-[10px] text-[var(--fg-faint)]">
         <summary className="cursor-pointer select-none">Technische Details</summary>
         <div className="mt-1 space-y-1">

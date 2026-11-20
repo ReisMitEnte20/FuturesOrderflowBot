@@ -56,6 +56,7 @@ public sealed partial class ResearchOrchestrator
         {
             int tpb = OrderflowTickBacktest.TicksPerBarOf(cfg.Run.Params);
             var lt = bt.Ticks.Load(cfg.Run);
+            bt.EnsureInstrumentMatches(cfg.Run);   // kein Lauf mit fremdem Instrument (Engine würde die Ticks sonst wegfiltern)
             var checks = OrderflowTickBacktest.Check(lt, cfg.Run.DataSourceId, tpb, null);
             if (checks.Any(c => !c.Met))
             {

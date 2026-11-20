@@ -15,6 +15,8 @@ public static class SyntheticTickFixtures
     public const string OneDayId = "synthetic:mnq-1tag";
     public const string MultiDayId = "synthetic:mnq-mehrtage";
     public const int TicksPerBar = 500;
+    /// <summary>Symbol jedes erzeugten Ticks.</summary>
+    public const string Symbol = "MNQ";
 
     /// <summary>Handelstage der Mehrtages-Fixture: Werktage 01.–16.06.2026, der 10.06. fehlt absichtlich (fehlender Datentag).</summary>
     public static IReadOnlyList<DateOnly> MultiDayDates { get; } = new[]
@@ -100,6 +102,6 @@ public static class SyntheticTickFixtures
     };
 
     private static void Row(StringBuilder sb, DateTimeOffset t, decimal price, string aggressor) =>
-        sb.Append(t.ToString("yyyy-MM-ddTHH:mm:ss.fff", CultureInfo.InvariantCulture)).Append("Z,MNQ,")
+        sb.Append(t.ToString("yyyy-MM-ddTHH:mm:ss.fff", CultureInfo.InvariantCulture)).Append("Z,").Append(Symbol).Append(',')
           .Append(price.ToString("F2", CultureInfo.InvariantCulture)).Append(",1,").Append(aggressor).Append('\n');
 }
