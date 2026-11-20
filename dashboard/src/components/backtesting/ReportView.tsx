@@ -413,6 +413,8 @@ function OosSection({ rep, step }: { rep: BacktestReport; step?: ResearchStepSta
       {o && <>
         <div className="rounded-md border border-[var(--line-2)] bg-[var(--bg-2)] p-2 text-[11px] text-[var(--fg-dim)] space-y-1">
           <div><b className="text-[var(--fg)]">Auswahlregel (vorab gespeichert):</b> {o.selectionRule}</div>
+          {o.selectionFigure && <div><b className="text-[var(--fg)]">Auswahlzahl:</b> {o.selectionFigure}</div>}
+          {o.windowEndRule && <div><b className="text-[var(--fg)]">Fensterende:</b> {o.windowEndRule}</div>}
           <div><b className="text-[var(--fg)]">Gleichstand:</b> {o.tieRule}</div>
           <div><b className="text-[var(--fg)]">Raster:</b> {o.grid.length} Kandidaten — {o.grid.slice(0, 9).map((g) => Object.entries(g).map(([k, v]) => `${k}=${v}`).join(",") || "keine Parameter").join(" · ")}{o.grid.length > 9 ? " …" : ""}</div>
           <div><b className="text-[var(--fg)]">Grenzen/Warm-up:</b> {o.leakageRules}</div>
@@ -424,15 +426,23 @@ function OosSection({ rep, step }: { rep: BacktestReport; step?: ResearchStepSta
               className={cn("rounded-md border px-2 py-1 text-left text-[11px]", variant?.key === v.key ? "border-[var(--cyan)]" : "border-[var(--line)]")}>
               <div className="flex items-center gap-2"><b className="text-[var(--fg)]">{v.label}</b><StatusChip status={v.status} />{v.key === o.primaryVariant && <span className="text-[10px] text-[var(--cyan)]">Primär</span>}</div>
               <div className="text-[10px] text-[var(--fg-faint)]">
-                {v.status === "Completed" ? `OOS ${money(v.oosNet, 0)} · ${v.oosTrades} Trades · ${v.oosSessions} Sessions` : v.reason}
+                {v.status === "Completed" ? `OOS ${money(v.oosValue ?? v.oosNet, 0)}${v.oosValue != null ? " inkl. offen" : ""} · ${v.oosTrades} Trades · ${v.oosSessions} Sessions` : v.reason}
               </div>
             </button>
           ))}
         </div>
         {variant && variant.status === "Completed" && <>
           <Grid cols={6}>
-            <Kv label="OOS-Netto (gewählte Parameter)" value={money(variant.oosNet)} tone={tone(variant.oosNet)} hint="nur verkettete Testfenster" />
-            <Kv label="Basisstrategie, dieselben Tage" value={money(variant.baseNetSameSessions)} tone={tone(variant.baseNetSameSessions)} hint={`${variant.baseTradesSameSessions} Trades`} />
+            {variant.oosValue != null ? <>
+              <Kv label="OOS-Netto inkl. offener Bewertung (gewählte Parameter)" value={money(variant.oosValue)} tone={tone(variant.oosValue)}
+                hint={`geschlossen ${money(variant.oosNet)} + offen ${money(variant.oosOpenValuation ?? 0)} (${variant.oosOpenWindowEnds ?? 0} Fenster offen)`} />
+              <Kv label="Basisstrategie inkl. offener Bewertung, dieselben Tage" value={money(variant.baseValueSameSessions ?? variant.baseNetSameSessions)}
+                tone={tone(variant.baseValueSameSessions ?? variant.baseNetSameSessions)}
+                hint={`geschlossen ${money(variant.baseNetSameSessions)} (${variant.baseTradesSameSessions} Trades) + offen ${money(variant.baseOpenValuationSameSessions ?? 0)}`} />
+            </> : <>
+              <Kv label="OOS-Netto (gewählte Parameter)" value={money(variant.oosNet)} tone={tone(variant.oosNet)} hint="nur verkettete Testfenster" />
+              <Kv label="Basisstrategie, dieselben Tage" value={money(variant.baseNetSameSessions)} tone={tone(variant.baseNetSameSessions)} hint={`${variant.baseTradesSameSessions} Trades`} />
+            </>}
             <Kv label="OOS-Trades / Sessions" value={`${variant.oosTrades} / ${variant.oosSessions}`} />
             <Kv label="OOS max. DD" value={money(variant.oosMaxDrawdown)} hint={`Basis gleiche Tage: ${money(variant.baseMaxDrawdownSameSessions)}`} />
             <Kv label="Training / Test" value={`${variant.trainSessions} / ${variant.testSessions} Sessions`} />
@@ -442,13 +452,25 @@ function OosSection({ rep, step }: { rep: BacktestReport; step?: ResearchStepSta
             { name: "OOS (im Training gewählt)", x: curves.x, y: curves.ya, color: "#22b8f0" },
             { name: "Basisstrategie (unverändert), dieselben Tage", x: curves.x, y: curves.yb, color: "#f0c35a", dashed: true },
           ]} />}
-          <Tbl head={["Fenster", "Training", "Sess.", "Test", "Sess.", "Gewählt (nur Training)", "Trainingswert", "Test-Netto", "Trades", "Basis-Netto", "Hinweis"]}
-            rows={variant.folds.map((f) => [
-              f.index + 1, `${day(f.trainFromT)} – ${day(f.trainToT)}`, f.trainSessions, `${day(f.testFromT)} – ${day(f.testToT)}`, f.testSessions,
-              f.selectedParameters ? Object.entries(f.selectedParameters).map(([k, v]) => `${k}=${v}`).join(", ") || "feste Strategie" : <span className="text-[var(--gold)]">keiner</span>,
-              num(f.trainValue ?? null), <span className={(f.testNet ?? 0) >= 0 ? "text-[var(--key)]" : "text-[var(--red)]"}>{money(f.testNet ?? null)}</span>, f.testTrades,
-              money(f.baseNet), <span className="whitespace-normal font-sans text-[var(--fg-faint)]">{f.note ?? ""}</span>,
-            ])} />
+          {variant.folds.some((f) => f.testValue != null || f.baseValue != null) ? (
+            <Tbl head={["Fenster", "Training", "Sess.", "Test", "Sess.", "Gewählt (nur Training)", "Trainingswert (inkl. offen)", "Test geschlossen", "Test offen bewertet", "Test inkl. offen", "Trades", "Basis inkl. offen", "Hinweis"]}
+              rows={variant.folds.map((f) => [
+                f.index + 1, `${day(f.trainFromT)} – ${day(f.trainToT)}`, f.trainSessions, `${day(f.testFromT)} – ${day(f.testToT)}`, f.testSessions,
+                f.selectedParameters ? Object.entries(f.selectedParameters).map(([k, v]) => `${k}=${v}`).join(", ") || "feste Strategie" : <span className="text-[var(--gold)]">keiner</span>,
+                num(f.trainValue ?? null), money(f.testNet ?? null), money(f.testOpenValuation ?? null),
+                <span className={(f.testValue ?? 0) >= 0 ? "text-[var(--key)]" : "text-[var(--red)]"}>{money(f.testValue ?? null)}</span>, f.testTrades,
+                <span title={`geschlossen ${money(f.baseNet)} + offen ${money(f.baseOpenValuation ?? 0)}`}>{money(f.baseValue ?? f.baseNet)}</span>,
+                <span className="whitespace-normal font-sans text-[var(--fg-faint)]">{f.note ?? ""}</span>,
+              ])} />
+          ) : (
+            <Tbl head={["Fenster", "Training", "Sess.", "Test", "Sess.", "Gewählt (nur Training)", "Trainingswert", "Test-Netto", "Trades", "Basis-Netto", "Hinweis"]}
+              rows={variant.folds.map((f) => [
+                f.index + 1, `${day(f.trainFromT)} – ${day(f.trainToT)}`, f.trainSessions, `${day(f.testFromT)} – ${day(f.testToT)}`, f.testSessions,
+                f.selectedParameters ? Object.entries(f.selectedParameters).map(([k, v]) => `${k}=${v}`).join(", ") || "feste Strategie" : <span className="text-[var(--gold)]">keiner</span>,
+                num(f.trainValue ?? null), <span className={(f.testNet ?? 0) >= 0 ? "text-[var(--key)]" : "text-[var(--red)]"}>{money(f.testNet ?? null)}</span>, f.testTrades,
+                money(f.baseNet), <span className="whitespace-normal font-sans text-[var(--fg-faint)]">{f.note ?? ""}</span>,
+              ])} />
+          )}
           {variant.folds.some((f) => (f.testSessionIds?.length ?? 0) > 0) && (
             <div className="space-y-2">
               <div className="text-[11px] text-[var(--fg-dim)]">
@@ -465,18 +487,23 @@ function OosSection({ rep, step }: { rep: BacktestReport; step?: ResearchStepSta
                     {f.missingDataDays && f.missingDataDays.length > 0 && <span className="text-[var(--gold)]">fehlender Datentag: {f.missingDataDays.join(", ")}</span>}
                   </div>
                   <div className="mt-1 text-[var(--fg-dim)]">
-                    Trainingswert je Kandidat (Netto nach Kosten): {Object.entries(f.candidateTrainValues ?? {}).map(([k, v]) =>
+                    Trainingswert je Kandidat ({o.selectionFigure ? "Netto inkl. offener Bewertung am Fensterende" : "Netto nach Kosten"}): {Object.entries(f.candidateTrainValues ?? {}).map(([k, v]) =>
                       `${k.replace(/_TicksPerBar\d+$/, "")}: ${v == null ? "ausgeschlossen" : money(v)} (${f.candidateTrainTrades?.[k] ?? 0} Tr.)`).join(" · ")}
                   </div>
                   <Tbl className="mt-1" head={["Testtag", "Trades (Gewinner)", "Netto (Gewinner)", "Trades (Standard)", "Netto (Standard)"]}
                     rows={(f.testSessionResults ?? []).map((s, i) => [
                       s.key, s.trades === 0 ? <span className="text-[var(--fg-faint)]">0 — getestet, kein Einstieg</span> : s.trades,
-                      money(s.net), f.baseTestSessionResults?.[i]?.trades ?? "–", money(f.baseTestSessionResults?.[i]?.net ?? null),
+                      <>{money(s.net)}{s.openValuation != null && <span className="text-[var(--fg-faint)]"> (davon offen {money(s.openValuation)})</span>}</>,
+                      f.baseTestSessionResults?.[i]?.trades ?? "–",
+                      <>{money(f.baseTestSessionResults?.[i]?.net ?? null)}{f.baseTestSessionResults?.[i]?.openValuation != null &&
+                        <span className="text-[var(--fg-faint)]"> (davon offen {money(f.baseTestSessionResults[i].openValuation ?? null)})</span>}</>,
                     ])} />
                   <div className="mt-1 text-[var(--fg-faint)]">
                     Gewinner {f.selectedParameters ? Object.entries(f.selectedParameters).map(([k, v]) => `${k}=${v}`).join(", ") : "–"} · Standard{" "}
                     {f.baseParameters ? Object.entries(f.baseParameters).map(([k, v]) => `${k}=${v}`).join(", ") : "–"} · Signale {f.testSignals ?? "–"} · Gebühren {money(f.testFees ?? null)}
-                    {f.openPositionAtTestEnd && <> · {f.openPositionAtTestEnd}</>}
+                    {f.testOpenEntryFees != null && f.testOpenEntryFees !== 0 && <> (+ Einstiegsgebühr offen {money(f.testOpenEntryFees)})</>}
+                    {f.openPositionAtTestEnd && <> · Gewinner: {f.openPositionAtTestEnd}</>}
+                    {f.baseOpenPositionAtTestEnd && <> · Standard: {f.baseOpenPositionAtTestEnd}</>}
                   </div>
                 </div>
               ))}

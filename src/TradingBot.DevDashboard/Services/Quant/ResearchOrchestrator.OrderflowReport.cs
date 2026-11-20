@@ -134,15 +134,18 @@ public sealed partial class ResearchOrchestrator
             {
                 var stats = TradeStatistics.Compute(baseTrades, synth.Data.EvaluatedBars);
                 var openQty = diag?.FinalPositionQuantity ?? 0;
-                stats = stats with { UnrealizedAtEnd = openQty > 0 ? diag!.FinalPositionUnrealizedGross : 0m, OpenAtEnd = openQty > 0 ? 1 : 0 };
+                var wv = WindowValuation.Of(baseRun);
+                // Einheitliche Fensterend-Regel: offene Bewertung = unrealisiert brutto zum letzten Trade-Tick − bereits gezahlte Einstiegsgebühr.
+                stats = stats with { UnrealizedAtEnd = wv.OpenValuation, OpenAtEnd = wv.IsOpen ? 1 : 0 };
                 var notes = new List<string>
                 {
                     "Brutto = Kursergebnis aus den Engine-Fills (Slippage bereits im Fill-Preis); Netto = Brutto − Gebühren (je Seite und Kontrakt genau einmal).",
                     "Signale entstehen auf geschlossenen N-Tick-Bars; die Market-Order füllt am ersten Tick der Folgebar (kein Lookahead)."
                 };
                 if (openQty > 0)
-                    notes.Add($"Am Datenende offene Position ({diag!.FinalPositionSide} {openQty} @ {diag.FinalPositionAvgPrice}) — die Engine stellt NICHT zwangsweise glatt; " +
-                              $"unrealisiert (brutto, letzter Tick) {diag.FinalPositionUnrealizedGross:0.00}, getrennt ausgewiesen und nicht im Netto.");
+                    notes.Add($"Am Datenende offene Position ({wv.Side} {wv.Quantity} @ {wv.AvgPrice}) — die Engine stellt NICHT zwangsweise glatt. Bewertet zum letzten " +
+                              $"Trade-Tick {wv.LastTickPrice}: unrealisiert brutto {wv.UnrealizedGross:0.00} − bereits gezahlte Einstiegsgebühr {wv.OpenEntryFees:0.00} = " +
+                              $"{wv.OpenValuation:0.00} (kein Exit-Fill, kein Trade). Netto der geschlossenen Trades {wv.ClosedNet:0.00}; inkl. offener Bewertung {wv.Value:0.00}.");
                 report = report with
                 {
                     Result = new ReportResultSection
@@ -164,6 +167,9 @@ public sealed partial class ResearchOrchestrator
                 var closed = DrawdownAnalysis.Analyze(DrawdownAnalysis.ClosedTradeCurve(baseTrades, cap, start), "Abgeschlossene Trades");
                 var mtmCurve = new List<EquitySample> { new(start, cap) };
                 mtmCurve.AddRange(synth.Equity.Select(p => new EquitySample(p.Time, (double)(p.Equity + p.OpenPnL))));
+                // Endpunkt nach der einheitlichen Fensterend-Regel: offene Position zum letzten Trade-Tick bewertet (abzgl. Einstiegsgebühr).
+                var endVal = WindowValuation.Of(baseRun);
+                if (endVal.IsOpen) mtmCurve.Add(new EquitySample(devTicks[^1].Timestamp, (double)((decimal)cap + endVal.Value)));
                 var mtm = DrawdownAnalysis.Analyze(mtmCurve, "Mark-to-Market je Bar-Schluss");
                 report = report with
                 {
@@ -174,7 +180,8 @@ public sealed partial class ResearchOrchestrator
                         {
                             "Durchgehende Kapitalkurve eines einzigen Tick-Laufs mit fester Kontraktzahl (max. 1).",
                             "Mark-to-Market je Schluss einer N-Tick-Bar (Bars haben keine feste Dauer).",
-                            "Eine am Datenende offene, nie geschlossene Position ist im Mark-to-Market nur ab ihrem Einstieg enthalten, sofern dieser Einstieg ein abgeschlossener Trade war; sonst separat in 02 ausgewiesen."
+                            "Eine am Datenende offene, nie geschlossene Position geht als bewerteter Endpunkt (letzter Trade-Tick, abzgl. Einstiegsgebühr) in die Mark-to-Market-Kurve ein; " +
+                            "ihre Zwischenstände zwischen Einstieg und Datenende sind in den Bar-Punkten nicht enthalten. Die Kurve der abgeschlossenen Trades enthält sie nicht."
                         }
                     }
                 };

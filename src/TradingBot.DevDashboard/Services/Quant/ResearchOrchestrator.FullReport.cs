@@ -921,7 +921,9 @@ public sealed partial class ResearchOrchestrator
                 "Feste Kontraktzahl: Umordnen und Ziehen fertiger Dollar-Ergebnisse ist zulässig, weil kein Trade die Größe eines späteren beeinflusst.",
                 "Ein simuliertes Perzentil (z. B. 95 % Drawdown) ist KEINE Verlustobergrenze — es beschreibt nur die beobachtete Stichprobe unter den Resampling-Annahmen.",
                 "Verzögerte Fills: Engine-Neuläufe mit um n Kerzen verzögerter Ausführung (vorhandene Robustheitsprüfung, Kennzahl Netto)."
-            }
+            }.Concat(useOos && fc.PrimaryOos?.OosOpenValuation is decimal ov && ov != 0m
+                ? new[] { $"Offene Fensterend-Bewertungen der Testfenster ({ov:0.00}) sind keine abgeschlossenen Trades und deshalb NICHT in den Trade-/Session-Ziehungen enthalten; sie stehen getrennt in 06." }
+                : Array.Empty<string>()).ToArray()
         };
     }
 
@@ -1022,10 +1024,13 @@ public sealed partial class ResearchOrchestrator
         }
         if (fc.PrimaryOos is { } oos)
         {
-            rows.Add(new ControlRow("oos", "OOS: im Training gewählte Parameter", oos.OosNet, oos.OosTrades, oos.OosMaxDrawdown,
-                $"OOS ({oos.OosSessions} Testsessions)", "Verkettete Testfenster."));
-            rows.Add(new ControlRow("oosbase", "OOS-Tage: unveränderte Basisstrategie", oos.BaseNetSameSessions, oos.BaseTradesSameSessions,
-                oos.BaseMaxDrawdownSameSessions, $"Dieselben {oos.OosSessions} Testsessions", "Zeigt, ob die Auswahl gegenüber der festen Strategie etwas bringt."));
+            // Tick-Pfad (neue Berichte): Netto inkl. offener Fensterend-Bewertung; sonst (OHLC/alte Berichte) geschlossenes Netto.
+            string OpenNote(decimal? open) => open is decimal o && o != 0m ? $" Inkl. offener Fensterend-Bewertung {o:0.00} (getrennt in 06)." : "";
+            rows.Add(new ControlRow("oos", "OOS: im Training gewählte Parameter", oos.OosValue ?? oos.OosNet, oos.OosTrades, oos.OosMaxDrawdown,
+                $"OOS ({oos.OosSessions} Testsessions)", "Verkettete Testfenster." + OpenNote(oos.OosOpenValuation)));
+            rows.Add(new ControlRow("oosbase", "OOS-Tage: unveränderte Basisstrategie", oos.BaseValueSameSessions ?? oos.BaseNetSameSessions, oos.BaseTradesSameSessions,
+                oos.BaseMaxDrawdownSameSessions, $"Dieselben {oos.OosSessions} Testsessions",
+                "Zeigt, ob die Auswahl gegenüber der festen Strategie etwas bringt." + OpenNote(oos.BaseOpenValuationSameSessions)));
         }
 
         decimal slip = fc.Base.EffectiveSlippageTicks * fc.Dev.Instrument.TickSize;
@@ -1128,8 +1133,12 @@ public sealed partial class ResearchOrchestrator
 
         var prim = r.Oos?.Variants.FirstOrDefault(v => v.Key == r.Oos.PrimaryVariant);
         if (prim is not null)
-            figs.Add(new OverviewFigure("oos", "Ergebnis auf Walk-forward-Testdaten", (double)prim.OosNet, "currency", $"Walk-forward-Testdaten (OOS) — {prim.Label}",
-                Detail: $"{prim.OosTrades} Trades in {prim.OosSessions} Testsessions · Basisstrategie dieselben Tage: {prim.BaseNetSameSessions:0.00}"));
+            figs.Add(prim.OosValue is decimal ov
+                ? new OverviewFigure("oos", "Ergebnis auf Walk-forward-Testdaten (inkl. offener Bewertung)", (double)ov, "currency", $"Walk-forward-Testdaten (OOS) — {prim.Label}",
+                    Detail: $"Geschlossene Trades {prim.OosNet:0.00} ({prim.OosTrades} Trades) + offene Fensterend-Bewertung {prim.OosOpenValuation ?? 0m:0.00} " +
+                            $"({prim.OosOpenWindowEnds ?? 0} Fenster offen) in {prim.OosSessions} Testsessions · Basisstrategie dieselben Tage: {prim.BaseValueSameSessions ?? prim.BaseNetSameSessions:0.00}")
+                : new OverviewFigure("oos", "Ergebnis auf Walk-forward-Testdaten", (double)prim.OosNet, "currency", $"Walk-forward-Testdaten (OOS) — {prim.Label}",
+                    Detail: $"{prim.OosTrades} Trades in {prim.OosSessions} Testsessions · Basisstrategie dieselben Tage: {prim.BaseNetSameSessions:0.00}"));
         else
             figs.Add(new OverviewFigure("oos", "Ergebnis auf Walk-forward-Testdaten", null, "currency", "Walk-forward-Testdaten (OOS)",
                 r.Oos is null ? "Noch nicht berechnet." : string.Join(" · ", r.Oos.Variants.Select(v => $"{v.Label}: {v.Reason}"))));

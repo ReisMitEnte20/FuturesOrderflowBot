@@ -157,7 +157,12 @@ public sealed record ReportSensitivitySection
 }
 
 // ---- 06 ----
-public sealed record SessionResult(string Key, decimal Net, int Trades);
+/// <summary>
+/// Ergebnis je Handelstag. Tick-Walk-forward (neue Berichte): <paramref name="Net"/> = Netto der geschlossenen Trades des Tages
+/// PLUS am letzten Tag eines Fensters die offene Fensterend-Bewertung (<paramref name="OpenValuation"/>, getrennt ausgewiesen).
+/// Alte Berichte haben <paramref name="OpenValuation"/> = null und bleiben unverändert (nur geschlossene Trades).
+/// </summary>
+public sealed record SessionResult(string Key, decimal Net, int Trades, decimal? OpenValuation = null);
 
 public sealed record OosFold
 {
@@ -192,8 +197,23 @@ public sealed record OosFold
     public IReadOnlyDictionary<string, string>? BaseParameters { get; init; }
     public decimal? TestFees { get; init; }
     public int TestSignals { get; init; }
-    /// <summary>Am Ende des Testfensters offene Position des Gewinners (nicht als Trade gezählt, nicht im Netto).</summary>
+    /// <summary>Am Ende des Testfensters offene Position des Gewinners (kein Trade, kein Fill — nur bewertet, siehe <see cref="TestOpenValuation"/>).</summary>
     public string? OpenPositionAtTestEnd { get; init; }
+
+    // --- Fensterend-Bewertung (Tick-Pfad, neue Berichte; null = alter Bericht, nicht nachträglich umgedeutet) ---
+    // TestNet/BaseNet bleiben das Netto der GESCHLOSSENEN Trades. Die offene Position wird zum letzten Trade-Tick des Fensters
+    // BEWERTET (kein Exit, kein Journal-Fill, keine Exit-Gebühr): Bewertung = unrealisiert brutto − bereits gezahlte Einstiegsgebühr.
+    /// <summary>Unrealisiert brutto der offenen Position zum letzten Trade-Tick des Testfensters.</summary>
+    public decimal? TestOpenUnrealized { get; init; }
+    /// <summary>Bereits gezahlte Einstiegsgebühr der offenen Position (genau eine Seite; keine hypothetische Exit-Gebühr).</summary>
+    public decimal? TestOpenEntryFees { get; init; }
+    /// <summary>Offene Bewertung = <see cref="TestOpenUnrealized"/> − <see cref="TestOpenEntryFees"/> (0 = flach am Fensterende).</summary>
+    public decimal? TestOpenValuation { get; init; }
+    /// <summary>Wirtschaftlicher Fensterwert = geschlossenes Netto + offene Bewertung.</summary>
+    public decimal? TestValue { get; init; }
+    public decimal? BaseOpenValuation { get; init; }
+    public decimal? BaseValue { get; init; }
+    public string? BaseOpenPositionAtTestEnd { get; init; }
     /// <summary>Trades des eingefrorenen Gewinners im Testfenster (Signale, Fills, Gebühren, Netto) — zum direkten Nachvollzug.</summary>
     public IReadOnlyList<TradeRow> TestTradeRows { get; init; } = Array.Empty<TradeRow>();
 }
@@ -220,6 +240,16 @@ public sealed record OosVariant
     public double BaseMaxDrawdownSameSessions { get; init; }
     public IReadOnlyList<SessionResult> OosSessionResults { get; init; } = Array.Empty<SessionResult>();
     public IReadOnlyList<SessionResult> BaseSessionResults { get; init; } = Array.Empty<SessionResult>();
+
+    // --- Fensterend-Bewertung (Tick-Pfad, neue Berichte; null = alter Bericht) ---
+    /// <summary>Summe der offenen Fensterend-Bewertungen der gewählten Parameter über alle Testfenster.</summary>
+    public decimal? OosOpenValuation { get; init; }
+    /// <summary>Netto inkl. offener Bewertung = <see cref="OosNet"/> (geschlossen) + <see cref="OosOpenValuation"/>.</summary>
+    public decimal? OosValue { get; init; }
+    public decimal? BaseOpenValuationSameSessions { get; init; }
+    public decimal? BaseValueSameSessions { get; init; }
+    /// <summary>Anzahl Testfenster, die mit offener Position endeten (gewählte Parameter).</summary>
+    public int? OosOpenWindowEnds { get; init; }
 }
 
 public sealed record ReportOosSection
@@ -239,6 +269,10 @@ public sealed record ReportOosSection
     public IReadOnlyList<string> MissingDataDays { get; init; } = Array.Empty<string>();
     public IReadOnlyList<string> HoldoutSessionIds { get; init; } = Array.Empty<string>();
     public string? SelectionMetric { get; init; }
+    /// <summary>Ausdrückliche Regel für offene Positionen am Fensterende (Tick-Pfad, neue Berichte).</summary>
+    public string? WindowEndRule { get; init; }
+    /// <summary>Welche Zahl die Parameterauswahl steuert (Tick-Pfad, neue Berichte).</summary>
+    public string? SelectionFigure { get; init; }
 }
 
 // ---- 07 ----

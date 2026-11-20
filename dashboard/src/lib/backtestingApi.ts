@@ -66,7 +66,8 @@ export interface SensitivityPoint {
 export interface SensitivityParam { name: string; baseValue: number; points: SensitivityPoint[]; classification: string; }
 export interface SensitivityCell { x: number; y: number; valid: boolean; net: number; trades: number; error?: string | null; }
 export interface SensitivityPair { x: string; y: string; xValues: number[]; yValues: number[]; cells: SensitivityCell[]; baseX: number; baseY: number; }
-export interface SessionResult { key: string; net: number; trades: number; }
+/** Tick-Walk-forward (neue Berichte): `net` enthält am letzten Fenstertag die offene Fensterend-Bewertung (`openValuation`, getrennt ausgewiesen). */
+export interface SessionResult { key: string; net: number; trades: number; openValuation?: number | null; }
 export interface OosFold {
   index: number; trainFromT: number; trainToT: number; trainSessions: number; testFromT: number; testToT: number; testSessions: number;
   selectedCandidate?: string | null; selectedParameters?: Record<string, string> | null; trainValue?: number | null;
@@ -76,12 +77,16 @@ export interface OosFold {
   candidateTrainValues?: Record<string, number | null>; candidateTrainTrades?: Record<string, number>;
   baseParameters?: Record<string, string> | null; testFees?: number | null; testSignals?: number; openPositionAtTestEnd?: string | null;
   testTradeRows?: TradeRow[];
+  /** Fensterend-Bewertung (Tick-Pfad, neue Berichte; fehlt bei alten Berichten). testNet/baseNet = nur geschlossene Trades. */
+  testOpenUnrealized?: number | null; testOpenEntryFees?: number | null; testOpenValuation?: number | null; testValue?: number | null;
+  baseOpenValuation?: number | null; baseValue?: number | null; baseOpenPositionAtTestEnd?: string | null;
 }
 export interface OosVariant {
   key: string; label: string; status: string; reason?: string | null; sessionsNeeded: number; sessionsAvailable: number;
   trainSessions: number; testSessions: number; campaignId?: string | null; trialsRecorded: number; folds: OosFold[];
   oosNet: number; oosTrades: number; oosSessions: number; baseNetSameSessions: number; baseTradesSameSessions: number;
   oosMaxDrawdown: number; baseMaxDrawdownSameSessions: number; oosSessionResults: SessionResult[]; baseSessionResults: SessionResult[];
+  oosOpenValuation?: number | null; oosValue?: number | null; baseOpenValuationSameSessions?: number | null; baseValueSameSessions?: number | null; oosOpenWindowEnds?: number | null;
 }
 export interface GroupRow { key: string; trades: number; net: number; expectancy?: number | null; winRate?: number | null; sessions: number; from?: string | null; to?: string | null; thin: boolean; }
 export interface GroupBreakdown { dimension: string; definition: string; rows: GroupRow[]; }
@@ -115,7 +120,8 @@ export interface BacktestReport {
   risk?: { basis: string; frequency: string; periodsPerYear?: number | null; annualizationNote: string; capitalBase: string; metrics: QuantMetric[]; notes: string[] } | null;
   sensitivity?: { basis: string; applicable: boolean; reason?: string | null; minTrades: number; definition: string; sessionKeys: string[]; parameters: SensitivityParam[]; pairs: SensitivityPair[]; engineRuns: number } | null;
   oos?: { selectionRule: string; tieRule: string; minTrainTrades: number; grid: Record<string, string>[]; warmupBars: number; leakageRules: string; holdoutNote: string; variants: OosVariant[]; primaryVariant?: string | null;
-    developmentSessionIds?: string[]; missingDataDays?: string[]; holdoutSessionIds?: string[]; selectionMetric?: string | null } | null;
+    developmentSessionIds?: string[]; missingDataDays?: string[]; holdoutSessionIds?: string[]; selectionMetric?: string | null;
+    windowEndRule?: string | null; selectionFigure?: string | null } | null;
   simulation?: {
     basis: string; basisReason: string; iterations: number; seed: number; methods: SimulationResult[];
     executionStress: { id: string; label: string; net: number; maxDrawdown: number; trades: number; kind: string }[];
