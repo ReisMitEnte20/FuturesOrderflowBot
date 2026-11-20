@@ -90,6 +90,9 @@ public sealed record ReportSummary
     public string Symbol { get; init; } = "";
     public string? FromUtc { get; init; }
     public string? ToUtc { get; init; }
+    /// <summary>Tatsächlich geladener Datenbereich des Laufs (erste/letzte Kerze bzw. Tick; nur lesend aus dem gespeicherten Lauf).</summary>
+    public DateTimeOffset? DataFrom { get; init; }
+    public DateTimeOffset? DataTo { get; init; }
     public string? DataSha256 { get; init; }
     public int StepsDone { get; init; }
     public int StepsTotal { get; init; }
@@ -441,6 +444,7 @@ public sealed class BacktestingService
             Status = x.Status.ToString(), StatusReason = x.StatusReason, Strategy = x.Config.Run.Strategy,
             StrategyName = defs.FirstOrDefault(d => d.Id == x.Config.Run.Strategy)?.Name ?? x.Config.Run.Strategy,
             Parameters = x.Config.Run.Params, Symbol = x.Config.Run.Symbol, FromUtc = x.Config.Run.FromUtc, ToUtc = x.Config.Run.ToUtc,
+            DataFrom = x.DataFrom, DataTo = x.DataTo,
             DataSha256 = x.Report?.Provenance.DataSha256, JobId = x.JobId,
             StepsDone = x.Steps.Count(s => s.Status is not (ResearchStepStatus.Pending or ResearchStepStatus.Running)),
             StepsTotal = x.Steps.Count, Figures = x.Report?.Overview.Figures ?? Array.Empty<OverviewFigure>()

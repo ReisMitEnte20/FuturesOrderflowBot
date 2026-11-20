@@ -170,6 +170,8 @@ export interface ReportRunResponse { ok: boolean; error?: string | null; already
 export interface ReportSummary {
   runId: string; profile: string; createdUtc: string; completedUtc?: string | null; status: ResearchStepStatus; statusReason?: string | null;
   strategy: string; strategyName: string; parameters: Record<string, string>; symbol: string; fromUtc?: string | null; toUtc?: string | null;
+  /** Tatsächlich geladener Datenbereich (falls im gespeicherten Lauf vorhanden). */
+  dataFrom?: string | null; dataTo?: string | null;
   dataSha256?: string | null; stepsDone: number; stepsTotal: number; jobId?: string | null; figures: OverviewFigure[];
 }
 
