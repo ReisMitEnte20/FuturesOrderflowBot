@@ -74,6 +74,22 @@ builder.Services.AddCors(o => o.AddPolicy(ReactCors, p => p
     .WithOrigins("http://127.0.0.1:5899", "http://localhost:5899", "http://127.0.0.1:4173", "http://localhost:4173")
     .AllowAnyHeader().AllowAnyMethod()));
 
+// MARKTDATEN (nur lesend): ATAS → lokale Bridge (TCP 127.0.0.1) → AtasLiveFeed → /api/marketdata. Keine Orders, keine Broker-API.
+var liveSchedule = sessionSchedule?.Schedule();
+var atasLiveFeed = new TradingBot.DevDashboard.Services.Live.AtasLiveFeed(sessionOf: t =>
+{
+    if (liveSchedule is null) return "unbekannt (kein Sessionplan)";
+    var st = liveSchedule.StateAt(t);
+    return st.Current is { } c ? c.Label : "außerhalb London/New York";
+});
+var atasLivePort = int.TryParse(builder.Configuration["AtasLive:Port"], out var alp) ? alp : 5036;
+var atasLiveListener = new TradingBot.DevDashboard.Services.Live.AtasLiveListener(atasLiveFeed, atasLivePort);
+builder.Services.AddSingleton(atasLiveFeed);
+builder.Services.AddSingleton(atasLiveListener);
+builder.Services.AddHostedService(_ => atasLiveListener);
+builder.Services.AddSingleton(new TradingBot.DevDashboard.Services.Live.RecordingProvenanceService(
+    builder.Configuration["DataAudit:Root"] ?? Path.Combine(repoRoot ?? AppContext.BaseDirectory, "artifacts", "data-audit")));
+
 var app = builder.Build();
 
 app.UseCors(ReactCors);
@@ -211,6 +227,14 @@ ss.MapPost("/run", async (SessionRunRequest request, SessionRunService s, Cancel
 });
 ss.MapGet("/runs", (SessionRunService s) => Results.Ok(s.List()));
 ss.MapGet("/runs/{runId}", (string runId, SessionRunService s) => s.Get(runId) is { } r ? Results.Ok(r) : Results.NotFound(new { error = "Lauf nicht gefunden: " + runId }));
+
+// Marktdaten: Live-Zustand aus ATAS (gedrosselt abgefragt; Zähler zeigen empfangen/verarbeitet/verworfen) und Herkunft von Aufnahmen.
+var md = app.MapGroup("/api/marketdata").RequireCors(ReactCors);
+md.MapGet("/live/state", (int? trades, int? tape, int? candles, TradingBot.DevDashboard.Services.Live.AtasLiveFeed f, TradingBot.DevDashboard.Services.Live.AtasLiveListener l) =>
+    Results.Ok(new { listener = new { port = l.Port, error = l.ListenError }, state = f.Snapshot(Math.Clamp(trades ?? 200, 1, 2000), Math.Clamp(tape ?? 100, 1, 1000), Math.Clamp(candles ?? 120, 1, 240)) }));
+md.MapGet("/live/compare", (TradingBot.DevDashboard.Services.Live.AtasLiveFeed f) => Results.Ok(f.Compare()));
+md.MapGet("/recordings/{recordingId}/provenance", (string recordingId, TradingBot.DevDashboard.Services.Live.RecordingProvenanceService p) =>
+    recordingId.Any(c => !(char.IsLetterOrDigit(c) || c is '_' or '-')) ? Results.BadRequest(new { error = "ungültige Aufnahme-ID" }) : Results.Ok(p.Get(recordingId)));
 
 // Quant-Research-API (Auswertung, Validierung, Monte Carlo, Overfitting, Versuchsregister).
 // Alle Berechnungen laufen im Backend; das React-Dashboard stellt ausschließlich echte Ergebnisse dar.

@@ -2,6 +2,21 @@
 
 > Stand: **2026-09-27**. Ersetzt den veralteten Stand (`ab032ea`, 347 Tests). Historische Phasen siehe unten.
 
+## Marktdaten Live | Aufzeichnung + ATAS-Live-Bridge (2026-11-25) — Branch `feature/marktdaten-atas-live` (auf `feature/data-quality-audit`)
+
+- **Startseite** `/` = Marktdaten (Live | Aufzeichnung), ohne Orders, Strategie oder Training.
+  - Der Paper-Desk liegt unter `/desk`, Rithmic unter `/market`.
+  - Bestehende Direktlinks funktionieren weiter. Details: [MARKTDATEN.md](MARKTDATEN.md).
+- **Live:** ATAS-Indikator `research/atas-live-bridge` (nur lesend, TCP 127.0.0.1:5036) → `Services/Live/AtasLiveFeed` →
+  `/api/marketdata/live/state`.
+  - Herkunft und Wertzustände je Wert.
+  - Buch wird bei Trennung verworfen; Neuaufbau aus Snapshot.
+  - Zähler für empfangen, verarbeitet und verworfen.
+  - Vergleich ATAS-Chartkerze ↔ Dashboard.
+- **Aufzeichnung:** `DayReplay` ohne Lauf, mit Herkunftsbanner aus dem Audit („ATAS-Minutenhistorie · Tickfolge im Replay
+  generiert“). Ereignisse werden nicht als Börsentrades beschriftet.
+- **Offen:** Die Bridge-DLL ist gebaut, aber nicht in ATAS installiert; die Live-Abnahme mit echtem MNQ-Feed fehlt.
+
 ## Datenqualität / Herkunft der Aufnahmen (2026-11-25) — Branch `feature/data-quality-audit`
 
 - **Werkzeug:** `research/data-bridge/atas_data_audit.py` (nur lesend; Tests synthetisch).

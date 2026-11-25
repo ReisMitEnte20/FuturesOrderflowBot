@@ -14,6 +14,7 @@ import { sessionsApi, type SessionRunIndexEntry, type SessionRunResult } from "@
 import { useSessionsReplay } from "./useSessionsReplay";
 import { FootprintLadder, tzFormats, tzShortOf } from "./DayReplay";
 import { UNITS_PER_SEC } from "./useTickReplay";
+import { RecordingProvenanceBanner } from "@/components/marktdaten/RecordingProvenanceBanner";
 
 const SPEEDS = [1, 10, 100, 500];
 const nf = new Intl.NumberFormat("de-DE");
@@ -221,8 +222,9 @@ export function SessionsReplay({ runId, day, trade, onParams }: {
               return (
                 <div key={s.id} className="rounded-md border border-[var(--line)] bg-[var(--panel-3)] p-2" data-testid={`ln-seg-${i}`}>
                   <div className="text-[var(--fg-faint)]">{segName(i)} · {metas[i]?.windowStartUtc.slice(11, 16)}–{metas[i]?.windowEndUtc.slice(11, 16)} UTC</div>
+                  <RecordingProvenanceBanner recordingId={metas[i]?.recordingId} compact />
                   {started ? <div className="font-mono text-[var(--fg)]">
-                    <div>{nf.format(n)} / {nf.format(s.count)} Ticks</div>
+                    <div>{nf.format(n)} / {nf.format(s.count)} Replay-Ereignisse</div>
                     <div className="text-[var(--fg-dim)]">Session-VWAP {num(vwap(st, s.firstIdx, s.firstIdx + n))} · Session-CVD {nf.format(cvd)}</div>
                   </div> : <div className="text-[var(--fg-dim)]">noch nicht begonnen – keine Werte</div>}
                 </div>

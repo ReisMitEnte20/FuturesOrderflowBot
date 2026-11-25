@@ -1,14 +1,18 @@
 import { Link, useLocation } from "react-router";
 import { cn } from "@/lib/utils";
 import { useTradingStore } from "@/stores/tradingStore";
-import { Activity, ChartColumn, FlaskConical, Settings, Workflow, Zap, type LucideIcon } from "lucide-react";
+import { Activity, CandlestickChart, ChartColumn, FlaskConical, Settings, Workflow, Zap, type LucideIcon } from "lucide-react";
 
+// Hauptweg: Marktdaten (Live | Aufzeichnung). Backtesting separat. Paper-Desk und Rithmic-Kerzen bleiben erreichbar.
 const NAV: { to: string; icon: LucideIcon; label: string }[] = [
-  { to: "/", icon: Activity, label: "Live" },
-  { to: "/signals", icon: Zap, label: "Signals" },
+  { to: "/", icon: CandlestickChart, label: "Marktdaten" },
   { to: "/backtesting", icon: FlaskConical, label: "Backtesting" },
-  { to: "/market", icon: ChartColumn, label: "Market" },
+  { to: "/signals", icon: Zap, label: "Signals" },
   { to: "/pipeline", icon: Workflow, label: "Pipeline" },
+];
+const MORE: { to: string; icon: LucideIcon; label: string }[] = [
+  { to: "/desk", icon: Activity, label: "Paper-Desk" },
+  { to: "/market", icon: ChartColumn, label: "Rithmic-Kerzen" },
 ];
 
 function NavItem({ to, icon: Icon, label, active }: { to: string; icon: LucideIcon; label: string; active: boolean }) {
@@ -63,8 +67,12 @@ export function Sidebar() {
         <p className="eyebrow px-4 pb-2">Workspace</p>
         <div className="space-y-0.5">
           {NAV.map((item) => (
-            <NavItem key={item.to} {...item} active={location.pathname === item.to || (item.to === "/backtesting" && (location.pathname === "/research" || location.pathname === "/backtest"))} />
+            <NavItem key={item.to} {...item} active={location.pathname === item.to || (item.to === "/" && location.pathname === "/marktdaten") || (item.to === "/backtesting" && (location.pathname === "/research" || location.pathname === "/backtest"))} />
           ))}
+        </div>
+        <p className="eyebrow px-4 pb-2 pt-4">Weitere</p>
+        <div className="space-y-0.5">
+          {MORE.map((item) => <NavItem key={item.to} {...item} active={location.pathname === item.to} />)}
         </div>
       </nav>
 
@@ -75,7 +83,7 @@ export function Sidebar() {
       <div className="px-4 py-2.5 border-t border-[var(--line)] mt-auto">
         <div className="flex items-center gap-2">
           <span className={cn("dot", dot)} />
-          <span className="eyebrow">{connectionStatus}</span>
+          <span className="eyebrow" title="Verbindungsstatus der Rithmic-Kerzenquelle (nicht ATAS)">Rithmic: {connectionStatus}</span>
         </div>
       </div>
     </aside>
