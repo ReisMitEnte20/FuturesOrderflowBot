@@ -1,0 +1,54 @@
+// Ferngesteuerter Abnahme-Lauf im echten Chromium (Edge headless) ueber das DevTools-Protokoll.
+import { writeFileSync, mkdirSync } from "node:fs";
+const OUT = "F:/ATAS_Data/Research/TickReplay_Abnahme_20261109";
+const FRAMES = OUT + "/screencast_frames";
+mkdirSync(FRAMES, { recursive: true });
+const tgt = await (await fetch("http://127.0.0.1:9333/json/new?http://127.0.0.1:5899/research", { method: "PUT" })).json();
+const ws = new WebSocket(tgt.webSocketDebuggerUrl);
+await new Promise((r) => ws.addEventListener("open", r, { once: true }));
+let id = 0; const pending = new Map(); const handlers = [];
+ws.addEventListener("message", (ev) => { const m = JSON.parse(ev.data); if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); } else if (m.method) handlers.forEach((h) => h(m)); });
+const send = (method, params = {}) => new Promise((res) => { const i = ++id; pending.set(i, res); ws.send(JSON.stringify({ id: i, method, params })); });
+const ev = async (expression) => { const r = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }); if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails)); return r.result?.result?.value; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+await send("Page.enable"); await send("Runtime.enable");
+await send("Emulation.setDeviceMetricsOverride", { width: 1600, height: 1000, deviceScaleFactor: 1, mobile: false });
+await send("Page.navigate", { url: "http://127.0.0.1:5899/research" });
+const S = `JSON.parse(document.querySelector('[data-testid="tick-replay"]').dataset.replayState||'null')`;
+for (let i = 0; i < 100; i++) { await sleep(300); const s = await ev(`(()=>{const e=document.querySelector('[data-testid="tick-replay"]');return e&&e.dataset.replayState?${S}:null})()`); if (s && s.loaded === s.total) break; }
+await ev(`(()=>{const e=document.querySelector('[data-testid="tick-replay"]'); e.scrollIntoView({block:'start'}); return 1})()`);
+const shot = async (name) => {
+  const r = await ev(`(()=>{const b=document.querySelector('[data-testid="tick-replay"]').getBoundingClientRect(); return {x:Math.max(0,b.left),y:Math.max(0,b.top),w:b.width,h:Math.min(b.height,1000-Math.max(0,b.top))}})()`);
+  const s = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false, clip: { x: r.x, y: r.y, width: r.w, height: r.h, scale: 1 } });
+  writeFileSync(`${OUT}/${name}.png`, Buffer.from(s.result.data, "base64"));
+};
+const click = (tid) => ev(`document.querySelector('[data-testid="${tid}"]').click()`);
+const measure = async (speedTid, ms) => ev(`(async()=>{const st=()=>${S}; document.querySelector('[data-testid="${speedTid}"]').click(); document.querySelector('[data-testid="tr-play"]')?.click();
+  await new Promise(r=>setTimeout(r,400)); const lt=[]; const po=new PerformanceObserver(l=>l.getEntries().forEach(e=>lt.push(Math.round(e.duration)))); po.observe({type:'longtask'});
+  const c0=st().clock, p0=st().p, w0=performance.now(); let n=0; await new Promise(res=>{const f=()=>{n++; if(performance.now()-w0<${ms}) requestAnimationFrame(f); else res();}; requestAnimationFrame(f);});
+  const c1=st().clock, p1=st().p, w1=performance.now(); po.disconnect(); document.querySelector('[data-testid="tr-pause"]')?.click();
+  return {fps: Math.round(n/((w1-w0)/1000)), speed: +((c1-c0)/10000/(w1-w0)).toFixed(2), trades: p1-p0, marketSec: +((c1-c0)/1e7).toFixed(1), longTasks: lt}})()`);
+const result = {};
+result.m1x = await measure("tr-speed-1", 3000);
+result.m10x = await measure("tr-speed-10", 3000);
+result.m100x = await measure("tr-speed-100", 3000);
+await shot("01_100x_laufende_kerze");
+// Kerzenwechsel aufzeichnen: auf 10:19:45 ET springen, 10x abspielen, Screencast ueber die 10:20-Grenze.
+await ev(`(()=>{const i=document.querySelector('[data-testid="tr-goto"]'); const set=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set; set.call(i,'10:19:45'); i.dispatchEvent(new Event('input',{bubbles:true})); i.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true})); return 1})()`);
+await sleep(300);
+await shot("02_vor_grenze_10-19-45");
+const frames = [];
+handlers.push(async (m) => { if (m.method === "Page.screencastFrame") { frames.push({ t: m.params.metadata.timestamp, data: m.params.data }); await send("Page.screencastFrameAck", { sessionId: m.params.sessionId }); } });
+await send("Page.startScreencast", { format: "jpeg", quality: 85, maxWidth: 1600, maxHeight: 1000, everyNthFrame: 1 });
+await click("tr-speed-10"); await click("tr-play");
+await sleep(5000);
+await shot("03_nach_grenze_neue_kerze");
+await sleep(3000);
+await click("tr-pause");
+await send("Page.stopScreencast");
+result.afterBoundary = await ev(`(()=>{const s=${S}; return {p:s.p, closed:s.closed, cur:s.cur, clock:document.querySelector('[data-testid="tr-clock"]').innerText.split(String.fromCharCode(10))[1], candle:document.querySelector('[data-testid="tr-candle"]').innerText.split(String.fromCharCode(10))[0]}})()`);
+frames.forEach((f, i) => writeFileSync(`${FRAMES}/f${String(i).padStart(4, "0")}_${f.t.toFixed(3)}.jpg`, Buffer.from(f.data, "base64")));
+result.screencastFrames = frames.length;
+result.consoleErrors = await ev(`(window.__errs||[]).length`);
+console.log(JSON.stringify(result, null, 1));
+ws.close();
