@@ -1,0 +1,16 @@
+{
+  "_hinweis": "Drei vollstaendige NewYork-Sessionfenster (26./27./28.10.2026, je 15:30-18:00 Europe/Berlin == 14:30-17:00 UTC) bei 100x in EINE gemeinsame Collection. Der 26.10. ist bereits committed -> wird uebersprungen (kein erneutes Aufnehmen, kein Doppel-Anhaengen). Chronologische Reihenfolge.",
+  "session": "NewYork",
+  "year": 2026,
+  "timezone": "W. Europe Standard Time",
+  "speed": "100x",
+  "collectionDir": "F:\\ATAS_Data\\Collections\\MNQ_NewYork_1530-1800_Europe-Berlin_2026-10-26_bis_2026-10-28",
+  "python": "python",
+  "collectorScript": "A:\\Projects\\FuturesOrderflowBot\\research\\data-bridge\\atas_collect.py",
+  "keepRecorderAttached": false,
+  "windows": [
+    { "startBerlin": "26.10.2026 15:30:00", "endBerlin": "26.10.2026 18:00:00" },
+    { "startBerlin": "27.10.2026 15:30:00", "endBerlin": "27.10.2026 18:00:00" },
+    { "startBerlin": "28.10.2026 15:30:00", "endBerlin": "28.10.2026 18:00:00" }
+  ]
+}

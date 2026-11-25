@@ -1,0 +1,16 @@
+{
+  "_hinweis": "Begrenzter Nachweis: drei kurze Fenster, 100x, eine gemeinsame CSV. 08:00 und 14:30 UTC sind belegt; 08:01-08:02 UTC ist ein benachbartes Fenster (falls leer -> sauber als 'empty' markiert).",
+  "session": "TestMix",
+  "year": 2026,
+  "timezone": "W. Europe Standard Time",
+  "speed": "100x",
+  "collectionDir": "F:\\ATAS_Data\\Collections\\TestMix_2026",
+  "python": "python",
+  "collectorScript": "A:\\Projects\\FuturesOrderflowBot\\research\\data-bridge\\atas_collect.py",
+  "keepRecorderAttached": false,
+  "windows": [
+    { "startBerlin": "26.10.2026 09:00:00", "endBerlin": "26.10.2026 09:01:00" },
+    { "startBerlin": "26.10.2026 15:30:00", "endBerlin": "26.10.2026 15:31:00" },
+    { "startBerlin": "26.10.2026 09:01:00", "endBerlin": "26.10.2026 09:02:00" }
+  ]
+}
