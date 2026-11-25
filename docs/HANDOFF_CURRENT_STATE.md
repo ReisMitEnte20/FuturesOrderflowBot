@@ -2,6 +2,21 @@
 
 > Stand: **2026-09-27**. Ersetzt den veralteten Stand (`ab032ea`, 347 Tests). Historische Phasen siehe unten.
 
+## Datenqualität / Herkunft der Aufnahmen (2026-11-25) — Branch `feature/data-quality-audit`
+
+- **Werkzeug:** `research/data-bridge/atas_data_audit.py` (nur lesend; Tests synthetisch).
+  - Erzeugt lokal eine Tabelle je Handelstag × Session × Aufnahme.
+  - Bewertet die Stufen A (Trades/Delta/VWAP), B (+Tape), C (+historisches BBO) und D (+historisches DOM).
+  - Details: `research/data-bridge/README.md`.
+- **Befund zur Herkunft:**
+  - Die Collector-Läufe nutzen den ATAS-Replay-Typ `CandlesAndGeneratedBestPrices`. ATAS lädt dabei nur 1-Minuten-Kerzen.
+  - Die Tick-Zeitstempel liegen je Minute exakt gleichverteilt (60 s / n). Ablauf, Zeit und Einzelgröße innerhalb der
+    Minute sind also generiert.
+  - BBO und DOM sind generiert; das DOM hat nur 1 Level je Seite.
+  - Damit sind nur Minutenaggregate belastbar. Strategien auf N-Tick-Bars (z. B. DeltaFlow mit 500 Ticks) testen einen
+    generierten Ablauf und sind kein Edge-Nachweis.
+- **Ergebnisse:** Zahlen und Tabelle liegen nur lokal unter `artifacts/data-audit/` (gitignored).
+
 ## London + New York (2026-11-25) — PR #21 (Draft), Branch `feature/london-newyork-combined` (von `main` 666783d6)
 
 Gemeinsamer Modus für Backtesting und Chart & Replay: ein Start, eine Strategieinstanz, ein Konto. Der Lauf geht über die bestehende
