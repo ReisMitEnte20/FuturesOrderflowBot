@@ -50,6 +50,8 @@ public sealed class QuantApiService
     }
 
     public IExperimentStore Store => _store;
+    /// <summary>Gemeinsamer Backtest-Zugang (geteilter Kerzen-Zwischenspeicher) für den Ein-Knopf-Bericht.</summary>
+    public BacktestApiService Backtest => _backtest;
     public JsonPaperResearchStore Papers => _papers;
     /// <summary>Wurzel des Versuchsregisters — der Research-Orchestrator legt seine Läufe daneben ab.</summary>
     public string RegistryDir => _registryDir;
@@ -60,6 +62,15 @@ public sealed class QuantApiService
     /// begrenzt damit ALLE Vorprüfungen strikt auf den Entwicklungsbereich (kein Holdout-Leakage).
     /// </summary>
     public async Task<HoldoutSplit> ComputeHoldoutSplitAsync(BacktestRunRequest run, double holdoutFraction, CancellationToken ct = default)
+        => await ComputeHoldoutSplitAsync(run, holdoutFraction, null, ct);
+
+    /// <summary>
+    /// Wie oben; mit <paramref name="sessionCalendar"/> (session-ausgerichteter Walk-forward) wird der Holdout GENAU wie im
+    /// session-ausgerichteten <see cref="WalkForwardPlanner"/> bestimmt: die letzten floor(Sessions·fraction) GANZEN Sessions.
+    /// So reservieren Bericht und Walk-forward denselben Zeitraum (sonst zählt einer Kerzen, der andere Sessions).
+    /// </summary>
+    public async Task<HoldoutSplit> ComputeHoldoutSplitAsync(BacktestRunRequest run, double holdoutFraction, string? sessionCalendar,
+        CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(run);
         var ctx = await _backtest.LoadContextAsync(run, ct);
@@ -67,6 +78,13 @@ public sealed class QuantApiService
         DateTimeOffset? dataFrom = total > 0 ? ctx.Candles[0].OpenTime : null;
         DateTimeOffset? dataTo = total > 0 ? ctx.Candles[^1].CloseTime : null;
         int holdoutBars = holdoutFraction is > 0 and < 1 ? (int)Math.Floor(total * holdoutFraction) : 0;
+        if (sessionCalendar is not null && holdoutFraction is > 0 and < 1 && total > 0)
+        {
+            var starts = SessionStartsFor(sessionCalendar, ctx.Candles.Select(c => c.OpenTime).ToList());
+            int holdoutSessions = (int)Math.Floor(starts.Count * holdoutFraction);
+            int usableSessions = starts.Count - holdoutSessions;
+            holdoutBars = holdoutSessions > 0 && usableSessions < starts.Count ? total - starts[usableSessions] : 0;
+        }
         int usable = total - holdoutBars;
         DateTimeOffset? devToUtc = null, devLoadToUtc = null, holdoutFrom = null, holdoutTo = null;
         if (holdoutBars > 0 && usable > 0 && usable < total)
@@ -312,8 +330,7 @@ public sealed class QuantApiService
             // Session-ausgerichtete Aufteilung (z. B. ORB): Fold-Grenzen aus Session-Anfängen (09:30 ET, reguläre Tage),
             // bestimmt NUR aus Zeitstempeln + Session-Kalender — niemals aus Trades/Ergebnissen.
             IReadOnlyList<int>? sessionStarts = request.SessionAligned
-                ? TradingBot.Application.Strategies.UsEquitySessionCalendar.OrbSessionStartIndices(
-                    ctx.Candles.Select(c => c.OpenTime).ToList())
+                ? SessionStartsFor(request.SessionCalendar, ctx.Candles.Select(c => c.OpenTime).ToList())
                 : null;
             var plan = WalkForwardPlanner.Plan(barTimes, new WalkForwardOptions
             {
@@ -456,6 +473,10 @@ public sealed class QuantApiService
                     var combined = Concat(series);
                     var metrics = PerformanceMetricsCalculator.Compute(combined, evalOptions);
                     double? selection = SelectionValue(request.SelectionMetric, metrics, net);
+                    // Vorab festgelegte Mindesttradezahl: im TRAINING nimmt ein Kandidat mit zu wenigen Trades nicht an
+                    // der Auswahl teil (kein Zufallstreffer mit 3 Trades). Testwerte bleiben unberührt.
+                    if (role == SplitRole.Train && request.MinTrainTrades > 0 && trades < request.MinTrainTrades)
+                        selection = null;
 
                     return Task.FromResult(new SegmentOutcome
                     {
@@ -985,8 +1006,7 @@ public sealed class QuantApiService
         // Dieselbe session-ausgerichtete Aufteilung wie der Walk-forward, damit die PBO-Kandidatenmatrix dieselben
         // Fold-Grenzen nutzt (sonst würden Overfitting-Folds von den WF-Folds abweichen).
         IReadOnlyList<int>? sessionStarts = request.SessionAligned
-            ? TradingBot.Application.Strategies.UsEquitySessionCalendar.OrbSessionStartIndices(
-                ctx.Candles.Select(c => c.OpenTime).ToList())
+            ? SessionStartsFor(request.SessionCalendar, ctx.Candles.Select(c => c.OpenTime).ToList())
             : null;
         var plan = WalkForwardPlanner.Plan(barTimes, new WalkForwardOptions
         {
@@ -1680,7 +1700,7 @@ public sealed class QuantApiService
         => $"Unvollständige Session(en) ({count}): Position trug tatsächliche Über-das-Session-Ende-Exposure " +
            $"(fehlender Schluss-Bar oder Datenende vor Session-Ende) — {context} nicht belastbar.";
 
-    private static OhlcBacktestConfig ConfigFrom(BacktestRunRequest req) => new()
+    internal static OhlcBacktestConfig ConfigFrom(BacktestRunRequest req) => new()
     {
         Quantity = req.Quantity,
         InitialBalance = req.InitialBalance,
@@ -1691,7 +1711,13 @@ public sealed class QuantApiService
         ExcludePartialEdges = req.ExcludePartialEdges
     };
 
-    private static PerformanceMetricsOptions MetricOptions(QuantEvaluationOptions o) => new()
+    /// <summary>Session-Anfänge nach gewähltem Kalender (nur aus Zeitstempeln, nie aus Ergebnissen).</summary>
+    internal static IReadOnlyList<int> SessionStartsFor(string? calendar, IReadOnlyList<DateTimeOffset> openTimes) =>
+        string.Equals(calendar, "tradedate", StringComparison.OrdinalIgnoreCase)
+            ? TradingBot.Quant.Report.TradeDateCalendar.SessionStartIndices(openTimes)
+            : TradingBot.Application.Strategies.UsEquitySessionCalendar.OrbSessionStartIndices(openTimes);
+
+    internal static PerformanceMetricsOptions MetricOptions(QuantEvaluationOptions o) => new()
     {
         AnnualizationBasis = string.Equals(o.AnnualizationBasis, "Fixed", StringComparison.OrdinalIgnoreCase)
             ? AnnualizationBasis.Fixed
@@ -1702,7 +1728,7 @@ public sealed class QuantApiService
         MinimumPeriods = o.MinimumPeriods
     };
 
-    private static ReturnFrequency ParseFrequency(string? s) => s?.ToLowerInvariant() switch
+    internal static ReturnFrequency ParseFrequency(string? s) => s?.ToLowerInvariant() switch
     {
         "bar" => ReturnFrequency.Bar,
         "weekly" => ReturnFrequency.Weekly,

@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="A:\Projects\FuturesOrderflowBot\src\TradingBot.Infrastructure\TradingBot.Infrastructure.csproj" />
+    <ProjectReference Include="A:\Projects\FuturesOrderflowBot\src\TradingBot.Application\TradingBot.Application.csproj" />
+    <ProjectReference Include="A:\Projects\FuturesOrderflowBot\src\TradingBot.Core\TradingBot.Core.csproj" />
+    <ProjectReference Include="A:\Projects\FuturesOrderflowBot\src\TradingBot.Domain\TradingBot.Domain.csproj" />
+  </ItemGroup>
+</Project>

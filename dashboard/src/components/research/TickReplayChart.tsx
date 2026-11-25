@@ -19,13 +19,43 @@ export interface ReplaySlot {
   status: CandleStatus | null;
 }
 
+/** Marker eines Journal-Trades – der Aufrufer uebergibt NUR bereits eingetretene Ereignisse. */
+export interface ReplayMarker {
+  kind: "signal" | "entry" | "exit";
+  slot: number;
+  price: number;
+  side: string;
+  label: string;
+}
+
 interface Props {
   slots: ReplaySlot[];
   currentSlot: number | null;
   lastPrice: number | null;
   follow: boolean;
   height?: number;
+  markers?: ReplayMarker[];
+  /** Optional: Delta (Buy − Sell) je Intervall und CVD – zusaetzliches Panel unter dem Volumen (gleiche Achse). */
+  delta?: { delta: (number | null)[]; cvd: (number | null)[] } | null;
+  /** Optional: Klick auf ein Intervall (z. B. Footprint dieser Kerze anzeigen). */
+  onSlotClick?: (slot: number) => void;
+  /** Optional: hervorgehobenes Intervall (Footprint-Auswahl). */
+  selectedSlot?: number | null;
 }
+
+const markerPoint = (k: ReplayMarker) => {
+  const long = k.side === "Long";
+  const style = k.kind === "signal"
+    ? { symbol: "diamond", symbolSize: 13, color: RUN, labelPos: "left" }
+    : k.kind === "entry"
+      ? { symbol: "triangle", symbolSize: 13, color: long ? UP : DOWN, labelPos: long ? "bottom" : "top", rotate: long ? 0 : 180 }
+      : { symbol: "rect", symbolSize: 10, color: "#7fc4b4", labelPos: "right" };
+  return {
+    name: k.kind, coord: [k.slot, k.price], value: k.label, symbol: style.symbol, symbolSize: style.symbolSize,
+    symbolRotate: (style as any).rotate ?? 0, itemStyle: { color: style.color, borderColor: "#0a0a0a", borderWidth: 1 },
+    label: { show: true, position: style.labelPos, formatter: k.label, color: style.color, fontSize: 10, fontFamily: MONO },
+  };
+};
 
 const statusText: Record<CandleStatus, string> = {
   abgeschlossen: "abgeschlossen",
@@ -33,7 +63,10 @@ const statusText: Record<CandleStatus, string> = {
   "rand-unvollstaendig": "Randkerze – Intervall nur teilweise im Aufnahmefenster",
 };
 
-export function TickReplayChart({ slots, currentSlot, lastPrice, follow, height = 440 }: Props) {
+export function TickReplayChart({ slots, currentSlot, lastPrice, follow, height = 440, markers = [], delta = null, onSlotClick, selectedSlot = null }: Props) {
+  const withDelta = !!delta;
+  const clickRef = useRef(onSlotClick);
+  clickRef.current = onSlotClick;
   const el = useRef<HTMLDivElement | null>(null);
   const chart = useRef<echarts.ECharts | null>(null);
   const zoom = useRef<{ start: number; end: number } | null>(null);
@@ -47,6 +80,14 @@ export function TickReplayChart({ slots, currentSlot, lastPrice, follow, height 
     chart.current = c;
     const onResize = () => c.resize();
     window.addEventListener("resize", onResize);
+    c.getZr().on("click", (e: any) => {
+      if (!clickRef.current) return;
+      const pt = [e.offsetX, e.offsetY];
+      if (!c.containPixel({ gridIndex: 0 }, pt)) return;
+      const v = c.convertFromPixel({ xAxisIndex: 0 }, pt) as any;
+      const i = Array.isArray(v) ? v[0] : v;
+      if (typeof i === "number" && i >= 0 && i < slotsRef.current.length) clickRef.current(Math.round(i));
+    });
     c.on("datazoom", () => {
       const dz = (c.getOption() as any).dataZoom?.[0];
       const n = slotsRef.current.length;
@@ -66,21 +107,26 @@ export function TickReplayChart({ slots, currentSlot, lastPrice, follow, height 
     const axisLabel = { color: FAINT, fontSize: 10, fontFamily: MONO };
     const grid = { left: 64, right: 72 };
     zoom.current = null;
+    const axes = withDelta ? [0, 1, 2] : [0, 1];
+    const xa = (gridIndex: number, show: boolean) => ({ type: "category", data: labels, gridIndex, boundaryGap: true, axisLabel: show ? axisLabel : { show: false }, axisLine: { lineStyle: { color: AXIS } } });
     c.setOption({
       animation: false,
       backgroundColor: "transparent",
-      grid: [{ ...grid, top: 16, height: "62%" }, { ...grid, top: "74%", height: "16%" }],
-      xAxis: [
-        { type: "category", data: labels, gridIndex: 0, boundaryGap: true, axisLabel: { show: false }, axisLine: { lineStyle: { color: AXIS } } },
-        { type: "category", data: labels, gridIndex: 1, boundaryGap: true, axisLabel, axisLine: { lineStyle: { color: AXIS } } },
-      ],
+      grid: withDelta
+        ? [{ ...grid, top: 16, height: "50%" }, { ...grid, top: "60%", height: "12%" }, { ...grid, top: "76%", height: "14%" }]
+        : [{ ...grid, top: 16, height: "62%" }, { ...grid, top: "74%", height: "16%" }],
+      xAxis: withDelta ? [xa(0, false), xa(1, false), xa(2, true)] : [xa(0, false), xa(1, true)],
       yAxis: [
         { scale: true, gridIndex: 0, position: "right", axisLabel, splitLine: { lineStyle: { color: SPLIT } } },
         { scale: true, gridIndex: 1, position: "right", splitNumber: 2, axisLabel: { ...axisLabel, fontSize: 9 }, splitLine: { show: false } },
+        ...(withDelta ? [
+          { scale: true, gridIndex: 2, position: "right", splitNumber: 2, axisLabel: { ...axisLabel, fontSize: 9 }, splitLine: { show: false }, name: "Δ", nameTextStyle: { color: FAINT, fontSize: 9 } },
+          { scale: true, gridIndex: 2, position: "left", splitNumber: 2, axisLabel: { ...axisLabel, fontSize: 9, color: LINE }, splitLine: { show: false }, name: "CVD", nameTextStyle: { color: LINE, fontSize: 9 } },
+        ] : []),
       ],
       dataZoom: [
-        { type: "inside", xAxisIndex: [0, 1] },
-        { type: "slider", xAxisIndex: [0, 1], height: 14, bottom: 2, borderColor: AXIS, textStyle: { color: FAINT }, fillerColor: "rgba(34,184,240,0.12)", handleStyle: { color: "#22b8f0", borderColor: "#22b8f0" }, dataBackground: { lineStyle: { color: AXIS }, areaStyle: { color: SPLIT } } },
+        { type: "inside", xAxisIndex: axes },
+        { type: "slider", xAxisIndex: axes, height: 14, bottom: 2, borderColor: AXIS, textStyle: { color: FAINT }, fillerColor: "rgba(34,184,240,0.12)", handleStyle: { color: "#22b8f0", borderColor: "#22b8f0" }, dataBackground: { lineStyle: { color: AXIS }, areaStyle: { color: SPLIT } } },
       ],
       tooltip: {
         trigger: "axis", axisPointer: { type: "cross", lineStyle: { color: "#2a4868" }, crossStyle: { color: "#2a4868" }, label: { backgroundColor: AXIS } }, backgroundColor: "#0a1a30", borderColor: AXIS,
@@ -95,9 +141,15 @@ export function TickReplayChart({ slots, currentSlot, lastPrice, follow, height 
             + `<br/>Vol ${k.volume} (Buy ${k.buyVolume} / Sell ${k.sellVolume}) · ${k.trades} Trades`;
         },
       },
-      series: [{ type: "candlestick", xAxisIndex: 0, yAxisIndex: 0, data: [] }, { type: "bar", xAxisIndex: 1, yAxisIndex: 1, data: [] }],
+      series: [
+        { type: "candlestick", xAxisIndex: 0, yAxisIndex: 0, data: [] }, { type: "bar", xAxisIndex: 1, yAxisIndex: 1, data: [] },
+        ...(withDelta ? [
+          { type: "bar", name: "Delta", xAxisIndex: 2, yAxisIndex: 2, data: [] },
+          { type: "line", name: "CVD", xAxisIndex: 2, yAxisIndex: 3, data: [], symbol: "none", lineStyle: { color: LINE, width: 1.2 }, connectNulls: false },
+        ] : []),
+      ],
     }, { notMerge: true });
-  }, [labelsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [labelsKey, withDelta]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Daten: gebuendelt (hoechstens einmal je Frame vom Aufrufer) – nur Serien, Zoom bleibt.
   useEffect(() => {
@@ -134,8 +186,18 @@ export function TickReplayChart({ slots, currentSlot, lastPrice, follow, height 
             label: { position: "end", color: "#020d1e", backgroundColor: LINE, padding: [2, 4], formatter: () => String(lastPrice) },
             data: [{ yAxis: lastPrice }],
           },
+          // Immer vollstaendig ersetzen (auch leer): Wechsel des Trades oder Zuruecksprung hinterlaesst keine alten Marker.
+          markPoint: { silent: true, animation: false, data: markers.map(markerPoint) },
+          markArea: selectedSlot == null || !slots[selectedSlot] ? { data: [] } : {
+            silent: true, itemStyle: { color: "rgba(34,184,240,0.10)", borderColor: "rgba(34,184,240,0.6)", borderWidth: 1 },
+            data: [[{ xAxis: selectedSlot }, { xAxis: selectedSlot }]],
+          },
         },
         { data: vols },
+        ...(delta ? [
+          { data: delta.delta.map((d) => (d == null ? "-" : { value: d, itemStyle: { color: d >= 0 ? UP : DOWN, opacity: 0.75 } })) },
+          { data: delta.cvd.map((v) => (v == null ? "-" : v)) },
+        ] : []),
       ],
     }, { lazyUpdate: true });
 

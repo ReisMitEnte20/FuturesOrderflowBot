@@ -1,3 +1,4 @@
+﻿using OrderFlowTools;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -16,12 +17,17 @@ namespace AtasReplayProbe;
 ///                (AutomationId/Name/ControlType/Patterns) des Replay-Bereichs.
 /// Es wird NICHTS in ATAS gepatcht/injiziert und NICHTS geklickt. Reine Analyse.
 /// </summary>
-internal static class Program
+internal static partial class Program
 {
     private const string AtasDir = @"C:\Program Files (x86)\ATAS Platform";
 
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool SetProcessDpiAwarenessContext(IntPtr ctx);
+
     private static int Main(string[] args)
     {
+        // Per-Monitor-DPI (V2): UIA-Rechtecke, Screenshots und Mausposition liegen dann im selben physischen Pixelraum,
+        // auch bei 125/150 % Skalierung oder RDP. Schlaegt es fehl (aelteres Windows), bleibt die Voreinstellung.
+        try { SetProcessDpiAwarenessContext(new IntPtr(-4)); } catch { }
         var cmd = args.Length > 0 ? args[0].ToLowerInvariant() : "help";
         try
         {
@@ -29,6 +35,10 @@ internal static class Program
             {
                 "api-scan" => ApiScan(args.Length > 1 ? args[1] : null),
                 "uia-dump" => UiaDump(args.Length > 1 ? args[1] : null),
+                "chartdiag" => ChartDiag(args.Skip(1).FirstOrDefault(a => !a.StartsWith("-"))),
+                "diagpack" => DiagPack(args.Skip(1).FirstOrDefault(a => !a.StartsWith("-"))),
+                "stoptest" => StopTest(args.Skip(1).FirstOrDefault(a => !a.StartsWith("-"))),
+                "xdiag" => XDiag(args.Skip(1).FirstOrDefault(a => !a.StartsWith("-"))),
                 "drive" => Drive(args.Contains("--go"), args.FirstOrDefault(a => a.EndsWith(".txt"))),
                 "inspect2" => Inspect2(),
                 "inspect-date" => InspectDate(args.FirstOrDefault(a => a.EndsWith(".txt"))),
@@ -53,13 +63,17 @@ internal static class Program
                 "allctrls" => AllCtrls(args.FirstOrDefault(a => a.EndsWith(".txt"))),
                 "replayrect" => ReplayRect(args.FirstOrDefault(a => a.EndsWith(".png"))),
                 "setdate" => SetDate(args),
+            "datediag" => DateDiag(args),
+            "xblob" => XBlob(args),
+            "trashdiag" => TrashDiag(args.FirstOrDefault(a => a.EndsWith(".txt"))),
+            "indtool" => IndTool(args),
                 "series" => Series(args.FirstOrDefault(a => a.EndsWith(".txt"))),
                 "autorun" => AutoRun(args.FirstOrDefault(a => a.EndsWith(".txt"))),
                 "liveproof" => LiveProof(args.FirstOrDefault(a => a.EndsWith(".txt"))),
                 "twojobs" => TwoJobs(args.FirstOrDefault(a => a.EndsWith(".txt"))),
                 "collect" => Collect(args.Skip(1).FirstOrDefault(a => a.EndsWith(".json")), args.FirstOrDefault(a => a.EndsWith(".txt"))),
                 "speedprobe" => SpeedProbe(args.FirstOrDefault(a => a.EndsWith(".txt"))),
-                "rmrec" => RemoveRecorderStandalone(),
+                "rmrec" => RemoveRecorderCommand(args.Skip(1).FirstOrDefault(a => !a.StartsWith("-"))),
                 "playerprobe" => PlayerProbe(args.FirstOrDefault(a => a.EndsWith(".txt"))),
                 "replaymenu" => ReplayMenu(args.FirstOrDefault(a => a.EndsWith(".txt"))),
                 "exitview" => ExitViewCmd(),
@@ -92,6 +106,7 @@ internal static class Program
         Console.WriteLine("AtasReplayProbe <api-scan|uia-dump> [outFile]");
         Console.WriteLine("  api-scan : oeffentliche ATAS/OFT-API auf Replay-/Playback-/Status-Steuerung pruefen");
         Console.WriteLine("  uia-dump : laufendes ATAS-Fenster per UI Automation inventarisieren");
+        Console.WriteLine("  chartdiag [datei.txt] : Zielchart-Erkennung pruefen (nur lesen): Prozesse, Fenster, UIA, Chart-Kandidaten, Recorder");
         return 1;
     }
 
@@ -389,7 +404,7 @@ internal static class Program
     // (<ExeDir>\ATAS_Data\Recordings). Fehlt das Ziel oder ist es nicht beschreibbar, bricht DriveReadyWritable
     // mit klarer Meldung ab (kein stilles Umlenken auf C:).
     private static readonly string RecordingsDir =
-        Environment.GetEnvironmentVariable("ATAS_RECORDINGS_DIR") ?? Path.Combine(AppContext.BaseDirectory, "ATAS_Data", "Recordings");
+        Environment.GetEnvironmentVariable("ATAS_RECORDINGS_DIR") ?? SharedDataRoot.Read() ?? Path.Combine(AppContext.BaseDirectory, "ATAS_Data", "Recordings");
 
     // Laufwerk vorhanden + Ordner beschreibbar? Klarer Fehler statt stillem Fallback (portabel, kein festes F:).
     private static bool DriveReadyWritable(string dir, out string reason)
@@ -1182,6 +1197,389 @@ internal static class Program
         Check("Watchdog 60s@1x = 200+60 = 260", PlayWatchdogSeconds(60, 1.0, 200) == 260);
         Check("Watchdog 60s@100x = 200+1 = 201 (NICHT ~0.6s)", PlayWatchdogSeconds(60, 100.0, 200) == 201);
         Check("Watchdog 100x NICHT gleich naiver Division 60/100", PlayWatchdogSeconds(60, 100.0, 200) != (int)Math.Ceiling(60 / 100.0));
+
+        // ---- Vorpruefungen des Sammellaufs (VM-Befunde): Bridge-Selbsttest + Recorder-Ausgabeordner ----
+        // ---- 1.3.4: Stop-Pfad (VM-Befund: nach erkanntem Ende Auto-Rewind-Loop, Exit-Pfad ohne Protokoll) ----
+        {
+            var hk = Path.Combine(baseDir, "GlobalHotKeys_test.cnf");
+            File.WriteAllText(hk, "{\"StopMarketReplay\":[\"LeftCtrl\",\"LeftAlt\",\"D\"],\"DisableEnableMarketReplay\":[\"LeftCtrl\",\"LeftAlt\",\"R\"],\"Odd\":[\"LeftCtrl\",\"OemTilde\"]}");
+            var stop = ReadAtasHotkey("StopMarketReplay", hk);
+            Check("Stop: ATAS-Kuerzel StopMarketReplay aus Konfiguration gelesen", stop != null && string.Join("+", stop) == "LeftCtrl+LeftAlt+D");
+            var vk = stop == null ? null : HotkeyToVk(stop);
+            Check("Stop: Kuerzel -> Tastencodes Strg(0x11)+Alt(0x12)+D(0x44)", vk != null && vk.SequenceEqual(new byte[] { 0x11, 0x12, 0x44 }));
+            Check("Stop: nicht sicher abbildbare Taste -> nicht senden", HotkeyToVk(ReadAtasHotkey("Odd", hk)!) == null);
+            Check("Stop: nicht belegtes Kuerzel -> null (kein Raten)", ReadAtasHotkey("GibtEsNicht", hk) == null && ReadAtasHotkey("StopMarketReplay", Path.Combine(baseDir, "fehlt.cnf")) == null);
+            File.Delete(hk);
+        }
+        {
+            var swb = Stopwatch.StartNew();
+            var r = Bounded("Test blockiert", () => { Thread.Sleep(5000); return true; }, 300, false);
+            Check("Stop: blockierender Aufruf wird nach Zeitgrenze abgebrochen (Ersatzwert)", !r && swb.ElapsedMilliseconds < 1500, $"{swb.ElapsedMilliseconds} ms");
+            Check("Stop: Ausnahme im Aufruf -> Ersatzwert", Bounded<int>("Test Ausnahme", () => throw new InvalidOperationException("x"), 1000, -1) == -1);
+            Check("Stop: normaler Aufruf liefert Wert", Bounded("Test ok", () => 42, 1000, 0) == 42);
+        }
+        // ---- 1.3.7: Ende -> X der Replay-Leiste (VM 18.11.: 21 Stopp-Kuerzel, obwohl das erste wirkte) ----
+        {
+            AtasLogLine P(string s) => AtasLogLine.Parse(s)!;
+            Check("X: Stopp-Beleg von der CHART-Quelle ('Replay chart state: LoadingModules -> Stopped', Zeile aus lokalem ATAS-Log) wird erkannt",
+                  IsStopEvidence(P("2026-11-18 14:25:28,100 [2         ] INFO  MNQ 5m Chart   : Replay chart state: LoadingModules -> Stopped (connected=True, playContract=False)")));
+            Check("X: Stopp-Beleg der Replay-Quelle ('State changed Started -> Stopped') wird erkannt",
+                  IsStopEvidence(P("2026-11-18 14:25:28,100 [ReplayLoad] INFO  Replay         : State changed Started -> Stopped.")));
+            Check("X: andere Chart-/Replay-Zeilen sind KEIN Stopp-Beleg",
+                  !IsStopEvidence(P("2026-11-18 14:25:28,100 [2         ] INFO  MNQ 5m Chart   : Replay chart state: LoadingHistory -> LoadingModules (connected=True)"))
+                  && !IsStopEvidence(P("2026-11-18 14:25:28,100 [2         ] INFO  Replay         : State changed Stopped -> Initializing.")));
+            Check("X: Titel 'Replay - Wiedergabe gestoppt' = gestoppt; 'Module laden' / 'Historienwiedergabe' nicht",
+                  TitleStopped("Replay - Wiedergabe gestoppt") && !TitleStopped("Replay - Module laden...") && !TitleStopped("Replay - Historienwiedergabe..."));
+            Check("X: Schliessen-Schaltflaeche erkannt (Schließen / Close / PART_CloseButton / x), nicht 'Alle schließen' / 'Schließen und speichern'",
+                  IsCloseControl("Schließen", "", "") && IsCloseControl("Close", "", "") && IsCloseControl("", "PART_CloseButton", "") && IsCloseControl("x", "", "")
+                  && IsCloseControl("", "", "Schließen") && !IsCloseControl("Alle schließen", "", "") && !IsCloseControl("Schließen und speichern", "CloseAllButtonX", "")
+                  && !IsCloseControl("Zur Echtzeit wechseln", "", "") && !IsCloseControl("Play", "PlayButton", ""));
+            Check("X: Leiste weg + editierbar + kein Neustart -> Replay-Ansicht verlassen", JudgeAfterClose(true, true, 0, true).v == AfterCloseVerdict.Left);
+            Check("X: Leiste weg, Chart NICHT editierbar -> 'X blendet nur die Leiste aus' (gemeldet, kein Erfolg)", JudgeAfterClose(true, false, 0, true).v == AfterCloseVerdict.OnlyHidden);
+            Check("X: neuer Durchlauf nach dem X ohne Stopp -> Loop laeuft weiter (kein Erfolg)", JudgeAfterClose(true, true, 1, false).v == AfterCloseVerdict.LoopContinues);
+            Check("X: Durchlauf nach dem X, danach Stopp + editierbar -> verlassen", JudgeAfterClose(true, true, 1, true).v == AfterCloseVerdict.Left);
+            Check("X: Leiste nach dem X noch sichtbar -> kein Erfolg", JudgeAfterClose(false, true, 0, true).v == AfterCloseVerdict.BarStillVisible);
+        }
+        // ---- 1.3.5: Instanz-Zuordnung nach dem Laden (VM 17.11.: keine neue Instanz -> stummes Warten) ----
+        {
+            var d0 = Path.Combine(baseDir, "inst_leer"); Directory.CreateDirectory(d0);
+            File.WriteAllText(Path.Combine(d0, "meta.json"), "{\"instrument\":\"MNQ\"}");
+            File.WriteAllText(Path.Combine(d0, "ticks.ndjson"), "");
+            Check("Laden: Instanz nur mit meta.json + leerem Strom = 0 Daten (darf uebernommen werden)", DataBytes(d0) == 0);
+            File.WriteAllText(Path.Combine(d0, "dom.ndjson"), "{\"dataType\":\"Depth\"}\n");
+            Check("Laden: Instanz mit Echtzeitdaten (beliebiger Strom) -> NICHT leer (keine Mischung)", DataBytes(d0) > 0);
+            Check("Laden: fehlender Ordner -> 0 ohne Ausnahme", DataBytes(Path.Combine(baseDir, "gibtsnicht")) == 0);
+            // 1.3.8: Instanz aus Schritt 3 am Folgetag (VM 18.11.: Laden + Play bereit, keine neue Instanz)
+            var we = new DateTime(2026, 10, 27, 13, 32, 0, DateTimeKind.Utc);
+            Check("Laden: Instanz aus Schritt 3 ohne Trades -> verwendbar", ClassifyPreload(Array.Empty<DateTime>(), we, false).ok);
+            Check("Laden: nur Live-Trades (heute, weit nach dem Fenster) -> verwendbar (Bridge schliesst Live-Vorlauf aus)",
+                  ClassifyPreload(new[] { new DateTime(2026, 11, 18, 15, 36, 31, DateTimeKind.Utc), new DateTime(2026, 11, 18, 15, 36, 40, DateTimeKind.Utc) }, we, false).ok);
+            Check("Laden: ein Trade im Replay-Bereich vor dem Laden -> NICHT verwendbar",
+                  !ClassifyPreload(new[] { new DateTime(2026, 11, 18, 15, 36, 31, DateTimeKind.Utc), new DateTime(2026, 10, 27, 13, 31, 0, DateTimeKind.Utc) }, we, false).ok);
+            Check("Laden: Datenstrom zu gross fuer die Pruefung -> NICHT verwendbar", !ClassifyPreload(Array.Empty<DateTime>(), we, true).ok);
+            var dl = Path.Combine(baseDir, "inst_live"); Directory.CreateDirectory(dl);
+            File.WriteAllText(Path.Combine(dl, "ticks.ndjson"),
+                "{\"seq\":1,\"tMarket\":\"2026-11-18T15:36:31.0000000Z\",\"tRecv\":\"2026-11-18T15:36:31.1Z\",\"dataType\":\"Trade\",\"price\":27000}\n" +
+                "{\"seq\":2,\"tMarket\":\"2026-11-18T15:36:32.0000000Z\",\"dataType\":\"BestBid\",\"price\":26999}\n");
+            var pl = PreloadTradesCheck(dl, we);
+            Check("Laden: Datei mit 1 Live-Trade + 1 Nicht-Trade -> 1 Live-Trade erkannt, verwendbar", pl.ok && pl.why.StartsWith("1 Live-Trades"), pl.why);
+            Directory.Delete(dl, true);
+            Directory.Delete(d0, true);
+        }
+        Check("Stop: Titel 'Module laden' = Ladezustand, 'Historienwiedergabe' = spielt",
+              TitleLoading("Replay - Module laden...") && !TitleLoading("Replay - Historienwiedergabe...") && TitlePlaying("Replay - Historienwiedergabe...") && !TitlePlaying("Replay - Wiedergabe gestoppt"));
+
+        // ---- 1.3.3: Ende/Fehler-Klassifikation aus ATAS-Protokollzeilen (Format wie im echten app_*.log) ----
+        string Ln(string t, string th, string lvl, string src, string msg) => $"2026-11-12 {t} [{th,-10}] {lvl,-5} {src,-15}: {msg}";
+        string PF(string t, string d = "26.10.2026") => Ln(t, "2", "INFO", "Replay DS", $"Playing from {d} 13:30:00 to {d} 16:00:00 type CandlesAndGeneratedBestPrices.");
+        var natural = new[]
+        {
+            PF("20:29:10,147"),
+            Ln("20:29:10,147", "ReplayLoad", "INFO", "Replay", "State changed Initialized -> Started."),
+            Ln("20:29:56,597", "29", "INFO", "Cache1 US", "Disconnecting..."),
+            Ln("20:29:56,598", "78", "INFO", "Cache1 US", "Disconnected."),
+            Ln("20:30:40,147", "ReplayLoad", "INFO", "Replay DS", "Playing historical data stopped."),
+            Ln("20:30:40,148", "ReplayLoad", "INFO", "Replay", "State changed Started -> Stopped."),
+            Ln("20:30:40,148", "ReplayLoad", "INFO", "Replay", "Data processing finished."),
+            Ln("20:30:40,311", "2", "INFO", "Market Replay", "Replay timing: start path = rewind (history re-request skipped)."),
+            Ln("20:30:42,107", "78", "INFO", "Replay", "State changed Stopped -> Initializing."),
+            PF("20:30:44,506"),
+            Ln("20:30:44,506", "ReplayLoad", "INFO", "Replay", "State changed Initialized -> Started."),
+        };
+        {
+            var ex = new ReplayExecution(); ex.Feed(natural.Take(4));
+            Check("Ende: Cache-Disconnect waehrend Wiedergabe -> weiter Running (nur Hinweis)", ex.State == ReplayEnd.Running && ex.Hints.Count == 2);
+            ex.Feed(natural.Skip(4).Take(4));
+            Check("Ende: Abschluss + Auto-Rewind -> NaturalEnd mit Belegzeilen", ex.State == ReplayEnd.NaturalEnd && ex.Evidence.Count == 3 && ex.Evidence[2].Message.Contains("rewind"), ex.Rule);
+            ex.Feed(natural.Skip(8));
+            Check("Ende: anschliessender Auto-Loop loescht den Zustand NICHT (Latch)", ex.State == ReplayEnd.NaturalEnd && ex.LoopRestarted);
+            Check("Ende: Ladebereich aus 'Playing from' (UTC)", ex.Range == (new DateTime(2026, 10, 26, 13, 30, 0, DateTimeKind.Utc), new DateTime(2026, 10, 26, 16, 0, 0, DateTimeKind.Utc)));
+        }
+        {
+            var ex = new ReplayExecution(); ex.Feed(natural.Take(2));
+            ex.Feed(new[] { Ln("20:29:40,000", "31", "ERROR", "Auth", "Instrument 29210 for crosstrading group 9 (Ether) not found."),
+                            Ln("20:29:41,000", "Process", "ERROR", "Main window", "Notification title 'Order register failed' message 'Account is done for day'."),
+                            "System.Exception: Account is done for day",
+                            Ln("20:29:42,000", "40", "INFO", "Websocket", "Exception while reading frame (socket closed)") });
+            Check("Fehler: ERROR/Exception ANDERER Module -> kein Errored (VM-Befund t+99s)", ex.State == ReplayEnd.Running, ex.State.ToString());
+            ex.Feed(new[] { Ln("20:29:50,000", "ReplayLoad", "ERROR", "Replay", "Data source faulted: connection to replay server lost.") });
+            Check("Fehler: ERROR der Replay-Quelle -> Errored mit Originalzeile", ex.State == ReplayEnd.Errored && ex.Evidence[0].Source == "Replay" && ex.Rule.Contains("Replay"));
+        }
+        {
+            var ex = new ReplayExecution(); ex.Feed(natural.Take(2));
+            ex.Feed(new[] { Ln("20:30:00,000", "ReplayLoad", "INFO", "Replay", "State changed Started -> Stopped."), Ln("20:30:00,000", "ReplayLoad", "INFO", "Replay", "Data processing finished.") });
+            Check("Ende: Stopp ohne Rewind und ohne Datenende -> KEIN natuerliches Ende", ex.State == ReplayEnd.Running);
+            ex.DataReachedEnd = true; ex.Recheck();
+            Check("Ende: Stopp + Recorder am Fensterende (unterstuetzend) -> NaturalEnd", ex.State == ReplayEnd.NaturalEnd && ex.Rule.Contains("unterstuetzend"));
+        }
+        {
+            var ex = new ReplayExecution(); ex.Feed(natural.Take(2));
+            ex.MarkOurStop(new DateTime(2026, 11, 12, 20, 29, 59));
+            ex.Feed(new[] { Ln("20:30:00,000", "ReplayLoad", "INFO", "Replay", "State changed Started -> Stopped."), Ln("20:30:00,001", "ReplayLoad", "INFO", "Replay", "Data processing finished."),
+                            Ln("20:30:00,100", "2", "INFO", "Replay MD", "Loading historical data to online state for #MNQZ6@CME."), Ln("20:30:00,200", "2", "INFO", "Market Replay", "Replay timing: start path = rewind") });
+            Check("Ende: eigener Stopp -> StoppedByUs, nie NaturalEnd", ex.State == ReplayEnd.StoppedByUs);
+        }
+        {
+            var ex = new ReplayExecution(); ex.Feed(natural.Take(2));
+            ex.Feed(new[] { Ln("20:30:00,100", "2", "INFO", "Replay MD", "Loading historical data to online state for #MNQZ6@CME.") });
+            Check("Ende: Wechsel zu Echtzeit (nicht durch uns) -> OnlineExit", ex.State == ReplayEnd.OnlineExit);
+            var ex2 = new ReplayExecution(); ex2.Feed(natural.Take(2)); ex2.Feed(new[] { PF("20:31:00,000", "27.10.2026") });
+            Check("Ende: neuer Bereich ohne Abschluss -> OtherRangeRestart", ex2.State == ReplayEnd.OtherRangeRestart);
+        }
+        {
+            var ex = new ReplayExecution();
+            ex.Feed(new[] { Ln("20:31:56,273", "ReplayLoad", "INFO", "Replay DS", "Replay timing: pre-roll 1119 ms, 841175 entities warmed before 2026-10-27 13:30:00Z.") });
+            Check("Ladebestaetigung vor Play: 'warmed before ...Z' gelesen", ex.WarmStartUtc == new DateTime(2026, 10, 27, 13, 30, 0, DateTimeKind.Utc) && !ex.Started);
+            Check("Logzeile: Quelle/Stufe korrekt geparst", AtasLogLine.Parse(Ln("20:30:40,311", "2", "INFO", "Market Replay", "x"))?.Source == "Market Replay"
+                  && AtasLogLine.Parse("System.Exception: Account is done for day") == null);
+        }
+        // ---- Dialog-Zeitzone: keine feste Berlin-Annahme, keine +-1h-Heuristik ----
+        {
+            var tmp = Path.Combine(baseDir, "Platform_test.cnf");
+            File.WriteAllText(tmp, "{\"Login\":\"x@y.de\",\"Password\":\"geheim\",\"SavedTimeZoneOffset\":1,\"SavedTimeZoneOffsetMinutes\":0,\"IsAutoUpdateTimeZone\":false}");
+            var z = DialogZone.Resolve(tmp);
+            Check("Zeitzone: ATAS fester Versatz 0 (z. B. VM in UTC) -> Eingabe = UTC", z.FixedOffsetMinutes == 0 && z.FromUtc(new DateTime(2026, 10, 26, 13, 30, 0, DateTimeKind.Utc)) == new DateTime(2026, 10, 26, 13, 30, 0));
+            Check("Zeitzone: Anmeldedaten werden nicht uebernommen", !z.Source.Contains("geheim") && !z.Source.Contains("x@y.de"));
+            File.WriteAllText(tmp, "{\"SavedTimeZoneOffsetMinutes\":60,\"IsAutoUpdateTimeZone\":true}");
+            var za = DialogZone.Resolve(tmp);
+            Check("Zeitzone: automatisch -> Windows-Zeitzone mit Sommerzeitregeln", za.Zone != null && za.FixedOffsetMinutes == null);
+            var berlin = new DialogZone("test", TimeZoneInfo.FindSystemTimeZoneById("W. Europe Standard Time"), null);
+            Check("Zeitzone: Berlin Sommerzeit (Juli) 13:30Z -> 15:30", berlin.FromUtc(new DateTime(2026, 7, 1, 13, 30, 0, DateTimeKind.Utc)) == new DateTime(2026, 7, 1, 15, 30, 0));
+            Check("Zeitzone: Berlin Winterzeit (26.10.) 13:30Z -> 14:30", berlin.FromUtc(new DateTime(2026, 10, 26, 13, 30, 0, DateTimeKind.Utc)) == new DateTime(2026, 10, 26, 14, 30, 0));
+            File.Delete(tmp);
+        }
+        // ---- Liste 'Hinzugefuegt': leer vs. nicht lesbar (VM-Befund: 0 UIA-Zeilen bei aktivem Recorder) ----
+        Check("Liste: Kopfzahl 1, UIA 0 Zeilen -> NICHT lesbar (kein 'kein Recorder')", ClassifyList(1, 0, true) == ListRead.Unreadable);
+        Check("Liste: Kopfzahl 0, 0 Zeilen -> leer", ClassifyList(0, 0, true) == ListRead.Empty);
+        Check("Liste: Kopfzahl unbekannt, 0 Zeilen -> NICHT lesbar", ClassifyList(-1, 0, true) == ListRead.Unreadable);
+        Check("Liste: Kopfzahl 2, 2 Zeilen mit Text -> lesbar", ClassifyList(2, 2, true) == ListRead.Readable);
+        Check("Liste: Zeile ohne Text -> NICHT lesbar", ClassifyList(1, 1, false) == ListRead.Unreadable);
+        {
+            var lines = GroupOcrLines(new[] { (700, 460, 30, 14, "OF"), (735, 461, 60, 14, "Replay"), (800, 459, 70, 14, "Recorder"), (700, 482, 40, 14, "Big"), (745, 483, 50, 14, "trades") });
+            Check("OCR-Zeilen: Woerter je Zeile gruppiert, von oben nach unten", lines.Count == 2 && lines[0].text == "OF Replay Recorder" && lines[1].text == "Big trades" && lines[0].x0 == 700);
+        }
+        // ---- Diagnose: Konto-/Zugangsdaten maskiert ----
+        {
+            var m = MaskSensitive("2026-11-16 16:56:59,097 [Process] INFO  ic[LT-R3L4XK96]: State changed Connecting => Connected. user a.b@example.com [MNQZ6@CME, LFF050-D4K01AZ9-PRO022] login=abc");
+            Check("Diagnose: E-Mail, Konto-IDs und Login maskiert", !m.Contains("example.com") && !m.Contains("LT-R3L4XK96") && !m.Contains("LFF050") && !m.Contains("login=abc") && m.Contains("MNQZ6@CME"), m);
+        }
+
+        // ---- Recorder entfernen: Wirkungspruefung + Symbolsuche im Zeilenbild (VM-Befund: Papierkorb verfehlt) ----
+        AddedRow Row(int i, string txt, string ocr = "") => new(i, new System.Windows.Rect(600, 450 + 22 * i, 580, 21), txt, ocr);
+        {
+            var b0 = new[] { Row(0, "Big trades"), Row(1, "OF Replay Recorder (read-only)"), Row(2, "Volume Profile & TPO") };
+            Check("Entfernen: genau Recorder weg, Rest gleich -> bestaetigt", OnlyRecorderRemoved(b0, new[] { Row(0, "Big trades"), Row(1, "Volume Profile & TPO") }, out _));
+            Check("Entfernen: falsche Zeile entfernt -> NICHT bestaetigt", !OnlyRecorderRemoved(b0, new[] { Row(0, "OF Replay Recorder (read-only)"), Row(1, "Volume Profile & TPO") }, out _));
+            Check("Entfernen: nichts passiert -> NICHT bestaetigt", !OnlyRecorderRemoved(b0, b0, out _));
+            Check("Entfernen: Recorder + weiterer Indikator weg -> NICHT bestaetigt", !OnlyRecorderRemoved(b0, new[] { Row(0, "Big trades") }, out _));
+            Check("Entfernen: Recorder nur per OCR lesbar -> erkannt und bestaetigt",
+                  OnlyRecorderRemoved(new[] { Row(0, "", "Big trades"), Row(1, "", "OF Replay Recorder (read-only)") }, new[] { Row(0, "", "Big trades") }, out _));
+            Check("Entfernen: zwei Recorder-Zeilen -> NICHT bestaetigt (nicht eindeutig)",
+                  !OnlyRecorderRemoved(new[] { Row(0, "OF Replay Recorder (read-only)"), Row(1, "OF Replay Recorder (read-only)") }, new[] { Row(0, "OF Replay Recorder (read-only)") }, out _));
+        }
+        {
+            using var bmp = new System.Drawing.Bitmap(580, 22);
+            using (var g = System.Drawing.Graphics.FromImage(bmp))
+            {
+                g.Clear(System.Drawing.Color.FromArgb(37, 37, 38));
+                g.FillRectangle(System.Drawing.Brushes.White, 10, 6, 180, 10);      // Text
+                g.FillRectangle(System.Drawing.Brushes.LightGray, 500, 4, 14, 14);  // Symbol 1
+                g.FillRectangle(System.Drawing.Brushes.LightGray, 530, 4, 14, 14);  // Symbol 2
+                g.FillRectangle(System.Drawing.Brushes.IndianRed, 556, 4, 14, 14);  // Symbol 3 (Papierkorb)
+            }
+            var blobs = FindIconBlobs(bmp, new List<(int, int)> { (10, 190) });
+            Check("Symbolsuche: drei Symbole rechts, Text ausgeschlossen", blobs.Count == 3 && blobs.All(b => b.cx > 400), string.Join(",", blobs.Select(b => b.cx)));
+            Check("Symbolsuche: Mittelpunkte innerhalb der Symbole", blobs.Any(b => Math.Abs(b.cx - 563) <= 2 && Math.Abs(b.cy - 11) <= 2));
+            using var empty = new System.Drawing.Bitmap(580, 22);
+            using (var g = System.Drawing.Graphics.FromImage(empty)) { g.Clear(System.Drawing.Color.FromArgb(37, 37, 38)); g.FillRectangle(System.Drawing.Brushes.White, 10, 6, 180, 10); }
+            Check("Symbolsuche: ohne Symbole -> keine Kandidaten (kein Blindklick)", FindIconBlobs(empty, new List<(int, int)> { (10, 190) }).Count == 0);
+        }
+        {
+            // 1.4.0 Datum: direkter Weg. Simuliert ATAS (Abschnitt wird bei Vollstaendigkeit uebernommen; Start >= Ende schiebt
+            // das Gegenfeld) und prueft, dass der Plan nie mitschieben laesst und nur Noetiges tippt.
+            DateTime D(string s) => DateTime.ParseExact(s, "dd.MM.yyyy HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+            var now = D("19.11.2026 00:35");
+            (DateTime s, DateTime e, bool pushed) Sim(DateTime s, DateTime e, List<DateStep> plan)
+            {
+                bool pushed = false;
+                foreach (var st in plan)
+                {
+                    var before = st.Start ? s : e;
+                    string cur = (st.Start ? s : e).ToString("ddMMyyyyHHmm");
+                    string typed = st.Digits + cur.Substring(st.Digits.Length);
+                    foreach (var (pos, len) in new[] { (0, 2), (2, 2), (4, 4), (8, 2), (10, 2) })
+                    {
+                        if (pos + len > st.Digits.Length) break;
+                        cur = cur.Substring(0, pos) + typed.Substring(pos, len) + cur.Substring(pos + len);
+                        var v = DateTime.ParseExact(cur, "ddMMyyyyHHmm", System.Globalization.CultureInfo.InvariantCulture);
+                        if (st.Start) { s = v; if (s >= e) { e = s; pushed = true; } } else { e = v; if (e <= s) { s = e.AddMinutes(-30); pushed = true; } }
+                    }
+                    // Verlassen des Felds: Zukunftswert -> ATAS setzt den Wert von vor der Eingabe zurueck (echter Dialog 19.11.)
+                    if (st.Start && s > now) { s = before; pushed = true; }
+                    if (!st.Start && e > now) { e = before; pushed = true; }
+                }
+                return (s, e, pushed);
+            }
+            void PlanCase(string name, string cs, string ce, string ts, string te, int maxDigits)
+            {
+                var p = PlanDateEntry(D(cs), D(ce), D(ts), D(te), notAfter: now);
+                if (p == null) { Check($"Datum direkt: {name}", false, "kein Plan"); return; }
+                var r = Sim(D(cs), D(ce), p);
+                int digits = p.Sum(x => x.Digits.Length);
+                Check($"Datum direkt: {name}", !r.pushed && r.s == D(ts) && r.e == D(te) && digits <= maxDigits && !p.Any(x => x.Digits.EndsWith("0000") && x.Digits.Length == 12 && !te.EndsWith("00:00")),
+                      $"{string.Join(" ; ", p)} -> {r.s:dd.MM.yyyy HH:mm}..{r.e:dd.MM.yyyy HH:mm} pushed={r.pushed} Ziffern={digits}");
+            }
+            PlanCase("02.01. -> 05.01. (nur Tag, Uhrzeiten bleiben)", "02.01.2026 15:30", "02.01.2026 18:00", "05.01.2026 15:30", "05.01.2026 18:00", 4);
+            PlanCase("November -> Januar", "17.11.2026 15:30", "17.11.2026 18:00", "05.01.2026 15:30", "05.01.2026 18:00", 8);
+            PlanCase("Januar -> November", "05.01.2026 15:30", "05.01.2026 18:00", "17.11.2026 15:30", "17.11.2026 18:00", 8);
+            PlanCase("Dialog-Vorgabe 11.11. 14:30-14:50 -> 05.11. 15:30-18:00 (Kollision beider Reihenfolgen)", "11.11.2026 14:30", "11.11.2026 14:50", "05.11.2026 15:30", "05.11.2026 18:00", 30);
+            PlanCase("Jahreswechsel 30.12.2025 -> 02.01.2026", "30.12.2025 15:30", "30.12.2025 18:00", "02.01.2026 15:30", "02.01.2026 18:00", 24);
+            PlanCase("05.11.2026 -> 30.12.2025 (kein Zukunfts-Zwischenstand 30.12.2026)", "05.11.2026 15:30", "05.11.2026 18:00", "30.12.2025 15:30", "30.12.2025 18:00", 24);
+            Check("Datum direkt: Ziel in der Zukunft -> kein direkter Plan (Ersatzweg)", PlanDateEntry(D("05.11.2026 15:30"), D("05.11.2026 18:00"), D("20.11.2026 15:30"), D("20.11.2026 18:00"), notAfter: now) == null);
+            PlanCase("31.03. -> 28.02. (ungueltiger Zwischenstand 31.02. vermieden)", "31.03.2026 15:30", "31.03.2026 18:00", "28.02.2026 15:30", "28.02.2026 18:00", 16);
+            PlanCase("Sommerzeit-Uhrzeit 05.03. 15:30 -> 09.03. 14:30", "05.03.2026 15:30", "05.03.2026 18:00", "09.03.2026 14:30", "09.03.2026 17:00", 24);
+            var same = PlanDateEntry(D("05.01.2026 15:30"), D("05.01.2026 18:00"), D("05.01.2026 15:30"), D("05.01.2026 18:00"));
+            Check("Datum direkt: bereits richtig -> keine Eingabe", same != null && same.Count == 0);
+            Check("Datum direkt: Ziel Start >= Ende -> kein Plan", PlanDateEntry(D("05.01.2026 15:30"), D("05.01.2026 18:00"), D("06.01.2026 18:00"), D("06.01.2026 15:30")) == null);
+            var typical = PlanDateEntry(D("02.01.2026 15:30"), D("02.01.2026 18:00"), D("05.01.2026 15:30"), D("05.01.2026 18:00"));
+            Check("Datum direkt: Tageswechsel = Ende zuerst, je nur 2 Ziffern", typical != null && typical.Count == 2 && !typical[0].Start && typical.All(x => x.Digits.Length == 2),
+                  typical == null ? "null" : string.Join(" ; ", typical));
+        }
+        {
+            // 1.4.0 (Befund echter Dialog 19.11.2026): Zeile 'OF Replay Recorder' mit vier Symbolen rechts:
+            // Duplizieren (zwei Quadrate), Hide (Auge), Löschen (Papierkorb: Griff, Deckel, Korpus mit Rillen), Favorit (Stern).
+            using var row = new System.Drawing.Bitmap(475, 22);
+            var fg = new System.Drawing.Pen(System.Drawing.Color.FromArgb(200, 215, 230), 1);
+            using (var g = System.Drawing.Graphics.FromImage(row))
+            {
+                g.Clear(System.Drawing.Color.FromArgb(22, 92, 150));
+                g.FillRectangle(System.Drawing.Brushes.White, 30, 7, 230, 9);                                    // Text
+                g.DrawRectangle(fg, 395, 5, 8, 8); g.DrawRectangle(fg, 398, 8, 8, 8);                          // Duplizieren
+                g.DrawEllipse(fg, 414, 6, 13, 9); g.DrawEllipse(fg, 418, 8, 5, 5);                              // Hide (Auge)
+                g.DrawLine(fg, 438, 5, 443, 5); g.DrawLine(fg, 435, 6, 446, 6);                                 // Papierkorb: Griff + Deckel
+                g.DrawRectangle(fg, 436, 7, 9, 10); g.DrawLine(fg, 439, 9, 439, 15); g.DrawLine(fg, 442, 9, 442, 15); // Korpus + Rillen
+                g.DrawPolygon(fg, new[] { new System.Drawing.Point(461, 4), new System.Drawing.Point(463, 9), new System.Drawing.Point(468, 9),
+                    new System.Drawing.Point(464, 12), new System.Drawing.Point(466, 17), new System.Drawing.Point(461, 14), new System.Drawing.Point(456, 17),
+                    new System.Drawing.Point(458, 12), new System.Drawing.Point(454, 9), new System.Drawing.Point(459, 9) });                       // Stern
+            }
+            var blobs = FindIconBlobs(row, new List<(int, int)> { (30, 260) });
+            var ranked = RankTrashCandidates(row, blobs);
+            Check("Papierkorb-Form: vier Symbole rechts erkannt", ranked.Count == 4, string.Join(",", ranked.Select(r => $"{r.cx}:{r.shape?.TrashScore}")));
+            Check("Papierkorb-Form: Papierkorb ist 1. Wahl (nicht der Stern ganz rechts)", ranked.Count > 0 && Math.Abs(ranked[0].cx - 440) <= 4,
+                  string.Join(",", ranked.Select(r => $"{r.cx}:{r.shape?.TrashScore}")));
+            Check("Papierkorb-Form: Papierkorb hat eindeutig den hoechsten Formwert (kein Gleichstand)",
+                  ranked.Count == 4 && ranked.Skip(1).All(r => r.shape!.TrashScore < ranked[0].shape!.TrashScore),
+                  string.Join(",", ranked.Select(r => $"{r.cx}:{r.shape?.TrashScore}")));
+            Check("Papierkorb-Form: Textbereich links ist kein Kandidat", ranked.All(r => r.cx > 300));
+        }
+        {
+            // 1.3.9 (Befund 18.11.): Leiste waehrend 'Module laden…' – Fortschrittsbalken UNTER der Symbolzeile ueber die ganze Breite.
+            using var bar = new System.Drawing.Bitmap(760, 70);
+            using (var g = System.Drawing.Graphics.FromImage(bar))
+            {
+                g.Clear(System.Drawing.Color.FromArgb(37, 37, 38));
+                g.FillRectangle(System.Drawing.Brushes.White, 40, 14, 120, 12);       // 'Datum auswählen'
+                g.FillRectangle(System.Drawing.Brushes.White, 300, 14, 30, 12);       // '100x'
+                foreach (int x in new[] { 420, 480, 540, 600, 650 }) g.FillRectangle(System.Drawing.Brushes.LightGray, x, 13, 14, 14); // Transport/Zahnrad/Hilfe
+                g.FillRectangle(System.Drawing.Brushes.LightGray, 700, 13, 14, 14);   // X (rechtestes Symbol der Zeile)
+                g.FillRectangle(System.Drawing.Brushes.DodgerBlue, 10, 44, 745, 6);   // Fortschrittsbalken 'Module laden…'
+            }
+            var words = new List<OcrWord>
+            {
+                new() { Text = "Datum auswählen", X = 40, Y = 14, W = 120, H = 12 },
+                new() { Text = "100x", X = 300, Y = 14, W = 30, H = 12 },
+                new() { Text = "Module laden...", X = 330, Y = 44, W = 90, H = 6 },
+                new() { Text = "x", X = 699, Y = 13, W = 16, H = 14 },   // echtes Bild: das X selbst wird als Buchstabe erkannt
+            };
+            var spans = words.Where(o => o.Text != "x").Select(o => (o.X, o.X + o.W)).ToList();
+            var old = FindIconBlobs(bar, spans).Where(b => b.cx >= bar.Width * 0.85).ToList();
+            Check("X-Suche alt: Fortschrittsbalken verschmilzt mit dem X (Befund nachgestellt)", !old.Any(b => Math.Abs(b.cx - 707) <= 3 && Math.Abs(b.cy - 20) <= 3), string.Join(",", old.Select(b => $"{b.cx}/{b.cy}")));
+            var neu = BarCloseCandidates(bar, words, out var d1);
+            Check("X-Suche: nur Symbolzeile -> rechtestes Symbol ist das X", neu.Count > 0 && Math.Abs(neu[0].cx - 707) <= 3 && Math.Abs(neu[0].cy - 20) <= 3, d1 + " " + string.Join(",", neu.Select(b => $"{b.cx}/{b.cy}")));
+            var noRow = BarCloseCandidates(bar, words.Where(o => o.Text.Contains("laden")).ToList(), out var d2);
+            Check("X-Suche: 'Module laden' bestimmt NICHT die Zeile", d2.Contains("ganze Hoehe"), d2);
+        }
+
+        // ---- Zielchart-Erkennung (VM-Befund 'VulkanChartWpf-Treffer=0'): reine Auswahlfunktion ----
+        ChartCand Cc(string name, string cls = "", string aid = "", string type = "Pane", double x = 100, double y = 100, double w = 900, double h = 600, bool off = false, bool min = false)
+            => new(name, cls, aid, type, "WPF", x, y, w, h, off, "ATAS - Test", min);
+        { var v = SelectChart(new[] { Cc("VulkanChartWpf") }); Check("Chart: genau eine Vulkan-Flaeche -> Unique (bisheriges Verhalten)", v.Kind == ChartVerdictKind.Unique && v.Signal.Contains("VulkanChartWpf")); }
+        { var v = SelectChart(new[] { Cc("VulkanChartWpf", type: "Custom") }); Check("Chart: Vulkan-Flaeche als Custom statt Pane -> Unique", v.Kind == ChartVerdictKind.Unique); }
+        { var v = SelectChart(new[] { Cc("VulkanChartWpf", x: 100), Cc("VulkanChartWpf", x: 1100) }); Check("Chart: zwei Vulkan-Flaechen -> Multiple (keine Groesste-Flaeche-Wahl)", v.Kind == ChartVerdictKind.Multiple && v.Chosen == null); }
+        { var v = SelectChart(new[] { Cc("VulkanChartWpf", x: 100), Cc("VulkanChartWpf", x: 100) }); Check("Chart: dieselbe Flaeche doppelt im UIA-Baum -> Unique", v.Kind == ChartVerdictKind.Unique); }
+        { var v = SelectChart(new[] { Cc("", cls: "DxChartWpf") }); Check("Chart: andere Renderflaeche (Klasse mit 'Chart') ohne Vulkan -> Unique ueber Klasse", v.Kind == ChartVerdictKind.Unique && v.Signal.StartsWith("Klasse")); }
+        { var v = SelectChart(new[] { Cc("ChartControl", w: 1000, h: 700, x: 90, y: 90), Cc("", aid: "ChartSurface", x: 100, y: 120, w: 900, h: 600) }); Check("Chart: Container + innere Flaeche -> innerste gewaehlt, Unique", v.Kind == ChartVerdictKind.Unique && v.Chosen!.AutomationId == "ChartSurface"); }
+        { var v = SelectChart(new[] { Cc("", cls: "DxChartWpf", x: 100), Cc("", cls: "DxChartWpf", x: 1100) }); Check("Chart: zwei andere Renderflaechen -> Multiple", v.Kind == ChartVerdictKind.Multiple); }
+        { var v = SelectChart(new[] { Cc("ChartTrader"), Cc("Chart toolbar", w: 900, h: 400), Cc("", cls: "ChartTabItem") }); Check("Chart: nur Chart-Bedienelemente (Trader/Toolbar/Tab) -> NoneFound", v.Kind == ChartVerdictKind.NoneFound); }
+        { var v = SelectChart(new[] { Cc("ChartTrader", x: 1100), Cc("VulkanChartWpf") }); Check("Chart: Vulkan-Flaeche + ChartTrader -> Unique (Vulkan)", v.Kind == ChartVerdictKind.Unique && v.Chosen!.Name == "VulkanChartWpf"); }
+        { var v = SelectChart(new[] { Cc("VulkanChartWpf", min: true) }); Check("Chart: Fenster minimiert -> OnlyHidden (nicht 'kein Chart')", v.Kind == ChartVerdictKind.OnlyHidden); }
+        { var v = SelectChart(new[] { Cc("VulkanChartWpf", off: true) }); Check("Chart: Flaeche offscreen/verdeckt -> OnlyHidden", v.Kind == ChartVerdictKind.OnlyHidden); }
+        { var v = SelectChart(new[] { Cc("VulkanChartWpf", w: 250, h: 150) }); Check("Chart: zu kleine Flaeche -> OnlyHidden", v.Kind == ChartVerdictKind.OnlyHidden); }
+        { var v = SelectChart(Array.Empty<ChartCand>()); Check("Chart: nichts gefunden -> NoneFound", v.Kind == ChartVerdictKind.NoneFound); }
+        { var v = SelectChart(new[] { Cc("VulkanChartWpf", x: 100), Cc("VulkanChartWpf", x: 1100, min: true) }); Check("Chart: ein sichtbarer + ein minimierter Chart -> Unique (sichtbarer)", v.Kind == ChartVerdictKind.Unique && v.Chosen!.X == 100); }
+        // ---- 1.3.6: Ersatzweg Instrumenttitel (VM 18.11.: keine ChartView, zwei namenlose WinForms-Flaechen gleicher Lage) ----
+        Check("ChartOCR: Titelwoerter MNQ / MNQZ6 / MNQZ26 / MNQ-12-26 / (MNQ) erkannt",
+              new[] { "MNQ", "MNQZ6", "MNQZ26", "MNQ-12-26", "(MNQ)", "mnqz6,", "#MNQZ6" }.All(t => IsTargetToken(t, "MNQ")));
+        Check("ChartOCR: keine Teilwort-/Fremdtreffer (NQ, MNQX123, XMNQ, MNQUARTER)",
+              !new[] { "NQ", "MNQX123", "XMNQ", "MNQUARTER", "MN0", "" }.Any(t => IsTargetToken(t, "MNQ")));
+        {
+            string LgC(string t, string src, string msg) => $"2026-11-18 {t},100 [2         ] INFO  {src,-15}: {msg}";
+            var lines = new[] { LgC("09:00:00", "ES 1m Chart", "ApplyTemplate"), LgC("13:17:20", "MNQ 5m Chart", "ApplyTemplate: template.Panels=1"),
+                                LgC("13:21:30", "Chart", "[RenderControl] KeyUp"), LgC("13:22:00", "Replay", "State changed") };
+            var cs = ChartSourcesFromLog(lines, new DateTime(2026, 11, 18, 13, 17, 0));
+            Check("ChartOCR: Chart-Namen nur seit ATAS-Start aus dem Protokoll (alter ES-Chart und 'Chart' ohne Namen ignoriert)",
+                  cs.Count == 1 && cs[0] == "MNQ 5m Chart", string.Join(",", cs));
+        }
+        {
+            System.Windows.Rect R(double x, double y, double w, double h) => new(x, y, w, h);
+            var vm = new List<Surface> {
+                new("", "WindowsForms10.Window.8.app.0.14a4f1c_r3_ad1", "3998704", "Pane", "WinForm", R(363, 187, 1553, 787), 0x111, false),
+                new("", "WindowsForms10.Window.8.app.0.14a4f1c_r3_ad1", "1508644", "Pane", "WinForm", R(363, 187, 1553, 787), 0x222, false),
+                new("RootLayout", "ExtendedDockLayoutManager", "RootLayout", "Group", "WPF", R(0, 157, 1920, 843), 0, false) };
+            var rg = SurfaceRegions(vm);
+            Check("ChartOCR: VM-Fall 18.11. -> Container verworfen, zwei gleiche WinForms-Flaechen = EINE Flaeche", rg.Count == 1 && rg[0].Count == 2);
+            vm.Add(new("", "WindowsForms10.Window.8.app.0.14a4f1c_r3_ad1", "777", "Pane", "WinForm", R(363, 600, 1553, 380), 0x333, false));
+            Check("ChartOCR: zweite, andere Flaeche -> zwei Flaechen (nicht eindeutig)", SurfaceRegions(vm).Count >= 2);
+        }
+        {
+            var ok = new OcrHit("MNQZ6", 400, 200, true, "gehoert zur Flaeche");
+            var logMnq = new[] { "MNQ 5m Chart" };
+            var none = Array.Empty<OcrHit>(); var S = RegionRelation.Single; var N = RegionRelation.Nested;
+            OcrChartVerdict D(int reg, RegionRelation rel, string? named, IReadOnlyList<OcrHit> h, IReadOnlyList<string> lc) => DecideChartFallback(reg, rel, named, h, lc, "MNQ");
+            Check("ChartOCR: eine Flaeche + MNQ-Titel + Zuordnung + Protokoll -> eindeutig", D(1, S, null, new[] { ok }, logMnq).Unique);
+            Check("ChartOCR: gleiche Koordinaten reichen nicht - Titel gehoert nicht zur Flaeche -> unklar",
+                  !D(1, S, null, new[] { ok, new OcrHit("MNQ", 380, 900, false, "andere hwnd") }, logMnq).Unique);
+            Check("ChartOCR: zwei Flaechen -> nicht eindeutig (auch mit Titel)", !D(2, S, null, new[] { ok }, logMnq).Unique);
+            Check("ChartOCR: kein Titel und kein Panel-Name -> nicht eindeutig", !D(1, S, null, none, logMnq).Unique);
+            Check("ChartOCR: Protokoll nennt nur ES-Chart -> Widerspruch, nicht eindeutig", !D(1, S, null, new[] { ok }, new[] { "ES 1m Chart" }).Unique);
+            Check("ChartOCR: Protokoll nennt keinen Chart -> Titel + Zuordnung genuegen", D(1, S, null, new[] { ok }, Array.Empty<string>()).Unique);
+            // Korrektur 17.11.: 'MNQ 5m Chart' war der UIA-Name des umgebenden Panels (CustomLayoutPanel), nicht der ChartView.
+            Check("ChartOCR: UIA-Name des umgebenden Panels 'MNQ 5m Chart' -> eindeutig (auch ohne Texterkennung)",
+                  D(1, S, "MNQ 5m Chart", none, logMnq) is { Unique: true } pv && pv.Signal.Contains("Panel"));
+            Check("ChartOCR: Panel-Name + widersprechender Titeltreffer -> unklar", !D(1, S, "MNQ 5m Chart", new[] { new OcrHit("MNQ", 1, 1, false, "fremd") }, logMnq).Unique);
+            Check("ChartOCR: Titel in der Titelzeile, per UIA demselben Panel zugeordnet -> eindeutig",
+                  D(1, S, null, new[] { new OcrHit("MNQ", 400, 170, true, "UIA: gemeinsamer Vorfahr = dasselbe Chart-Panel") }, logMnq).Unique);
+            // Zwei deckungsgleiche Fenster beweisen weder einen noch zwei Charts:
+            Check("ChartOCR: deckungsgleiche Fenster VERSCHACHTELT (Host + Zeichenflaeche) + Titel -> eindeutig", D(1, N, null, new[] { ok }, logMnq).Unique);
+            Check("ChartOCR: deckungsgleiche Fenster als GESCHWISTER (z. B. Tabs) -> unklar, auch mit Titel", !D(1, RegionRelation.Siblings, "MNQ 5m Chart", new[] { ok }, logMnq).Unique);
+            Check("ChartOCR: Verhaeltnis nicht bestimmbar -> unklar", !D(1, RegionRelation.Unknown, null, new[] { ok }, logMnq).Unique);
+            Check("ChartOCR: Panel-Name-Erkennung 'MNQ 5m Chart' / 'MNQZ6 - 5 Min' ja, 'NQ 5m Chart' / 'MNQX123' nein",
+                  NameHasTarget("MNQ 5m Chart", "MNQ") && NameHasTarget("MNQZ6 - 5 Min", "MNQ") && !NameHasTarget("NQ 5m Chart", "MNQ") && !NameHasTarget("MNQX123 Chart", "MNQ"));
+            var surf = new System.Windows.Rect(363, 187, 1553, 787);
+            Check("ChartOCR: Panel mit Titelzeile ueber der Flaeche gilt als chartgross; Hauptfenster/Layout nicht",
+                  IsPanelOf(new System.Windows.Rect(339, 157, 1577, 840), surf) && !IsPanelOf(new System.Windows.Rect(0, 0, 3840, 2160), surf) && !IsPanelOf(new System.Windows.Rect(400, 187, 1400, 787), surf));
+        }
+
+        Check("Bridge-Selbsttest: rc=0 + result ok -> ok", BridgeSelfcheckOk(0, "{\"result\": \"ok\", \"python\": \"3.13.9\"}"));
+        Check("Bridge-Selbsttest: ModuleNotFoundError (rc=1, leere Ausgabe) -> NICHT ok", !BridgeSelfcheckOk(1, ""));
+        Check("Bridge-Selbsttest: rc=0 ohne result -> NICHT ok", !BridgeSelfcheckOk(0, "irgendwas"));
+        string vmRec = @"C:\Daten mit Leerzeichen\Aufnahmen Überprüfung\Recordings";
+        Check("Pfad: neue DLL + Konfiguration zeigt auf Lauf-Ordner -> ok", RecorderPathVerdict(vmRec, true, true, vmRec + "\\", out _));
+        Check("Pfad: neue DLL + Konfiguration fehlt -> BLOCKER", !RecorderPathVerdict(vmRec, true, true, null, out _));
+        Check("Pfad: neue DLL + Konfiguration zeigt woandershin -> BLOCKER", !RecorderPathVerdict(vmRec, true, true, @"D:\Anders\Recordings", out _));
+        Check("Pfad: alte DLL (fester F:-Pfad) + anderer Datenordner -> BLOCKER (VM-Fall)", !RecorderPathVerdict(vmRec, true, false, vmRec, out var legacyMsg) && legacyMsg.Contains("aeltere Version"));
+        Check("Pfad: alte DLL + Lauf nutzt genau den alten festen Pfad -> ok (bestehender lokaler Betrieb)", RecorderPathVerdict(LegacyRecorderRoot, true, false, null, out _));
+        Check("Pfad: keine DLL installiert -> BLOCKER", !RecorderPathVerdict(vmRec, false, false, vmRec, out _));
         Check("Watchdog Boden geschwindigkeitsunabhaengig (>= 200)", PlayWatchdogSeconds(180, 100.0, 200) >= 200);
 
         // ---- SAMMELLAUF: stabile Job-ID + Wiederanlauf-Auswahl (keine Doppelaufnahme erledigter Auftraege) ----
@@ -1369,7 +1767,6 @@ internal static class Program
     private const int IND_ROW_X = 770, IND_ROW_Y = 586;          // Hinzugefuegt-Zeile
     private const int IND_TRASH_X = 1074, IND_TRASH_Y = 586;     // Entfernen (Papierkorb)
     private const int IND_APPLY_X = 1402, IND_APPLY_Y = 762;     // Uebernehmen
-    private const int CHART_TAB_X = 1255, CHART_TAB_Y = 174;     // 'Chart'-Reiter (aus Replay-Ansicht zurueck)
 
     private static AutomationElement? MainWin()
         => AtasRoots().FirstOrDefault(w => Safe(() => w.Current.Name).StartsWith("ATAS", StringComparison.OrdinalIgnoreCase));
@@ -1407,17 +1804,6 @@ internal static class Program
     // Recorder-Zeile entfernen GEOMETRIE-UNABHAENGIG: Klickpunkte relativ zum aktuellen Dialog-Rect
     // (fester Dialog 997x532). Offsets live gegen ATAS verifiziert; ersetzt die bildschirmfesten IND_*-Koordinaten,
     // die nur bei 1920x1080-maximiert trafen. Zeile waehlen -> Papierkorb -> Uebernehmen.
-    private static bool RemoveSelectedRecorderRelative(Action<string> W)
-    {
-        var dlg = IndicatorDialog();
-        if (dlg == null) { W("  [rm] Dialog nicht gefunden."); return false; }
-        System.Windows.Rect r; try { r = dlg.Current.BoundingRectangle; } catch { W("  [rm] Dialog ohne Rect."); return false; }
-        ClickMain((int)(r.X + 300), (int)(r.Y + 331));   // 'Hinzugefuegt'-Zeile selektieren
-        ClickMain((int)(r.X + 613), (int)(r.Y + 331));   // Papierkorb der Zeile
-        ClickMain((int)(r.X + 941), (int)(r.Y + 508));   // Uebernehmen
-        return true;
-    }
-
     private static int LockedCount() => Directory.Exists(RecordingsDir)
         ? Directory.GetDirectories(RecordingsDir).Count(d => IsMetaLocked(Path.Combine(d, "meta.json"))) : 0;
 
@@ -1435,24 +1821,33 @@ internal static class Program
             .Select(b => { System.Windows.Rect r; try { r = b.Current.BoundingRectangle; } catch { r = System.Windows.Rect.Empty; } return (b, r); })
             .Where(t => !t.r.IsEmpty && t.r.Y >= 0).OrderBy(t => t.r.Y).Select(t => t.b).FirstOrDefault();
 
+    // 'Chart'-Reiter des Menuebands per UIA (SelectionItem/Invoke) statt fester Koordinaten.
+    private static void SelectChartRibbonTab(Action<string> W)
+    {
+        var tab = FindInRoots(AtasRoots(), ControlType.TabItem).FirstOrDefault(t => Safe(() => t.Current.Name).Trim().Equals("Chart", StringComparison.OrdinalIgnoreCase));
+        if (tab == null) { W("  [ind] 'Chart'-Reiter per UIA nicht gefunden."); return; }
+        try { if (tab.TryGetCurrentPattern(SelectionItemPattern.Pattern, out var p)) { ((SelectionItemPattern)p).Select(); return; } } catch { }
+        if (!Invoke(tab)) ClickElement(tab);
+    }
+
     private static bool OpenIndicatorDialog(Action<string> W)
     {
         if (IndicatorDialog() != null) return true;   // bereits offen
         for (int attempt = 0; attempt < 3; attempt++)
         {
             // Falls der Chart in Replay-Ansicht ist, zuerst 'Chart'-Reiter aktivieren (sonst oeffnet die Toolbar den Datum-Dialog).
-            if (attempt > 0) { ClickMain(CHART_TAB_X, CHART_TAB_Y); Thread.Sleep(500); }
+            if (attempt > 0) { SelectChartRibbonTab(W); Thread.Sleep(500); }
             var btn = FindIndicatorsButton();
             bool invoked = false;
             if (IsEnabledSafe(btn)) { try { invoked = Invoke(btn!); } catch { invoked = false; } }   // UIA-Invoke (zuverlaessig)
             if (!invoked && btn != null) { ClickElement(btn); invoked = true; }                        // sonst echter Klick am Button
-            if (!invoked) ClickMain(722, 174);
-            Thread.Sleep(1300);
+            if (!invoked) W("  [ind] 'Indikatoren'-Schaltflaeche per UIA nicht gefunden (kein Klick auf feste Koordinaten).");
+            for (var swD = Stopwatch.StartNew(); swD.ElapsedMilliseconds < 3000 && IndicatorDialog() == null && FindIdAny("StartEdit") == null; Thread.Sleep(100)) { }
             if (FindIdAny("StartEdit") != null)   // versehentlich Datum-Dialog -> Chart-Ansicht noetig
             {
                 W("  [ind] Datum-Dialog statt Indikatoren -> schließen + 'Chart'-Reiter aktivieren");
                 CloseDateDialogIfOpen(W);
-                ClickMain(CHART_TAB_X, CHART_TAB_Y);
+                SelectChartRibbonTab(W);
                 Thread.Sleep(600);
                 continue;
             }
@@ -1532,7 +1927,7 @@ internal static class Program
         if (edit == null) { W("  [add] Suchfeld (SearchText) nicht gefunden."); return; }
         try { edit.SetFocus(); Thread.Sleep(180); } catch { }
         KeyVk(0x41, ctrl: true); Thread.Sleep(70); KeyVk(0x2E); Thread.Sleep(120);
-        TypeUnicode(text); Thread.Sleep(600);
+        TypeUnicode(text); Thread.Sleep(150);
         W($"  [add] Suche '{text}' -> Feld='{ValueOf(edit)}'");
     }
 
@@ -1552,7 +1947,7 @@ internal static class Program
         var dlg = IndicatorDialog();
         if (dlg == null) { W("[add] BLOCKER: Dialog 'IndicatorsSettingsView' nicht im UIA-Baum."); return false; }
         var st0 = AddedState(dlg);
-        if (st0.hasRecorder) { W($"[add] Recorder bereits unter 'Hinzugefügt' (count={st0.count}) -> kein doppeltes Hinzufuegen."); return true; }
+        if (st0.hasRecorder) { W($"[add] Recorder bereits unter 'Hinzugefügt' (count={st0.count}) -> kein doppeltes Hinzufuegen."); CancelDialog(dlg, W); return true; }
         // Einfach: Suchleiste -> 'replay' -> exakter Treffer -> Doppelklick -> Uebernehmen (kein Kategoriewechsel).
         SetSearchText(dlg, "replay", W);
         AutomationElement? hit = null;
@@ -1560,13 +1955,16 @@ internal static class Program
         if (hit == null) { W($"[add] BLOCKER: exakter Treffer '{REC_CATALOG_NAME}' nicht in der Ergebnisliste gefunden (keine anderen Indikatoren ausprobiert)."); return false; }
         W($"[add] exakter Treffer: '{ValueOf(hit)}' rect={Rect(hit)}");
         try { if (hit.TryGetCurrentPattern(SelectionItemPattern.Pattern, out var sp)) ((SelectionItemPattern)sp).Select(); } catch { }
-        Thread.Sleep(250);
+        Thread.Sleep(80);
         System.Windows.Rect hr; try { hr = hit.Current.BoundingRectangle; } catch { hr = System.Windows.Rect.Empty; }
         if (hr.IsEmpty) { W("[add] BLOCKER: Treffer ohne Rect (nicht klickbar)."); return false; }
-        DoubleClickFast((int)(hr.X + hr.Width / 2), (int)(hr.Y + hr.Height / 2)); Thread.Sleep(700);   // Doppelklick am TATSAECHLICHEN Element
-        var dlg2 = IndicatorDialog() ?? dlg;
-        var st1 = AddedState(dlg2);
-        bool appeared = st1.hasRecorder || (st1.count >= 0 && st1.count > (st0.count < 0 ? 0 : st0.count));
+        DoubleClickFast((int)(hr.X + hr.Width / 2), (int)(hr.Y + hr.Height / 2));   // echter Doppelklick am TATSAECHLICHEN Element
+        var dlg2 = dlg; var st1 = st0; bool appeared = false;
+        for (var swA = Stopwatch.StartNew(); swA.ElapsedMilliseconds < 4000 && !appeared; Thread.Sleep(100))
+        {
+            dlg2 = IndicatorDialog() ?? dlg; st1 = AddedState(dlg2);
+            appeared = st1.hasRecorder || (st1.count >= 0 && st1.count > (st0.count < 0 ? 0 : st0.count));
+        }
         if (!appeared) { W($"[add] BLOCKER: Recorder nicht unter 'Hinzugefügt' erschienen (count {st0.count}->{st1.count}, recorder={st1.hasRecorder})."); return false; }
         W($"[add] unter 'Hinzugefügt' bestaetigt (count {st0.count}->{st1.count}, recorder={st1.hasRecorder}).");
         // Hinweis Portabilitaet: Der Recorder liest 'OutputRoot' nur EINMAL beim Start (Hinzufuegen) und re-initialisiert
@@ -1574,26 +1972,26 @@ internal static class Program
         // als Standardvorlage in ATAS gesetzt ('Als Vorlage speichern'); jeder Add erbt ihn dann beim Start.
         var apply = FindBtnIn(dlg2, "Übernehmen");
         if (apply == null) { W("[add] BLOCKER: 'Übernehmen' nicht gefunden."); return false; }
-        Invoke(apply); Thread.Sleep(1200);
+        Invoke(apply);
+        for (var swC = Stopwatch.StartNew(); swC.ElapsedMilliseconds < 5000 && IndicatorDialog() != null; Thread.Sleep(100)) { }
         W("[add] 'Übernehmen' ausgeloest.");
         return true;
     }
 
     // Eigenständiges, kontrolliertes Entfernen des Recorders am Zielchart (Cleanup). Verifiziert per Dateisystem.
-    private static int RemoveRecorderStandalone()
+    // Entfernt nach einem fruehen Abbruch den von diesem Auftrag angehaengten Recorder. Nutzt dieselben Bausteine wie der
+    // regulaere Abschluss (Replay-Ansicht verlassen -> Indikator-Dialog -> Zeile entfernen -> Uebernehmen) und handelt nur,
+    // wenn der Dialog den Recorder unter 'Hinzugefuegt' tatsaechlich zeigt. true = danach kein Recorder mehr angehaengt.
+    private static bool RemoveRecorderAfterAbort(Action<string> W)
     {
-        void W(string s) => Console.WriteLine(s);
+        W("  [abbruch-cleanup] angehaengten Recorder entfernen …");
         CloseDateDialogIfOpen(W);
-        if (ReplayOpen()) { W("[rmrec] Replay verlassen"); var rb = FindIdAny("RibbonReplayButton"); if (rb != null) Invoke(rb); for (int i = 0; i < 10 && ReplayOpen(); i++) Thread.Sleep(1000); }
-        int before = LockedCount();
-        if (before == 0) { W("[rmrec] keine aktive Instanz -> nichts zu entfernen."); return 0; }
-        if (!OpenIndicatorDialog(W)) { W("[rmrec] BLOCKER: Indikator-Dialog nicht zugaenglich."); return 4; }
-        RemoveSelectedRecorderRelative(W);
-        int after = before;
-        for (int i = 0; i < 15; i++) { Thread.Sleep(1000); after = LockedCount(); if (after < before) break; }
-        W($"[rmrec] aktive gesperrte Instanzen: {before} -> {after}  ({(after < before ? "entfernt/finalisiert" : "unveraendert")})");
-        return after < before ? 0 : 8;
+        if (ReplayOpen() || !IndicatorsEnabled()) ExitReplayView(W);
+        for (int i = 0; i < 10 && !IndicatorsEnabled(); i++) Thread.Sleep(1000);
+        var res = RemoveRecorderFromChart(W);
+        return res == RemovalOutcome.Removed || (res == RemovalOutcome.NoRecorder && LockedCount() == 0);
     }
+
 
     // Chart-gebundener 'Indikatoren'-Button. Im historischen Wiedergabemodus ist er enabled=False
     // ("alle Handelsverbindungen deaktiviert"); nach echtem Verlassen der Replay-Ansicht wieder enabled=True.
@@ -1617,34 +2015,38 @@ internal static class Program
     // (Indikatoren bleibt dann enabled=False). Erfolg wird UNABHAENGIG verifiziert: 'Indikatoren' wird wieder aktiv.
     private static bool ExitReplayView(Action<string> W)
     {
-        if (IndicatorsEnabled() && !ReplayOpen()) { W("[view] bereits ausserhalb Replay (Indikatoren aktiv, Transport zu) -> nichts zu tun."); return true; }
+        // Alle UIA-Abfragen begrenzt (waehrend 'Module laden' kann der ATAS-UI-Thread lange nicht antworten).
+        bool IE() => Bounded("Indikatoren aktiv?", IndicatorsEnabled, 3000, false, W);
+        bool RO() => Bounded("Replay offen?", ReplayOpen, 3000, true, W);
+        if (IE() && !RO()) { W("[view] bereits ausserhalb Replay (Indikatoren aktiv, Transport zu) -> nichts zu tun."); return true; }
 
         // 'Zur Echtzeit wechseln' liegt im Transport. Ist der Transport zu, zuerst wieder oeffnen.
         // Layout-robust ueber den Cluster-Finder (nicht nur Fenstertitel) -> angedockter Transport wird NICHT faelschlich geoeffnet/geschlossen.
-        if (!ReplayOpen())
+        if (!RO())
         {
             W("[view] Transport zu -> oeffne ihn (RibbonReplayButton), um 'Zur Echtzeit wechseln' zu erreichen.");
             var rb = FindIdAny("RibbonReplayButton");
             if (rb != null) { try { Invoke(rb); } catch { } }
-            for (int i = 0; i < 8 && !ReplayOpen(); i++) Thread.Sleep(600);
+            for (int i = 0; i < 8 && !RO(); i++) Thread.Sleep(600);
         }
 
         // WICHTIG: Am natuerlichen Ende REWINDET ATAS automatisch (Stopped -> LoadingModules -> Initializing -> Play).
         // Waehrend dieses Transients ('Module laden…') ist 'Zur Echtzeit wechseln' DEAKTIVIERT. Daher pollen, bis der
         // Button AKTIV ist (Replay spielt/pausiert wieder), ihn dann invoken; Erfolg = 'Indikatoren' wieder aktiv.
         bool invoked = false, ok = false, toLiveSeen = false;
-        for (int i = 0; i < 40 && !ok; i++)   // bis ~40s: deckt Rewind (~11s) + Settle ab
+        var swView = Stopwatch.StartNew();
+        for (int i = 0; i < 160 && !ok; i++)   // 250-ms-Schritte, bis ~40s: deckt Rewind (~11s) + Settle ab
         {
-            if (IndicatorsEnabled()) { ok = true; break; }
-            var toLive = FindBtnByHelpAny("Zur Echtzeit wechseln");
+            if (IE()) { ok = true; break; }
+            var toLive = Bounded("UIA 'Zur Echtzeit wechseln'", () => FindBtnByHelpAny("Zur Echtzeit wechseln"), 3000, null, W);
             if (toLive != null) toLiveSeen = true;
             if (IsEnabledSafe(toLive))
             {
                 W($"[view] 'Zur Echtzeit wechseln' aktiv -> Invoke (rect={Rect(toLive!)})");
                 try { Invoke(toLive!); invoked = true; } catch (Exception ex) { W($"[view] Invoke-Fehler: {ex.Message}"); }
-                for (int k = 0; k < 8 && !ok; k++) { Thread.Sleep(600); if (IndicatorsEnabled()) ok = true; }
+                for (int k = 0; k < 20 && !ok; k++) { Thread.Sleep(250); if (IE()) ok = true; }
             }
-            else { Thread.Sleep(1000); if (!toLiveSeen && i >= 12) break; }   // custom-gerendert: Button existiert gar nicht in UIA -> Fallback unten
+            else { Thread.Sleep(250); if (!toLiveSeen && i >= 48) break; }   // custom-gerendert: Button existiert gar nicht in UIA -> Fallback unten
         }
         // FALLBACK (custom-gerenderter Transport ohne UIA-'Zur Echtzeit wechseln'): Replay-Modus ueber die Ribbon-
         // Umschaltung verlassen. UNABHAENGIG verifiziert daran, dass der chart-gebundene 'Indikatoren'-Button wieder aktiv wird.
@@ -1653,11 +2055,11 @@ internal static class Program
             W("[view] 'Zur Echtzeit wechseln' nicht ueber UIA erreichbar -> Fallback: RibbonReplayButton (Replay-Modus AUS).");
             var rb = FindIdAny("RibbonReplayButton");
             if (rb != null) { try { Invoke(rb); } catch (Exception ex) { W($"[view] Ribbon-Invoke-Fehler: {ex.Message}"); } }
-            for (int k = 0; k < 25 && !ok; k++) { Thread.Sleep(1000); if (IndicatorsEnabled()) ok = true; }
+            for (int k = 0; k < 100 && !ok; k++) { Thread.Sleep(250); if (IE()) ok = true; }
         }
         if (!invoked && !ok) W("[view] BLOCKER: Replay-Ansicht weder ueber 'Zur Echtzeit wechseln' noch ueber die Ribbon-Umschaltung verlassen.");
-        bool transportClosed = !ReplayOpen();
-        W($"[view] Ergebnis: Indikatoren aktiv={ok}  Transport {(transportClosed ? "zu" : "offen")}  -> Replay-Ansicht {(ok ? "VERLASSEN (verifiziert)" : "NICHT verlassen")}");
+        bool transportClosed = !RO();
+        W($"[view] Ergebnis: Indikatoren aktiv={ok}  Transport {(transportClosed ? "zu" : "offen")}  -> Replay-Ansicht {(ok ? "VERLASSEN (verifiziert)" : "NICHT verlassen")}  ({swView.ElapsedMilliseconds} ms)");
         return ok;
     }
 
@@ -1802,7 +2204,7 @@ internal static class Program
         var dlg = IndicatorDialog();
         if (dlg != null) { var list = FindByAutomationId(dlg, "IndicatorsList"); if (list != null) { W("-- 'Hinzugefügt'-Liste (UIA) --"); int n = 0; DumpDialog(list, 0, W, ref n); } }
         // REMOVE (bestehender Pfad)
-        int rc = RemoveRecorderStandalone();
+        int rc = RemoveRecorderCommand(null);
         int after = LockedCount();
         W($"[test] REMOVE rc={rc}; gesperrte Instanzen jetzt={after}");
         bool ok = rc == 0 && after <= before;
@@ -1847,26 +2249,43 @@ internal static class Program
 
     // EIN Aufnahmeauftrag (bewaehrter Ablauf). Zeitraum (dStart/dEnd, Dialog/Berlin) ist Parameter; Zielchart ueber
     // ATAS_TARGET_CHART. Mehrere Auftraege teilen sich sharedSb (ein Report) und outFile. rc==0 == GESAMT-PASS.
-    private static int RunRecordingJob(string? outFile, string dStart, string dEnd, int jobNo, int jobCount, StringBuilder? sharedSb, string speedName = "1x")
+    // Altaufrufer (Berlin-Wandzeit): nach UTC umrechnen und den UTC-Auftrag ausfuehren.
+    private static int RunRecordingJob(string? outFile, string dStartBerlin, string dEndBerlin, int jobNo, int jobCount, StringBuilder? sharedSb, string speedName = "1x")
+    {
+        var ci = System.Globalization.CultureInfo.InvariantCulture;
+        return RunRecordingJob(outFile, BerlinToUtc(DateTime.ParseExact(dStartBerlin, "dd.MM.yyyy HH:mm:ss", ci)),
+            BerlinToUtc(DateTime.ParseExact(dEndBerlin, "dd.MM.yyyy HH:mm:ss", ci)), jobNo, jobCount, sharedSb, speedName);
+    }
+
+    private static int RunRecordingJob(string? outFile, DateTime sUtc, DateTime eUtc, int jobNo, int jobCount, StringBuilder? sharedSb, string speedName = "1x")
     {
         var sb = sharedSb ?? new StringBuilder();
         void W(string s = "") { sb.AppendLine(s); Console.WriteLine(s); if (outFile != null) { try { File.WriteAllText(outFile, sb.ToString()); } catch { } } }
         double tBed = 0, tLoad = 0, tPlay = 0; var swAll = Stopwatch.StartNew();
         string targetChart = Environment.GetEnvironmentVariable("ATAS_TARGET_CHART") ?? "";  // leer = einziger Chart
-        // UTC-Zuordnung ausdruecklich via TimeZoneInfo(Europe/Berlin) berechnet (korrektes DST, KEIN fester Offset);
-        // die autoritative Laufzeit-Zuordnung kommt zusaetzlich aus dem ATAS-Log ('Playing from' in UTC).
-        var dswHdr = DateTime.ParseExact(dStart, "dd.MM.yyyy HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
-        var dewHdr = DateTime.ParseExact(dEnd, "dd.MM.yyyy HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
-        var dswUtc = BerlinToUtc(dswHdr); var dewUtc = BerlinToUtc(dewHdr);
-        // Fensterdauer (s) fuer session-abhaengige Zeitlimits (Laden/Watchdog/Writer-Flush). Grosse Sessionfenster
-        // (z.B. 2,5 h) brauchen mehr Lade-/Flush-Zeit; die Grenzen werden NUR groesser, nie kuerzer als bisher.
-        int windowSec = Math.Max(1, (int)(dewHdr - dswHdr).TotalSeconds);
+        // Zeitbezuege GETRENNT fuehren: Soll-Grenzen in UTC (unveraenderlich) -> Eingabe im ATAS-Datumsdialog (dessen
+        // Zeitzone) -> von ATAS bestaetigter Ladebereich (Log, UTC) -> aufgezeichneter Datenbereich (Recorder, UTC).
+        sUtc = DateTime.SpecifyKind(sUtc, DateTimeKind.Utc); eUtc = DateTime.SpecifyKind(eUtc, DateTimeKind.Utc);
+        var zone = DialogZone.Resolve();
+        string dStart = zone.FromUtc(sUtc).ToString("dd.MM.yyyy HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
+        string dEnd = zone.FromUtc(eUtc).ToString("dd.MM.yyyy HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
+        // Fensterdauer (s) fuer fensterabhaengige Zeitlimits (Laden/Watchdog/Writer-Flush).
+        int windowSec = Math.Max(1, (int)(eUtc - sUtc).TotalSeconds);
         W($"\n# ATAS Aufnahmeauftrag {jobNo}/{jobCount}  {DateTime.Now:yyyy-MM-dd HH:mm:ss}  Ausgabe: {RecordingsDir}");
-        W($"# Zeitraum Europe/Berlin: [{dStart}, {dEnd})  == UTC [{dswUtc:yyyy-MM-dd HH:mm:ss}, {dewUtc:yyyy-MM-dd HH:mm:ss}) (TimeZoneInfo, DST-korrekt; Offset={(dswHdr - dswUtc).TotalHours:+0;-0}h)  Zielchart: {(targetChart == "" ? "(einziger Chart)" : targetChart)}");
+        W($"# Soll (UTC, unveraenderlich): [{sUtc:yyyy-MM-dd HH:mm:ss}Z, {eUtc:yyyy-MM-dd HH:mm:ss}Z)");
+        W($"# Dialog-Eingabe: [{dStart}, {dEnd}) in {zone.Describe(sUtc)}; Quelle: {zone.Source}. Annahme - wird gegen den von ATAS bestaetigten Ladebereich geprueft.");
+        W($"# Zielchart: {(targetChart == "" ? "(einziger Chart)" : targetChart)}");
         if (!DriveReadyWritable(RecordingsDir, out var rdr)) { W("BLOCKER: " + rdr); return 3; }
         if (Process.GetProcessesByName("OFT.Platform").Length == 0) { W("BLOCKER: ATAS laeuft nicht."); return 3; }
 
         string? attrFolder = null; string attrRunId = ""; int rc = -1; bool cleanupOk = false;
+        var alog = new IncrementalAtasLog(Path.GetDirectoryName(AtasLogPath())!);
+        var exec = new ReplayExecution();
+        bool? speedVerified = null;
+        bool recorderAddedByJob = false;  // dieser Auftrag hat einen Recorder angehaengt -> bei fruehem Abbruch wieder entfernen
+        HashSet<string> preJobFolders = new();
+        bool provisionalAttr = false;
+        string? jobAddedFolder = null;    // in Schritt 3 von DIESEM Auftrag angelegte Instanz     // Instanz nicht beim Laden neu erzeugt -> bestehende (leere) Instanz dieses Auftrags uebernommen
         // GETRENNTE Teilergebnisse (Erfolg nur, wenn ALLE erforderlichen erfuellt sind):
         bool endProven = false;          // unabhaengiges, verdrahtetes Replay-ENDSIGNAL erreicht? (sonst Unproven)
         bool dataWindowRecorded = false; // Daten-KORROBORATION: Fortschritt bis Ende waehrend Abspielen (KEIN Endbeweis)
@@ -1897,24 +2316,39 @@ internal static class Program
             }
             if (editSeen < 2) throw new AbortRun(4, "BLOCKER: Chart nicht stabil editierbar ('Indikatoren' inaktiv) nach Replay-Verlassen.");
             W("[2] Chart editierbar ('Indikatoren' aktiv, stabil).");
+            // Replay-Oeffner VOR dem Hinzufuegen pruefen: fehlt er, wird gar nicht erst ein Recorder angehaengt
+            // (VM-Befund: frueher Abbruch in Phase 4 liess einen Recorder am Chart zurueck).
+            if (FindIdAny("RibbonReplayButton") == null) throw new AbortRun(4, "BLOCKER: RibbonReplayButton fehlt (vor dem Hinzufuegen geprueft; kein Recorder angehaengt).");
             // ---- Phase 3: Recorder pruefen, bei Bedarf hinzufuegen (Verifikation per Dateisystem) ----
+            preJobFolders = FolderSet();   // Ordnerstand VOR diesem Auftrag (fuer die Instanz-Zuordnung in Phase 7)
             if (LockedCount() >= 1) W($"[3] Recorder bereits aktiv ({LockedCount()} gesperrte Instanz) -> kein Hinzufuegen noetig.");
             else
             {
                 W("[3] Kein aktiver Recorder -> hinzufuegen (UIA-Dialog, favoritenunabhaengig: Kategorie 'All' + Suche + exakter Treffer)");
                 var before = FolderSet();
                 if (!AddRecorderViaDialog(W)) throw new AbortRun(6, "BLOCKER: Recorder-Hinzufuegen (UIA) fehlgeschlagen.");
+                recorderAddedByJob = true;
                 bool added = false;
-                for (int i = 0; i < 15 && !added; i++) { Thread.Sleep(1000); added = FolderSet().Except(before).Any(f => IsMetaLocked(Path.Combine(RecordingsDir, f, "meta.json"))); }
-                if (!added) throw new AbortRun(6, "BLOCKER: Recorder-Hinzufuegen nicht per Dateisystem bestaetigt (kein neuer gesperrter Ordner).");
+                for (var swR = Stopwatch.StartNew(); swR.ElapsedMilliseconds < 15000 && !added; ) { Thread.Sleep(200); added = FolderSet().Except(before).Any(f => IsMetaLocked(Path.Combine(RecordingsDir, f, "meta.json"))); }
+                if (!added) throw new AbortRun(6, $"BLOCKER: Recorder-Hinzufuegen nicht per Dateisystem bestaetigt (kein neuer gesperrter Ordner unter '{RecordingsDir}'). " +
+                    "Der Recorder schreibt nicht in den erwarteten Ordner oder ist beim Start abgebrochen.");
                 W("[3] Recorder hinzugefuegt + aktiv (neuer gesperrter Ordner).");
+                var addedLocked = FolderSet().Except(before).Where(f => IsMetaLocked(Path.Combine(RecordingsDir, f, "meta.json"))).ToList();
+                if (addedLocked.Count == 1) jobAddedFolder = addedLocked[0];
+                // Tatsaechlichen Schreibpfad belegen: neuer Ordner liegt unter RecordingsDir; der Recorder nennt zusaetzlich
+                // seine Quelle in meta.json (ab proto-2c). Aeltere DLLs schreiben diese Felder nicht.
+                foreach (var nf in FolderSet().Except(before))
+                {
+                    var mp0 = Path.Combine(RecordingsDir, nf, "meta.json");
+                    W($"[3] Schreibpfad: {Path.Combine(RecordingsDir, nf)}  recorder='{ReadMetaField(mp0, "recorder")}' outputRoot='{ReadMetaField(mp0, "outputRoot")}' quelle='{ReadMetaField(mp0, "outputRootSource")}'");
+                }
             }
             tBed += swB.Elapsed.TotalSeconds;
 
             // ---- Phase 4: Replay-Transport ERKENNEN (angedockt/schwebend/verschoben), fensteruebergreifend, KEIN Toggle-Thrashing ----
             var swL = Stopwatch.StartNew();
             if (FindIdAny("RibbonReplayButton") == null) throw new AbortRun(4, "BLOCKER: RibbonReplayButton fehlt.");
-            Thread.Sleep(2500);   // nach dem Hinzufuegen/Uebernehmen den Chart settlen lassen (Recorder initialisiert)
+            Thread.Sleep(800);    // kurzes Settle nach Uebernehmen (Recorder-Start ist bereits per Dateisystem bestaetigt)
             VisualTransport? vt = null; bool visualMode = false;
             var trans = FindReplayTransport(out var tdiag);
             if (trans == null && tdiag.StartsWith("MEHRDEUTIG")) throw new AbortRun(4, "BLOCKER: " + tdiag);
@@ -1998,20 +2432,21 @@ internal static class Program
                 Invoke(datumBtn); for (int i = 0; i < 8 && FindIdAny("StartEdit") == null; i++) Thread.Sleep(600);
                 if (FindIdAny("StartEdit") == null) throw new AbortRun(5, "BLOCKER: Datum-Dialog oeffnet nicht.");
             }
-            bool okE = false, okS = false;
-            for (int a = 0; a < 3 && !(okE && okS); a++)
+            // 1.3.9: Eingabe ohne Leeren, Reihenfolge Start:=Zieltag 00:00 -> Ende -> Start (siehe SetDialogRange in
+            // DateEntry.cs; Befund 18.11.: Ende blieb nach 'Strg+A/Entf' + Mitschieben auf 05.11. 00:00 stehen).
+            SetDialogRangeSmart(dStart, dEnd, W, trace: false);
             {
-                TypeIntoField(FindIdAny("EndEdit"), dEnd); TypeIntoField(FindIdAny("StartEdit"), dStart);
                 string gs = ValueOf(FindIdAny("StartEdit")), ge = ValueOf(FindIdAny("EndEdit"));
-                okS = gs.StartsWith(dStart.Substring(0, 16), StringComparison.Ordinal);
-                okE = ge.StartsWith(dEnd.Substring(0, 16), StringComparison.Ordinal);
+                bool okS = gs.StartsWith(dStart.Substring(0, 16), StringComparison.Ordinal);
+                bool okE = ge.StartsWith(dEnd.Substring(0, 16), StringComparison.Ordinal);
                 W($"[6] Zeitraum zurueckgelesen: Start='{gs}' Ende='{ge}' (okS={okS} okE={okE})");
+                if (!(okS && okE)) throw new AbortRun(5, "BLOCKER: Zeitraum nicht verlaesslich setzbar/zurueckgelesen.");
             }
-            if (!(okS && okE)) throw new AbortRun(5, "BLOCKER: Zeitraum nicht verlaesslich setzbar/zurueckgelesen.");
             // ---- Phase 7: LOAD + Instanz-Zuordnung (genau ein neuer gesperrter Ordner) ----
             var beforeLoad = FolderSet(); DateTime loadClick = DateTime.UtcNow.AddSeconds(-5);
             var sel = FindBtnAny("Auswählen"); if (sel == null) throw new AbortRun(5, "BLOCKER: 'Auswählen' nicht gefunden.");
             int logBaseIdx = TailLines(AtasLogPath(), 4_000_000).Length;   // Log-Leseposition VOR dem Laden dieses Auftrags (execution-scope)
+            alog.SeekToEnd();                                              // inkrementelles Lesen ab hier: nur Zeilen DIESES Auftrags
             W("[7] Laden (Auswählen) …"); Invoke(sel);
             List<string> NewLocked() => FolderSet().Except(beforeLoad).Where(f =>
             {
@@ -2022,23 +2457,128 @@ internal static class Program
             }).ToList();
             bool ready = false; var cands = new List<string>(); string lastLog = "";
             int loadTimeout = Math.Max(180, windowSec / 20);   // session-abhaengig: grosse Fenster brauchen laenger zum Laden (1-Min-Fenster bleibt 180s)
-            for (int i = 0; i < loadTimeout && !ready; i++)
+            // 1.3.5 (VM-Befund 17.11.: ATAS meldete 'Initialized', aber KEINE neue Recorder-Instanz -> die Probe wartete bis zu
+            // 450 s ohne jede Ausgabe und kam nie zu Play). Jetzt: Statuszeile alle 10 s; Ladeende aus dem ATAS-Protokoll DIESES
+            // Ladevorgangs; danach begrenzte Nachfrist, belegte Ersatzwege, sonst sofortiger Abbruch mit Diagnose.
+            // 1.3.8 (VM-Befund 18.11., Folgetag 27.10.): Laden + Play bereit, aber keine NEUE Instanz; die Probe sendete wegen
+            // 'Indikatoren aktiv' Strg+Alt+R (danach Disconnected, Play nicht mehr bereit) und wartete bis zum Ladelimit.
+            // Jetzt: KEIN Kuerzel in Phase 7. 'Indikatoren aktiv' ist nach dem Laden kein Beleg fuer "nicht in Replay" (am 26.10.
+            // stand dort 'NEIN (Indikatoren aktiv)' und der Tag lief durch); UIA-Zeitgrenze = "unbekannt". Nach dem Laden:
+            // neue Instanz -> wie bisher; sonst die in Schritt 3 angelegte Instanz, wenn eindeutig + aktiv + ohne Trades im
+            // Replay-Bereich; sonst nach Nachfrist mit konkretem Grund abbrechen (Aufraeumen im finally). Play nicht bereit
+            // nach dem Laden -> begrenzt warten, dann Abbruch statt Ladelimit.
+            var swLoad = Stopwatch.StartNew(); long loadedAtMs = -1; bool sawInit = false, readdTried = false;
+            long lastBeatMs = -10_000;
+            List<string> JobLocked() => FolderSet().Except(preJobFolders).Where(f => IsMetaLocked(Path.Combine(RecordingsDir, f, "meta.json"))
+                && ReadMetaField(Path.Combine(RecordingsDir, f, "meta.json"), "instrument").Contains("MNQ", StringComparison.OrdinalIgnoreCase)).ToList();
+            string IndState() => Bounded<bool?>("Indikatoren aktiv?", () => IndicatorsEnabled(), 3000, null, W) switch
+            { true => "aktiv", false => "inaktiv", null => "unbekannt (UIA-Zeitgrenze)" };
+            while (swLoad.ElapsedMilliseconds < loadTimeout * 1000L && !ready)
             {
                 Thread.Sleep(1000); cands = NewLocked();
-                string title = Safe(() => ReplayWindow()?.Current.Name ?? ""); string lg = LatestReplayState();
-                if (lg != lastLog) { lastLog = lg; W($"    [t+{i + 1}s] neueInstanz={cands.Count} | {lg}"); }
-                bool playReady = visualMode ? OcrReadyToPlay(vt!.BarY, out _) : IsEnabledSafe(FindIdAny("PlayButton"));
-                if (cands.Count >= 1 && playReady && i >= 3) ready = true;
+                var newLines = alog.ReadNew(); exec.Feed(newLines);
+                foreach (var nl in newLines)
+                {
+                    if (nl.Contains("Replay") && nl.Contains("-> Initializing")) sawInit = true;
+                    if (nl.Contains("Replay") && nl.Contains("Initializing -> Initialized") && sawInit && loadedAtMs < 0)
+                    { loadedAtMs = swLoad.ElapsedMilliseconds; W($"    [t+{loadedAtMs / 1000}s] ATAS: Laden abgeschlossen (Initialized)."); }
+                    if (nl.Contains("Replay") && nl.Contains("Initialized -> Started"))
+                        W($"    [t+{swLoad.ElapsedMilliseconds / 1000}s] HINWEIS: Wiedergabe wurde gestartet, OHNE dass die Steuerung Play gedrueckt hat (manuell?): {ShortLog(nl)}");
+                    if (nl.Contains("Replay") && nl.Contains("Disconnected"))
+                        W($"    [t+{swLoad.ElapsedMilliseconds / 1000}s] ATAS: {ShortLog(nl)}");
+                }
+                string lg = LatestReplayState();
+                if (lg != lastLog) { lastLog = lg; W($"    [t+{swLoad.ElapsedMilliseconds / 1000}s] neueInstanz={cands.Count} | {lg}"); }
+                bool playReady = visualMode ? OcrReadyToPlay(vt!.BarY, out _) : Bounded("PlayButton bereit?", () => IsEnabledSafe(FindIdAny("PlayButton")), 4000, false, W);
+                if (cands.Count >= 1 && playReady && swLoad.ElapsedMilliseconds >= 3000) { ready = true; break; }
+
+                if (swLoad.ElapsedMilliseconds - lastBeatMs >= 10_000)
+                {
+                    lastBeatMs = swLoad.ElapsedMilliseconds;
+                    W($"    [t+{swLoad.ElapsedMilliseconds / 1000}s] warte: neueInstanz={cands.Count} Play bereit={playReady} geladen={(loadedAtMs >= 0 ? "ja" : "nein")} Indikatoren={IndState()}");
+                }
+                if (loadedAtMs < 0) continue;
+                long sinceLoaded = swLoad.ElapsedMilliseconds - loadedAtMs;
+                if (sinceLoaded < 15_000) continue;   // normal: neue Instanz entsteht mit 'Initialized'; Nachfrist 15 s
+                if (!playReady)
+                {
+                    if (sinceLoaded < 45_000) continue;
+                    CaptureLoadState(W, logBaseIdx, cands); ListJobFolders(W, preJobFolders);
+                    throw new AbortRun(6, $"BLOCKER: ATAS hat geladen, aber Play ist {sinceLoaded / 1000} s danach nicht bereit (letzter Zustand: {lg}). Kein Play.");
+                }
+
+                // Instanz aus Schritt 3 dieses Auftrags pruefen (ATAS hat beim Laden keine neue angelegt).
+                var jl = JobLocked();
+                string why;
+                if (jl.Count != 1) why = $"{jl.Count} aktive MNQ-Instanzen dieses Auftrags ({string.Join(",", jl)})";
+                else if (LockedCount() != 1) why = $"insgesamt {LockedCount()} aktive Instanzen (nicht eindeutig)";
+                else if (jobAddedFolder == null) why = $"Instanz {jl[0]} nicht in Schritt 3 von diesem Auftrag angelegt";
+                else if (jl[0] != jobAddedFolder) why = $"aktive Instanz {jl[0]} ist nicht die in Schritt 3 angelegte {jobAddedFolder}";
+                else
+                {
+                    var pre = PreloadTradesCheck(Path.Combine(RecordingsDir, jl[0]), eUtc);
+                    if (pre.ok)
+                    {
+                        cands = jl; provisionalAttr = true; ready = true;
+                        W($"[7] Keine neue Instanz beim Laden; Instanz aus Schritt 3 {jl[0]}: aktiv, einzige, von diesem Auftrag; {pre.why} -> uebernommen (Pruefung nach Play).");
+                        break;
+                    }
+                    why = $"Instanz aus Schritt 3 {jl[0]}: {pre.why}";
+                }
+                // Lokal belegt (18.11., Folgetag): ATAS stellt beim Laden einen Chart-Stand von VOR Schritt 3 wieder her
+                // ('Reload: keeping previously captured chart state ...'); der angehaengte Recorder faellt dabei vom Chart.
+                // Dann EINMAL nach dem Laden (Replay am Startpunkt, vor Play) ueber den bewaehrten Dialog anhaengen. Der
+                // Dialog fuegt nichts hinzu, wenn der Recorder noch in der Liste steht (kein Doppel). Uebernommen wird nur
+                // genau EINE danach neu entstandene, aktive MNQ-Instanz ohne Trades im Replay-Bereich.
+                if (!readdTried && jl.Count == 0 && LockedCount() == 0)
+                {
+                    readdTried = true;
+                    W($"[7] Keine aktive Recorder-Instanz nach dem Laden ({why}) -> Recorder jetzt (nach dem Laden, vor Play) EINMAL erneut anhaengen.");
+                    var beforeRe = FolderSet();
+                    bool addOk = AddRecorderViaDialog(W);
+                    List<string> reNew = new();
+                    for (var swR = Stopwatch.StartNew(); addOk && swR.ElapsedMilliseconds < 15000 && reNew.Count == 0; Thread.Sleep(300))
+                        reNew = FolderSet().Except(beforeRe).Where(f => IsMetaLocked(Path.Combine(RecordingsDir, f, "meta.json"))
+                            && ReadMetaField(Path.Combine(RecordingsDir, f, "meta.json"), "instrument").Contains("MNQ", StringComparison.OrdinalIgnoreCase)).ToList();
+                    if (reNew.Count == 1 && LockedCount() == 1)
+                    {
+                        var preRe = PreloadTradesCheck(Path.Combine(RecordingsDir, reNew[0]), eUtc);
+                        if (preRe.ok)
+                        {
+                            cands = reNew; jobAddedFolder = reNew[0]; ready = true;
+                            W($"[7] Nach dem Laden erneut angehaengt: neue Instanz {reNew[0]} (aktiv, einzige; {preRe.why}) -> zugeordnet.");
+                            break;
+                        }
+                        why = $"erneut angehaengte Instanz {reNew[0]}: {preRe.why}";
+                    }
+                    else why = addOk ? $"erneutes Anhaengen ergab {reNew.Count} neue aktive Instanz(en), insgesamt aktiv {LockedCount()}" : "erneutes Anhaengen ueber den Dialog fehlgeschlagen";
+                }
+                CaptureLoadState(W, logBaseIdx, cands);
+                ListJobFolders(W, preJobFolders);
+                throw new AbortRun(6, $"BLOCKER: ATAS hat geladen und Play ist bereit, aber nach {sinceLoaded / 1000} s keine eindeutige Recorder-Instanz: {why}. " +
+                    "Kein Play ohne zugeordnete Aufnahme; Recorder wird entfernt.");
             }
-            cands = NewLocked();
-            if (!ready) CaptureLoadState(W, logBaseIdx, cands);   // genauen Zustand dieses Ladeversuchs sichern (keine Spekulation)
-            if (cands.Count == 0) throw new AbortRun(6, "BLOCKER: keine neue Recorder-Instanz nach LOAD (Ein-Recorder-Betrieb nicht erfuellt).");
+            if (!ready) { cands = NewLocked(); CaptureLoadState(W, logBaseIdx, cands); ListJobFolders(W, preJobFolders); }   // genauen Zustand sichern (keine Spekulation)
+            if (cands.Count == 0) throw new AbortRun(6, $"BLOCKER: keine neue Recorder-Instanz nach LOAD ({swLoad.ElapsedMilliseconds / 1000} s; geladen={(loadedAtMs >= 0 ? "ja" : "nein")}).");
             if (cands.Count > 1) throw new AbortRun(6, $"BLOCKER: mehrere neue Instanzen ({string.Join(",", cands)}) -> nicht eindeutig.");
             attrFolder = cands[0]; string dir = Path.Combine(RecordingsDir, attrFolder);
             attrRunId = ReadMetaField(Path.Combine(dir, "meta.json"), "runId");
             W($"[7] Zugeordnete Instanz: {attrFolder}  runId={attrRunId}  (genau EINE neue gesperrte MNQ-Instanz)");
             if (!ready) throw new AbortRun(6, "BLOCKER: Abspielbereitschaft (PlayButton) nicht erreicht. [Zustand gesichert, siehe 7-DIAG]");
             tLoad += swL.Elapsed.TotalSeconds;
+            // Ladebereich VOR Play pruefen, soweit ATAS ihn schon meldet ('... warmed before <Start>Z').
+            exec.Feed(alog.ReadNew());
+            if (exec.WarmStartUtc is DateTime warm)
+            {
+                W($"[7] ATAS-Ladebestaetigung Start={warm:yyyy-MM-dd HH:mm:ss}Z (Zeile: {exec.WarmLine})");
+                if (warm != sUtc)
+                    throw new AbortRun(7, $"BLOCKER: ATAS hat ab {warm:yyyy-MM-dd HH:mm:ss}Z geladen, Soll {sUtc:yyyy-MM-dd HH:mm:ss}Z " +
+                        $"(Abweichung {(warm - sUtc).TotalMinutes:+0;-0} min). Dialog-Zeitzone passt nicht ({zone.Source}). Kein Play, keine Veroeffentlichung.");
+            }
+            else W("[7] ATAS meldet den Startzeitpunkt vor Play nicht im Protokoll -> Pruefung erfolgt sofort bei Play ('Playing from').");
+            if (exec.Started)
+                throw new AbortRun(7, $"BLOCKER: Wiedergabe lief bereits vor dem Play der Steuerung (manuell gestartet? {exec.RangeLine}). " +
+                    "Ein weiterer Play-Klick wuerde pausieren; Zuordnung nicht sauber. Bitte waehrend des Laufs nicht in ATAS klicken.");
 
             // ---- Phase 8: Geschwindigkeit setzen (konfigurierbar) + zuruecklesen + VERIFIZIEREN, dann Play ----
             // Die Geschwindigkeit wird ueber den vorhandenen Replay-Speed-Selektor gesetzt und zurueckgelesen.
@@ -2051,7 +2591,8 @@ internal static class Program
                 // Speed: im custom-gerenderten Transport nicht UIA/OCR-setzbar/-lesbar ('100x' ist fuer Windows-OCR zu
                 // kontrastarm). ATAS zeigt als Default sichtbar '100x'. Eine FALSCHE (zu langsame) Geschwindigkeit fiele
                 // am Play-Watchdog (Phase 9) zuverlaessig als Timeout auf -> kein stiller Fehlerfolg.
-                W("[8] (visuell) Speed nicht UIA/OCR-verifizierbar; ATAS-Default sichtbar '100x' wird verwendet (Watchdog faengt Fehlspeed).");
+                speedVerified = false;
+                W($"[8] (visuell) Geschwindigkeit NICHT verifiziert: weder per UIA noch per OCR lesbar. Angefordert '{speedName}', tatsaechlich unbekannt (Watchdog begrenzt die Laufzeit).");
                 // Play-Position: bevorzugt FRISCH per OCR. Nach dem Laden zeigt die Leiste aber oft nicht mehr
                 // 'Datum auswählen'/'Modul' (DetectTransport-Muster greift dann nicht). In dem Fall die in DIESEM Lauf
                 // bei Phase 4/6 bereits VALIDIERTE Leisten-Geometrie (vt) wiederverwenden (gleiche Position wie der
@@ -2069,6 +2610,11 @@ internal static class Program
                     W($"[8] (visuell) frische OCR-Leiste nach Laden nicht erkannt ({vpd}) -> Play aus {playSrc}.");
                 }
                 if (!OcrReadyToPlay(barY, out var sw0)) throw new AbortRun(8, $"BLOCKER: (visuell) nicht ladebereit vor Play (Statuszeile '{sw0}', erwartet 'Play').");
+                // Vor Play: Transportsymbole per Tooltip zuordnen (nur Hover) - 'Zur Echtzeit wechseln' wird spaeter zum Stoppen gebraucht.
+                var fwp = ReplayFloatWin32();
+                if (_transportMap == null || fwp == null || _transportMap.Hwnd != fwp.Hwnd || _transportMap.WinRect != fwp.Rect) _transportMap = ScanTransportTooltips(W);
+                W($"[8] Stop-Bedienelement 'Zur Echtzeit' per Tooltip: {(_transportMap?.Find(RxToRealtime) is { } tr ? $"({tr.x},{tr.y})" : "NICHT gefunden (Stopp dann ueber Ersatzwege, begrenzt)")}");
+                W("[8] Auto-Wiederholung: " + EnsureLoopOff(W, visualMode: true));
                 playInvoke = DateTime.UtcNow;
                 W($"[8] (visuell) Play @{playPt.Value.x},{playPt.Value.y} [{playSrc}] …");
                 ClickFloat(playPt.Value.x, playPt.Value.y);
@@ -2090,8 +2636,10 @@ internal static class Program
                 string sp = SetReplaySpeed(speedName, W);
                 if (!SpeedReadbackOk(speedName, sp))
                     throw new AbortRun(8, $"BLOCKER: Replay-Speed '{speedName}' nicht setzbar/zurueckgelesen (gelesen '{sp}').");
+                speedVerified = true;
                 W($"[8] Speed angefordert='{speedName}' zurueckgelesen='{sp}' (verifiziert)");
                 if (!IsEnabledSafe(FindIdAny("PlayButton"))) throw new AbortRun(8, "BLOCKER: PlayButton nicht bereit.");
+                W("[8] Auto-Wiederholung: " + EnsureLoopOff(W, visualMode: false));
                 // Play per PHYSISCHEM Klick auf die UIA-Button-Position (UIA-Invoke startet die Wiedergabe hier NICHT).
                 playInvoke = DateTime.UtcNow; W("[8] Play (physischer Klick auf UIA-Button-Position) …");
                 if (!PlayByPhysicalClick(W)) throw new AbortRun(8, "BLOCKER: Play-Klick nicht ausfuehrbar.");
@@ -2106,117 +2654,117 @@ internal static class Program
                 if (!started) throw new AbortRun(8, "BLOCKER: Play-Klick wirkungslos (Titel wechselt nicht auf 'Module laden'/'Historienwiedergabe').");
                 W("[8] Play bestaetigt (Fenstertitel 'Module laden'/'Historienwiedergabe').");
             }
-            // ---- Phase 9: Replay bis zum NATUERLICHEN Ende abspielen (KEIN fruehes Pausieren); Endsignal aus ATAS-Log ----
+            // Vorlaeufige Zuordnung (Ersatzweg 2 in Phase 7) nach Play bestaetigen: erzeugt ATAS JETZT doch eine neue Instanz,
+            // wird genau diese genommen; sonst muss die uebernommene Instanz aktiv bleiben (Daten prueft Phase 9 laufend).
+            if (provisionalAttr)
+            {
+                List<string> after = new();
+                for (int k = 0; k < 8 && after.Count == 0; k++) { Thread.Sleep(1000); after = NewLocked().Where(f => f != attrFolder).ToList(); }
+                if (after.Count == 1)
+                {
+                    W($"[8] Nach Play neue Instanz {after[0]} -> Zuordnung von {attrFolder} auf diese umgestellt.");
+                    attrFolder = after[0]; dir = Path.Combine(RecordingsDir, attrFolder);
+                    attrRunId = ReadMetaField(Path.Combine(dir, "meta.json"), "runId");
+                }
+                else if (after.Count > 1) throw new AbortRun(8, $"BLOCKER: nach Play mehrere neue Instanzen ({string.Join(",", after)}) -> nicht eindeutig.");
+                else if (!IsMetaLocked(Path.Combine(dir, "meta.json"))) throw new AbortRun(8, $"BLOCKER: uebernommene Instanz {attrFolder} nach Play nicht mehr aktiv und keine neue Instanz.");
+                else W($"[8] Uebernommene Instanz {attrFolder} bleibt aktiv (keine neue Instanz nach Play) -> Zuordnung bestaetigt.");
+            }
+            // ---- Phase 9: Wiedergabe bis zum ERSTEN vollstaendigen Durchlauf; Ende aus dem ATAS-Protokoll (Originalzeilen) ----
+            // Kurze Abfragen (200 ms) statt 3 s: bei 100x laufen in 3 s rund 5 Minuten Marktzeit weiter. Das Protokoll wird
+            // inkrementell gelesen; Recorder-Dateien jede Sekunde, nahe am Fensterende alle 250 ms.
             _verifiedReplayEndUtc = null;
-            var logRange = ReplayLoadedRangeUtcFromLog(playInvoke);
-            if (logRange != null) W($"[9] Geladener Bereich (ATAS-Log, UTC): [{logRange.Value.startUtc:yyyy-MM-dd HH:mm:ss}, {logRange.Value.endUtc:HH:mm:ss}]");
-            else W("[9] WARN: geladener Bereich nicht aus ATAS-Log lesbar -> Endsignal kann nicht log-gebunden verifiziert werden.");
-            bool playingObserved = false; DateTime? lastMt = null; DateTime? maxMp = null; int stall = 0; bool engineFinished = false;
-            bool titleStarted = false;           // TITEL-Beweis, dass die Wiedergabe lief ('Module laden'/'Historienwiedergabe') - NICHT Preload
-            bool titleProvenEnd = false;         // TITEL-basiertes natuerliches Ende (Log in dieser ATAS-Sitzung stumm)
-            bool logPlayStarted = false;         // LOG-Beweis, dass DIESER Auftrag zu spielen begonnen hat (robust bei schnellem Replay)
-            bool disconnectHintLogged = false;   // Disconnect wird nur einmal als Hinweis protokolliert (kein Abbruch-Timer)
-            var dsw = DateTime.ParseExact(dStart, "dd.MM.yyyy HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
-            var dew = DateTime.ParseExact(dEnd, "dd.MM.yyyy HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
-            // Watchdog an die Geschwindigkeit angepasst: fester, geschwindigkeits-UNABHAENGIGER Boden (Laden/Flush/Abschluss
-            // sind I/O-gebunden) PLUS Marktanteil/Geschwindigkeit -- NICHT bloss Fensterdauer/100. Enderkennung bleibt
-            // signalgebunden (ATAS-Log natural_end), nicht an diesen Zeitdeckel gekoppelt.
-            // Konservativ budgetiert (halbe Nominalgeschwindigkeit als Puffer, falls 100x ueber lange Fenster nicht
-            // voll gehalten wird) + groesserer Boden fuer Laden/Flush/Abschluss. Enderkennung bleibt signalgebunden.
-            int playWatchdog = PlayWatchdogSeconds((int)(dew - dsw).TotalSeconds, Math.Max(1.0, SpeedToFactor(speedName) * 0.5), loadFlushFloorSeconds: 240);
+            int playWatchdog = PlayWatchdogSeconds(windowSec, Math.Max(1.0, SpeedToFactor(speedName) * 0.5), loadFlushFloorSeconds: 240);
             var swp = Stopwatch.StartNew();
+            DateTime? lastMt = null, maxMp = null, firstMt = null; double stallMs = 0; bool rangeChecked = false, rangeMismatch = false;
+            var lastStreams = DateTime.MinValue; var lastReport = DateTime.MinValue; string stopCause = "";
             while (swp.Elapsed.TotalSeconds < playWatchdog)
             {
-                Thread.Sleep(3000);
-                var st = FolderStreams(dir); st.TryGetValue("ticks.ndjson", out var tv);
-                DateTime? mp = null; foreach (var k in new[] { "dom.ndjson", "bbo.ndjson", "cumtrades.ndjson", "ticks.ndjson" }) if (st.TryGetValue(k, out var v) && v.LastMt is { } lm && (mp == null || lm > mp)) mp = lm;
-                string title = Safe(() => ReplayWindow()?.Current.Name ?? "");
-                bool playingNow = title.Contains("Historienwiedergabe", StringComparison.OrdinalIgnoreCase) && !title.Contains("angehalten", StringComparison.OrdinalIgnoreCase) && !title.Contains("gestoppt", StringComparison.OrdinalIgnoreCase);
-                if (playingNow) playingObserved = true;
-                if (playingNow || title.IndexOf("laden", StringComparison.OrdinalIgnoreCase) >= 0) titleStarted = true;
-                if (mp != null && lastMt != null && mp == lastMt) stall++; else stall = 0;
-                // Ruecksprung erkennen, BEVOR maxMp aktualisiert wird: faellt die aktuelle Marktzeit deutlich (> 2 min)
-                // unter das bisherige Maximum, hat ATAS zum Fensteranfang zurueckgespult (Auto-Loop). Der End-Guard
-                // (nahe am Fensterende gewesen) folgt weiter unten, sobald endUtcLoop bekannt ist.
-                bool mpDropped = mp != null && maxMp != null && mp.Value < maxMp.Value.AddMinutes(-2);
-                if (mp != null) lastMt = mp;
-                if (mp != null && (maxMp == null || mp.Value > maxMp.Value)) maxMp = mp;   // hoechste je gesehene Marktzeit (faellt nie)
-                if (tv?.FirstMt is { } fm) offMin = Math.Round((dsw - fm.ToUniversalTime()).TotalMinutes);
-                var endUtcLoop = logRange?.endUtc ?? dew.AddMinutes(-offMin);
-                bool dataReachedEnd = lastMt != null && lastMt.Value.ToUniversalTime() >= endUtcLoop.AddSeconds(-2);
-                // Das geladene Fenster wurde EINMAL vollstaendig abgespielt, wenn die hoechste je aufgezeichnete
-                // Marktzeit das Fensterende erreicht hat (bleibt wahr, auch nachdem ATAS zum Anfang zurueckspringt).
-                bool everReachedEnd = maxMp != null && maxMp.Value.ToUniversalTime() >= endUtcLoop.AddSeconds(-2);
-                // Auto-Loop bestaetigt: Ruecksprung UND vorher bis kurz vor das Fensterende gespielt (<=5 min davor).
-                // Faengt den Fall, dass in den letzten Sekunden keine Ticks liegen (maxMp knapp unter Fensterende),
-                // ATAS aber sichtbar zum Anfang zurueckspringt -> Fenster war trotzdem einmal komplett.
-                bool loopedBack = mpDropped && maxMp != null && maxMp.Value.ToUniversalTime() >= endUtcLoop.AddMinutes(-5);
-                // EXECUTION-SCOPED Enderkennung aus dem ATAS-Log: NUR Zeilen AB der eigenen 'Playing from'-Startzeile
-                // dieses Auftrags. Robust gegen Fehler/Disconnect/manuellen Wechsel-zu-Realtime -> nur echtes natuerliches Ende.
-                var execLines = ExecutionLogSlice(logBaseIdx);
-                var endClass = ClassifyExecutionEnd(execLines, dataReachedEnd);
-                // LOG ist die autoritative Endquelle. endClass != NoStart == der Auftrag hat (log-gebunden) zu spielen begonnen;
-                // das ersetzt bei schnellem Replay (100x) das UI-Titel-Gate 'playingObserved', das die kurze Spielphase verpasst.
-                if (endClass != ReplayEndClass.NoStart) logPlayStarted = true;
-                bool playProven = playingObserved || logPlayStarted;
-                // Natuerliches Ende in dieser (log-stummen, am Ende AUTO-LOOPENDEN) ATAS-Sitzung: die Wiedergabe lief
-                // NACHWEISLICH ('Historienwiedergabe' im Titel gesehen -> KEIN Preload) UND die aufgezeichneten Daten haben
-                // das geladene Fensterende erreicht und bleiben dort stehen (ATAS rewinded am Ende selbst und spielt erneut;
-                // die aufgezeichnete Max-Marktzeit bleibt am Fensterende -> stall). >=4 Polls (~12s) Stillstand am Ende.
-                // NATUERLICHES Ende (log-stumm + Auto-Loop): die Wiedergabe lief nachweislich (Titel/Log) UND das geladene
-                // Fenster wurde EINMAL komplett abgespielt - belegt entweder durch 'Daten am Fensterende erreicht' ODER
-                // durch einen erkannten Auto-Loop-Ruecksprung. KEINE Abhaengigkeit mehr von 'stall am Fensterende', die den
-                // Loop-Moment verpassen konnte (dann lief die naechste Runde faelschlich weiter).
-                bool titleNaturalEnd = playProven && (everReachedEnd || loopedBack);
-                engineFinished = (playProven && endClass == ReplayEndClass.NaturalEnd) || titleNaturalEnd;
-                W($"    [play t+{(int)swp.Elapsed.TotalSeconds}s] title='{title}' mp={(mp?.ToString("HH:mm:ss") ?? "-")} max={(maxMp?.ToString("HH:mm:ss") ?? "-")} dataEnd={dataReachedEnd} everEnd={everReachedEnd} loop={loopedBack} endClass={endClass} stall={stall} playObs={playingObserved} titleStart={titleStarted} logPlay={logPlayStarted}");
-                if (titleNaturalEnd)
+                exec.Feed(alog.ReadNew());
+                if (!rangeChecked && exec.Range is { } lr)
                 {
-                    _verifiedReplayEndUtc = endUtcLoop; dataWindowRecorded = everReachedEnd; titleProvenEnd = true;
-                    endReason = (loopedBack && !everReachedEnd)
-                        ? "natural_end(TITEL: Auto-Loop-Ruecksprung erkannt -> Fenster einmal komplett)"
-                        : "natural_end(TITEL/Daten: Fensterende erreicht)";
-                    break;
-                }
-                if (endClass == ReplayEndClass.Disconnected && !disconnectHintLogged)
-                { disconnectHintLogged = true; W("    [play] Disconnect = Hinweis (KEINE feste Abbruch-Uhr); beobachte Fortschritt bis Ende + Abschluss-Puffer, Abbruch nur bei Stillstand"); }
-                if (playProven)
-                {
-                    var act = PlayLoopStep(endClass, dataReachedEnd, stall, stallFailLimit: 10, settleLimit: 8);   // ~30s Stillstand bzw. ~24s Abschluss-Puffer (Poll 3s)
-                    if (act == LoopAction.Success)
-                    { _verifiedReplayEndUtc = logRange?.endUtc ?? endUtcLoop; dataWindowRecorded = dataReachedEnd; endReason = "natural_end(LOG) = unabh. Endsignal"; break; }
-                    if (act == LoopAction.Abort)
+                    rangeChecked = true;
+                    W($"[9] Ladebereich laut ATAS: [{lr.startUtc:yyyy-MM-dd HH:mm:ss}Z, {lr.endUtc:yyyy-MM-dd HH:mm:ss}Z]  (Zeile: {exec.RangeLine})");
+                    if (lr.startUtc != sUtc || lr.endUtc != eUtc)
                     {
-                        dataWindowRecorded = dataReachedEnd;   // Ende erreicht ist KORROBORATION, NIE Endbeweis
-                        endReason = endClass == ReplayEndClass.Errored ? "replay_fehler(LOG:Errored)"
-                                  : dataReachedEnd ? "ende_erreicht_aber_kein_Abschluss_in_Frist (KORROBORATION, KEIN Endbeweis)"
-                                  : $"stillstand_ohne_abschluss (stall={stall}, letzte mp={(lastMt?.ToString("HH:mm:ss") ?? "-")})";
+                        rangeMismatch = true;
+                        stopCause = $"Ladebereich weicht vom Soll ab: ATAS [{lr.startUtc:HH:mm:ss}Z, {lr.endUtc:HH:mm:ss}Z] statt [{sUtc:HH:mm:ss}Z, {eUtc:HH:mm:ss}Z] " +
+                                    $"(Start {(lr.startUtc - sUtc).TotalMinutes:+0;-0} min). Dialog-Zeitzone: {zone.Source}.";
                         break;
                     }
                 }
-                if (tv?.FirstMt == null && swp.Elapsed.TotalSeconds > 90) { endReason = "no_data_90s"; break; }
+                bool nearEnd = maxMp != null && maxMp.Value >= eUtc.AddMinutes(-3);
+                double since = (DateTime.UtcNow - lastStreams).TotalMilliseconds;
+                if (since >= (nearEnd ? 250 : 1000))
+                {
+                    lastStreams = DateTime.UtcNow;
+                    var st = FolderStreams(dir);
+                    DateTime? mp = null;
+                    // 1.3.8: Marktzeiten >= Fensterende+1h sind Live-Vorlauf einer in Schritt 3 (Live-Modus) angehaengten
+                    // Instanz, keine Replay-Daten -> zaehlen weder als Fortschritt noch als Fensterende.
+                    bool Replayish(DateTime t) => t.ToUniversalTime() < eUtc.AddHours(1);
+                    foreach (var k in new[] { "dom.ndjson", "bbo.ndjson", "cumtrades.ndjson", "ticks.ndjson" })
+                        if (st.TryGetValue(k, out var v) && v.LastMt is { } lm && Replayish(lm) && (mp == null || lm > mp)) mp = lm;
+                    if (st.TryGetValue("ticks.ndjson", out var tv0) && tv0.LastMt is { } lm0 && Replayish(lm0)) firstMt ??= lm0.ToUniversalTime();
+                    if (mp != null && lastMt != null && mp == lastMt) stallMs += Math.Min(since, 5000); else stallMs = 0;
+                    if (mp != null) { lastMt = mp; if (maxMp == null || mp.Value > maxMp.Value) maxMp = mp; }
+                    exec.DataReachedEnd = maxMp != null && maxMp.Value.ToUniversalTime() >= eUtc.AddSeconds(-2);
+                    exec.Recheck();
+                    if ((DateTime.UtcNow - lastReport).TotalSeconds >= 3)
+                    {
+                        lastReport = DateTime.UtcNow;
+                        W($"    [play t+{swp.Elapsed.TotalSeconds:0.0}s] mp={(mp?.ToString("HH:mm:ss") ?? "-")} max={(maxMp?.ToString("HH:mm:ss") ?? "-")} zustand={exec.State} datenEnde={exec.DataReachedEnd} stillstand={stallMs / 1000:0.0}s hinweise={exec.Hints.Count}");
+                    }
+                }
+                if (exec.State == ReplayEnd.NaturalEnd) { stopCause = "natuerliches Ende"; break; }
+                if (StopRequested()) { stopCause = "Kontrollierter Stopp von der Oberflaeche angefordert"; break; }
+                if (exec.State is ReplayEnd.Errored or ReplayEnd.OnlineExit or ReplayEnd.OtherRangeRestart or ReplayEnd.StoppedByUs or ReplayEnd.StoppedOther) { stopCause = exec.Rule; break; }
+                if (exec.Started && !exec.DataReachedEnd && stallMs >= 30000) { stopCause = $"Stillstand {stallMs / 1000:0}s ohne Ende (letzte Marktzeit {(lastMt?.ToString("HH:mm:ss") ?? "-")})"; break; }
+                if (exec.DataReachedEnd && stallMs >= 24000) { stopCause = "Daten am Fensterende, aber kein Abschluss von ATAS innerhalb 24 s (keine Endbestaetigung)"; break; }
+                if (firstMt == null && swp.Elapsed.TotalSeconds > 90) { stopCause = "keine Daten nach 90 s"; break; }
+                Thread.Sleep(200);
             }
+            if (stopCause == "") stopCause = $"Zeitlimit {playWatchdog}s erreicht";
+            tPlay += swP.Elapsed.TotalSeconds;
+
+            // SOFORT stoppen (vor jeder weiteren Auswertung): Replay verlassen beendet die Wiedergabe. Ein bereits
+            // begonnener Auto-Loop schreibt in eine NEUE Recorder-Instanz (eigener Ordner), nicht in die zugeordnete.
+            var swStop = Stopwatch.StartNew();
+            exec.MarkOurStop(DateTime.Now);
+            W($"[9] Stopp-Grund: {stopCause}  -> Wiedergabe jetzt beenden ({DateTime.Now:HH:mm:ss.fff})");
+            // 1.3.7: Replay-Leiste nach vorn, ihr X genau einmal, Wirkung pruefen (kein Kuerzel-Serie; siehe ReplayBarClose.cs).
+            var stopRes = CloseReplayBarConfirmed(W, alog, visualMode);
+            replayViewLeft = stopRes.Stopped && stopRes.LeftReplayView;
+            W($"[9] Ende erkannt -> X der Leiste: Replay-Ansicht verlassen={replayViewLeft} keinNeustart={stopRes.NoFurtherPass} nach {swStop.ElapsedMilliseconds} ms (Weg: {stopRes.How})");
+            if (!stopRes.Stopped) throw new AbortRun(9, "BLOCKER: Replay-Ansicht nach dem Ende NICHT nachweislich verlassen (siehe [x]). Keine Veroeffentlichung, kein weiterer Tag.");
+
+            // Entscheidung mit Belegen (Originalzeilen, Regel, Zuordnung zur eigenen Ausfuehrung)
+            endProven = exec.State == ReplayEnd.NaturalEnd && !rangeMismatch;
+            endStatus = endProven ? "Reached" : "Unproven";
+            if (endProven) _verifiedReplayEndUtc = exec.Range?.endUtc;
+            dataWindowRecorded = exec.DataReachedEnd;
+            endReason = $"{exec.State}: {(exec.Rule == "" ? stopCause : exec.Rule)}";
+            W($"[9] Endstatus={endStatus}  Klasse={exec.State}  Regel='{exec.Rule}'  zugeordnet ab eigenem 'Playing from' {(exec.RangeLine != null ? exec.RangeLine.Ts.ToString("HH:mm:ss.fff") : "(keins)")}");
+            foreach (var ev in exec.Evidence) W($"      Beleg: {ev}");
+            foreach (var h in exec.Hints.Take(8)) W($"      Hinweis (kein Abbruchgrund): {h}");
+            if (exec.LoopRestarted) W("      ATAS hat nach dem Abschluss automatisch neu gestartet (Auto-Loop); diese Daten liegen in einer eigenen, NICHT zugeordneten Instanz.");
+            if (rangeMismatch) throw new AbortRun(7, "BLOCKER: " + stopCause + " Keine Veroeffentlichung.");
+
             var fin = FolderStreams(dir); fin.TryGetValue("ticks.ndjson", out var fv);
             span = fv?.FirstMt != null ? $"{fv.FirstMt:yyyy-MM-dd HH:mm:ss}->{fv.LastMt:HH:mm:ss}Z" : "-";
             mpStr = lastMt != null ? lastMt.Value.ToString("HH:mm:ss") + "Z" : "-"; ticksBytes = fv?.Bytes ?? 0;
-            // Pause NUR falls wir NICHT am natuerlichen Ende sind (nach engine_finished rewindet ATAS selbst;
-            // das Stoppen+Verlassen uebernimmt ExitReplayView ueber 'Zur Echtzeit wechseln'). Sonst: pausieren, falls noch spielend.
-            if (!engineFinished && !visualMode)
+            W($"[9] Datenbereich der zugeordneten Instanz (Recorder, UTC): {span}; Soll [{sUtc:HH:mm:ss}Z, {eUtc:HH:mm:ss}Z)");
+            var measured = MeasuredSpeed(dir);
+            double reqF = SpeedToFactor(speedName);
+            if (measured is double mf)
             {
-                var p2 = FindIdAny("PlayButton"); string tp = Safe(() => ReplayWindow()?.Current.Name ?? "");
-                if (!tp.Contains("gestoppt", StringComparison.OrdinalIgnoreCase) && !tp.Contains("angehalten", StringComparison.OrdinalIgnoreCase) && p2 != null) { Invoke(p2); Thread.Sleep(1200); }
+                bool speedOk = reqF > 0 && mf >= reqF * 0.7 && mf <= reqF * 1.3;
+                if (speedVerified != true) speedVerified = speedOk;
+                W($"[9] Gemessene Geschwindigkeit (Recorder tMarket/tRecv): {mf:0.0}x bei angefordert {speedName} -> {(speedOk ? "im Rahmen (+-30 %)" : "ABWEICHEND")}");
             }
-            else if (!engineFinished && visualMode)
-                W("[9] (visuell) nicht am natuerlichen Ende -> Stopp/Verlassen erfolgt in Phase 10 ueber die Ribbon-Replay-Umschaltung.");
-            tPlay += swP.Elapsed.TotalSeconds;
-            // UNABHAENGIGES Endsignal: engine-emittierter Abschluss (ATAS-Log) NACH Play, ohne von uns ausgeloesten
-            // Stopp, gebunden an den geladenen Bereich (Log, UTC). AssessEnd: verifizierte Position >= Fensterende + playing.
-            var endUtcFinal = logRange?.endUtc ?? dew.AddMinutes(-offMin);
-            endProven = titleProvenEnd || AssessEnd(TryVerifiedReplayPositionUtc(), playingObserved || logPlayStarted, endUtcFinal) == EndVerdict.Reached;
-            endStatus = endProven ? "Reached" : "Unproven";
-            W($"[9] Endstatus={endStatus} (unabh. Replay-Endsignal={(TryVerifiedReplayPositionUtc() == null ? "KEINS -> Unproven" : TryVerifiedReplayPositionUtc()!.Value.ToString("yyyy-MM-dd HH:mm:ss") + "Z")}); " +
-              $"Daten-Korroboration={dataWindowRecorded} ({endReason}); Fensterende(UTC)={endUtcFinal:HH:mm:ss}; Marktzeit(ticks)={span}");
-            // KEIN Abbruch hier: die Aufnahme ist gespeichert; Cleanup wird dennoch versucht; das Gesamt-Verdikt faellt am Ende.
+            else W("[9] Geschwindigkeit nicht messbar (zu wenige Daten).");
+            var loopFolders = FolderSet().Except(beforeLoad).Where(f => f != attrFolder).ToList();
+            if (loopFolders.Count > 0) W($"[9] Weitere Instanzen seit dem Laden (Auto-Loop/Echtzeit, werden NICHT angehaengt): {string.Join(", ", loopFolders)}");
 
             // ---- Phase 10: Replay-Transport verlassen + Replay-ANSICHT des Charts beenden ----
             // Marker: ab hier eigene Cleanup-Aktionen. Deren Logmeldungen (Disconnect durch 'Zur Echtzeit' etc.) gehoeren
@@ -2225,26 +2773,40 @@ internal static class Program
             W("[10] Replay-Transport verlassen");
             // ExitReplayView nutzt den Transport-Button 'Zur Echtzeit wechseln' (Transport muss OFFEN sein) und
             // verifiziert das Verlassen UNABHAENGIG daran, dass der chart-gebundene 'Indikatoren'-Button wieder aktiv wird.
-            replayViewLeft = ExitReplayView(W);   // beendet die Chart-Replay-ANSICHT (verifiziert)
+            // 1.3.7: kein zweiter Stopp-Versuch hier (frueher erneute Kuerzel-Serie); [9] ist die einzige Stelle.
+            W($"[10] Replay-Ansicht verlassen (bestaetigt in [9]): {replayViewLeft}");
             // ---- Phase 11: Recorder am Zielchart entfernen + Uebernehmen (finalisiert die zugeordnete Instanz) ----
             W("[11] Recorder am Zielchart entfernen");
-            if (replayViewLeft && OpenIndicatorDialog(W))
+            RemovalOutcome removal = RemovalOutcome.Failed;
+            if (replayViewLeft)
             {
-                RemoveSelectedRecorderRelative(W);        // dialog-relativ: Zeile -> Papierkorb -> Uebernehmen
+                // Zeile -> Papierkorb (UIA/Screenshot, geprueft) -> Wirkung pruefen -> erst dann Uebernehmen.
                 // Writer-Flush beim Dispose: grosse Sessionfenster brauchen laenger bis meta.json entsperrt ist (1-Min bleibt 15s).
-                int flushWait = Math.Max(15, windowSec / 60);
-                for (int i = 0; i < flushWait && IsMetaLocked(Path.Combine(dir, "meta.json")); i++) Thread.Sleep(1000);
+                removal = RemoveRecorderFromChart(W, writerWaitSec: Math.Max(15, windowSec / 60));
             }
             else W("  [11] Entfernen uebersprungen: Indikator-Dialog ist waehrend/kurz nach Replay-Ansicht gesperrt (Replay-Ansicht nicht verlassen).");
-            recorderRemoved = LockedCount() == 0;
+            // 1.3.8 (lokal belegt): Beim Wechsel zurueck zur Echtzeit stellt ATAS u. U. einen Chart-Stand ohne Recorder wieder
+            // her ('keeping previously captured chart state'). Steht dann KEIN Recorder mehr in der Chart-Liste, ist keine
+            // Instanz mehr aktiv und ist die zugeordnete Instanz entsperrt (Writer beendet), ist das Ziel erreicht.
+            bool attrClosed = attrFolder != null && !IsMetaLocked(Path.Combine(RecordingsDir, attrFolder, "meta.json"));
+            if (removal == RemovalOutcome.NoRecorder && LockedCount() == 0 && attrClosed)
+                W("[11] Recorder stand nicht mehr in der Chart-Liste (von ATAS beim Wechsel zur Echtzeit entfernt); keine aktive Instanz, zugeordnete Instanz geschlossen -> kein Recorder aktiv (bestaetigt).");
+            recorderRemoved = (removal == RemovalOutcome.Removed || (removal == RemovalOutcome.NoRecorder && attrClosed)) && LockedCount() == 0;
         }
         catch (AbortRun ab) { W(ab.Message); rc = ab.Code; }
         catch (Exception ex) { W($"BLOCKER: Exception {ex.GetType().Name}: {ex.Message}"); rc = 2; }
         finally
         {
             // Cleanup: Replay sicher verlassen (layout-robuster Cluster-Finder, nicht nur Fenstertitel); Status protokollieren.
-            try { if (ReplayOpen()) { var rb = FindIdAny("RibbonReplayButton"); if (rb != null) Invoke(rb); for (int i = 0; i < 8 && ReplayOpen(); i++) Thread.Sleep(1000); } } catch { }
-            cleanupOk = !ReplayOpen();
+            cleanupOk = !Bounded("Replay offen? (Abschluss)", ReplayOpen, 4000, true, W) || replayViewLeft;
+            // Frueher Abbruch NACH dem Anhaengen (VM-Befund 'Recorder bleibt zurueck'): den von DIESEM Auftrag angehaengten
+            // Recorder ueber den bewaehrten Dialogweg wieder entfernen. Nur im Abbruchfall, einmal, ohne Wiederholungsschleife.
+            if (rc != -1 && recorderAddedByJob && !recorderRemoved)
+            {
+                try { recorderRemoved = RemoveRecorderAfterAbort(W); }
+                catch (Exception ex) { W($"  [abbruch-cleanup] Fehler beim Entfernen: {ex.GetType().Name}: {ex.Message}"); }
+                W($"  [abbruch-cleanup] Recorder nach Abbruch entfernt: {recorderRemoved}{(recorderRemoved ? "" : "  -> BITTE in ATAS pruefen und den Indikator 'OF Replay Recorder' von Hand entfernen.")}");
+            }
         }
 
         // ---- Phase 12: Finalisierung der zugeordneten Aufnahme pruefen ----
@@ -2272,11 +2834,15 @@ internal static class Program
         W($"   - Aufnahme gespeichert (Writer beendet + Summary clean + runId-Match): {recordingSaved}");
         W($"   - Replay-ENDE unabhaengig bestaetigt: {endProven} (Status {endStatus}; Daten-Korroboration={dataWindowRecorded} = KEIN Endbeweis)");
         W($"   - Cleanup abgeschlossen (Replay-Ansicht verlassen={replayViewLeft} UND Recorder entfernt={recorderRemoved}): {cleanupDone}");
-        W($"  Zielchart: ein VulkanChartWpf-Pane | Instanz: {attrFolder ?? "-"} runId={attrRunId}");
+        W($"  Zielchart: {_chartDesc} | Instanz: {attrFolder ?? "-"} runId={attrRunId}");
+        string recMeta = attrFolder != null ? ReadMetaField(Path.Combine(RecordingsDir, attrFolder, "meta.json"), "recorder") : "";
+        W($"  Recorder dieser Aufnahme (meta.json): '{(recMeta == "" ? "-" : recMeta)}' | {RecorderIdentity()}");
         W($"  HERKUNFT-GRENZE: ein sichtbarer Chart + neuer gesperrter Ordner ist KEINE vollstaendige Herkunft;");
-        W($"   installierte DLL 'proto-2-bufferfix' bindet KEIN Token (GUID-runId) -> keine token-gebundene Chart/Instanz-Zuordnung.");
-        W($"  aufgezeichnete Marktzeit(ticks): {span}; ticks={ticksBytes}B; tz-offset={offMin}min");
+        W($"   die ausgelieferten Recorder-Varianten binden KEIN Lauf-Token (GUID-runId) -> keine token-gebundene Chart/Instanz-Zuordnung.");
+        W($"  aufgezeichnete Marktzeit(ticks): {span}; ticks={ticksBytes}B; Soll [{sUtc:yyyy-MM-dd HH:mm:ss}Z, {eUtc:HH:mm:ss}Z); Dialog {dStart}..{dEnd} ({zone.Source})");
+        W($"  Geschwindigkeit: '{speedName}' {(speedVerified == true ? "verifiziert" : speedVerified == false ? "NICHT verifiziert" : "nicht gesetzt")}");
         W($"  Replay-Transport geschlossen (cleanup-Teil): {cleanupOk} | aktive gesperrte Instanzen jetzt: {LockedCount()}");
+        LockedInstancesReport(W, attrFolder);
         W($"  [timing] gesamt {swAll.Elapsed.TotalSeconds:F0}s = Bedienung {tBed:F0}s + Laden {tLoad:F0}s + Wiedergabe {tPlay:F0}s");
         if (!gesamtPass) W($"  HINWEIS: Aufnahme bleibt erhalten; Gesamtablauf NICHT bestanden. Fehlend: " +
             $"{(!recordingSaved ? "[Aufnahme] " : "")}{(!endProven ? "[unabh. Endsignal] " : "")}{(!cleanupDone ? "[Cleanup/Remove]" : "")}");
@@ -2338,6 +2904,7 @@ internal static class Program
 
         string session; int year; string tz, speed, collDir, py, script; bool keepAttached;
         var windows = new List<(string dStart, string dEnd)>();
+        var utcWindows = new List<(DateTime s, DateTime e)>();
         try
         {
             using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(configPath));
@@ -2351,17 +2918,39 @@ internal static class Program
             script = r.TryGetProperty("collectorScript", out var vs) ? vs.GetString()! : Path.Combine(AppContext.BaseDirectory, "bridge", "atas_collect.py");
             keepAttached = r.TryGetProperty("keepRecorderAttached", out var vk) && vk.GetBoolean();
             foreach (var w in r.GetProperty("windows").EnumerateArray())
-                windows.Add((w.GetProperty("startBerlin").GetString()!, w.GetProperty("endBerlin").GetString()!));
+            {
+                // Bevorzugt UTC-Grenzen (ab 1.3.3); Berlin-Wandzeit bleibt fuer aeltere Konfigurationen lesbar.
+                if (w.TryGetProperty("startUtc", out var su) && w.TryGetProperty("endUtc", out var eu))
+                    utcWindows.Add((DateTime.Parse(su.GetString()!, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal),
+                                    DateTime.Parse(eu.GetString()!, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal)));
+                else
+                    windows.Add((w.GetProperty("startBerlin").GetString()!, w.GetProperty("endBerlin").GetString()!));
+            }
         }
         catch (Exception ex) { W($"BLOCKER: Konfig nicht lesbar: {ex.GetType().Name}: {ex.Message}"); Flush(sb, outFile); return 3; }
 
         W($"# ATAS Sammellauf  {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+        W($"# Programme: Probe {ProgramVersion()} | {RecorderIdentity()}");
         W($"# Session='{session}' Jahr={year} TZ='{tz}' Speed='{speed}' keepAttached={keepAttached}");
         W($"# Gemeinsame CSV: {Path.Combine(collDir, "trades.csv")}");
         W($"# Collector: {py} \"{script}\"");
         if (!DriveReadyWritable(collDir, out var crs)) { W("BLOCKER: " + crs); Flush(sb, outFile); return 3; }
         if (!DriveReadyWritable(RecordingsDir, out var rrs)) { W("BLOCKER: " + rrs); Flush(sb, outFile); return 3; }
         if (!File.Exists(script)) { W($"BLOCKER: Collector-Skript fehlt: {script}"); Flush(sb, outFile); return 3; }
+        // ---- Vorpruefungen OHNE jede ATAS-Aktion (VM-Befunde): Bridge startfaehig? Recorder schreibt in DIESEN Ordner? ----
+        // Frueher fiel ein nicht importierbares atas_bridge erst NACH der Aufnahme beim Anhaengen auf.
+        var (scCode, scOut, scErr) = RunPython(py, new[] { script, "selfcheck" });
+        if (!BridgeSelfcheckOk(scCode, scOut))
+        {
+            W($"BLOCKER: Bridge-Selbsttest fehlgeschlagen (rc={scCode}): {(scErr.Trim() == "" ? scOut.Trim() : scErr.Trim())}");
+            W("  -> keine ATAS-Aktion ausgefuehrt. Python-Laufzeit/Bridge pruefen (Setup erneut ausfuehren).");
+            Flush(sb, outFile); return 3;
+        }
+        W($"# Bridge-Selbsttest ok: {scOut.Trim()}");
+        var pathVerdict = RecorderPathVerdict(RecordingsDir, File.Exists(SharedDataRoot.InstalledRecorderDll),
+            SharedDataRoot.DllSupportsSharedRoot(SharedDataRoot.InstalledRecorderDll), SharedDataRoot.Read(), out var pathMsg);
+        W((pathVerdict ? "# Recorder-Ausgabeordner ok: " : "BLOCKER: ") + pathMsg);
+        if (!pathVerdict) { W("  -> keine ATAS-Aktion ausgefuehrt."); Flush(sb, outFile); return 3; }
         if (Process.GetProcessesByName("OFT.Platform").Length == 0) { W("BLOCKER: ATAS laeuft nicht."); Flush(sb, outFile); return 3; }
         if (keepAttached) W("# HINWEIS: keepRecorderAttached=true ist eine noch nicht live-verifizierte Variante. Dieser Lauf nutzt weiterhin den bewaehrten add/remove-Pfad je Fenster (saubere, finalisierte Ordnertrennung; Voraussetzung fuer das sichere Anhaengen).");
 
@@ -2376,10 +2965,15 @@ internal static class Program
                 var sU = BerlinToUtc(s); var eU = BerlinToUtc(e);
                 jobs.Add((ds, de, sU, eU, BuildJobId(session, year, sU, eU)));
             }
+            foreach (var (sU, eU) in utcWindows)
+            {
+                if (!(sU < eU)) throw new ArgumentException($"Ende {eU:o} liegt nicht nach Start {sU:o}");
+                jobs.Add(($"{sU:yyyy-MM-ddTHH:mm:ssZ}", $"{eU:yyyy-MM-ddTHH:mm:ssZ}", sU, eU, BuildJobId(session, year, sU, eU)));
+            }
         }
         catch (Exception ex) { W($"BLOCKER: Fenster nicht parsebar ({ex.Message})."); Flush(sb, outFile); return 3; }
         foreach (var j in jobs)
-            W($"#  Fenster {j.dStart}..{j.dEnd} Europe/Berlin == UTC [{j.sUtc:yyyy-MM-ddTHH:mm:ssZ}, {j.eUtc:yyyy-MM-ddTHH:mm:ssZ})  job_id={j.jobId}");
+            W($"#  Fenster UTC [{j.sUtc:yyyy-MM-ddTHH:mm:ssZ}, {j.eUtc:yyyy-MM-ddTHH:mm:ssZ})  job_id={j.jobId}");
 
         var committed = ReadCommittedJobs(py, script, collDir, W);
         W($"# bereits committed: {(committed.Count == 0 ? "(keine)" : string.Join(", ", committed))}");
@@ -2391,8 +2985,9 @@ internal static class Program
         {
             var j = jobs[i];
             if (committed.Contains(j.jobId)) { skipped++; W($"\n[SKIP] {j.jobId} bereits committed -> nicht erneut aufnehmen/anhaengen."); continue; }
+            if (StopRequested()) { stopReason = "Kontrolliert gestoppt (Anforderung der Oberflaeche) vor dem naechsten Fenster"; break; }
             W($"\n===== Fenster-Auftrag {i + 1}/{jobs.Count}: {j.jobId} =====");
-            int rc = RunRecordingJob(outFile, j.dStart, j.dEnd, i + 1, jobs.Count, sb, speed);
+            int rc = RunRecordingJob(outFile, j.sUtc, j.eUtc, i + 1, jobs.Count, sb, speed);
             if (rc != 0) { stopReason = $"Aufnahme-Auftrag {j.jobId} nicht bestanden (rc={rc})"; break; }
             if (_lastJobFolder == null || !_lastJobFinalizedClean) { stopReason = $"Instanz fuer {j.jobId} nicht finalisiert (folder={_lastJobFolder ?? "-"})"; break; }
             string recDir = Path.Combine(RecordingsDir, _lastJobFolder);
@@ -2403,7 +2998,12 @@ internal static class Program
             W($"[collect] append rc={code} {outp.Trim()}{(err.Trim() == "" ? "" : "  stderr=" + err.Trim())}");
             string result = ExtractJsonField(outp, "result");
             if (code != 0 || (result != "committed" && result != "skipped" && result != "empty"))
-            { stopReason = $"Anhaengen fuer {j.jobId} fehlgeschlagen (result='{result}', rc={code})"; break; }
+            {
+                // Bei 'check' liefert die Bruecke den konkreten Grund (z.B. Recorder-Drops mit beiden Tick-Datei-Zahlen).
+                string note = ExtractJsonField(outp, "note");
+                stopReason = $"Anhaengen fuer {j.jobId} fehlgeschlagen (result='{result}', rc={code}){(note == "" ? "" : ": " + note)}";
+                break;
+            }
             done++;
         }
 
@@ -2419,10 +3019,35 @@ internal static class Program
         return (stopReason == "" && allDone) ? 0 : 8;
     }
 
+    internal static bool BridgeSelfcheckOk(int code, string stdout) => code == 0 && ExtractJsonField(stdout, "result") == "ok";
+
+    // Alter fest eingebauter Standardpfad der Recorder-DLL 'proto-2-bufferfix' (nur noch zur Erkennung, kein Schreibziel).
+    internal static readonly string LegacyRecorderRoot = Path.Combine("F:" + Path.DirectorySeparatorChar, "ATAS_Data", "Recordings");
+
+    // Schreibt der in ATAS installierte Recorder in den Ordner, in dem dieser Lauf die Aufnahme sucht?
+    //  - DLL mit gemeinsamer Konfiguration: die Konfiguration muss GENAU auf den Recordings-Ordner dieses Laufs zeigen.
+    //  - aeltere DLL (fester Pfad): nur zulaessig, wenn der Lauf genau diesen festen Pfad benutzt.
+    internal static bool RecorderPathVerdict(string recordingsDir, bool dllInstalled, bool dllSupportsSharedRoot, string? sharedConfig, out string msg)
+    {
+        if (!dllInstalled) { msg = $"Recorder-DLL nicht installiert ({SharedDataRoot.InstalledRecorderDll})."; return false; }
+        if (dllSupportsSharedRoot)
+        {
+            if (SharedDataRoot.SamePath(sharedConfig, recordingsDir)) { msg = $"{recordingsDir} (gemeinsame Konfiguration stimmt)"; return true; }
+            msg = $"gemeinsame Recorder-Konfiguration zeigt auf '{sharedConfig ?? "(nicht gesetzt)"}', dieser Lauf erwartet '{recordingsDir}'. " +
+                  "Datenordner in der Oberflaeche neu waehlen oder Setup erneut ausfuehren.";
+            return false;
+        }
+        if (SharedDataRoot.SamePath(LegacyRecorderRoot, recordingsDir)) { msg = $"{recordingsDir} (aeltere Recorder-DLL mit festem Pfad, passt)"; return true; }
+        msg = $"installierte Recorder-DLL ist eine aeltere Version mit festem Ausgabepfad '{LegacyRecorderRoot}' und wuerde NICHT nach " +
+              $"'{recordingsDir}' schreiben. Setup bei geschlossenem ATAS erneut ausfuehren.";
+        return false;
+    }
+
     // Python-Collector ausfuehren -> (ExitCode, stdout, stderr). Keine Shell; Argumente einzeln (kein Quoting-Risiko).
     private static (int code, string stdout, string stderr) RunPython(string py, string[] args)
     {
-        var psi = new ProcessStartInfo { FileName = py, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+        var psi = new ProcessStartInfo { FileName = py, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8 };   // Collector schreibt UTF-8 (Pfade mit Umlauten)
         foreach (var a in args) psi.ArgumentList.Add(a);
         try
         {
@@ -2721,30 +3346,6 @@ internal static class Program
         ClickScreen((int)(r.X + r.Width / 2), (int)(r.Y + r.Height / 2)); Thread.Sleep(settleMs);
     }
 
-    // Zielchart eindeutig bestimmen. Mit ATAS_TARGET_CHART: eindeutiger Header-Treffer. Ohne (Default): GENAU EIN
-    // Chart-Pane (VulkanChartWpf) im Prozess -> dieser ist der eindeutige Zielchart (kein Größte-Flächen-Fallback,
-    // da nur ein Chart existiert). Mehrere Charts ohne konfigurierten Namen -> Abbruch.
-    private static bool VerifyTargetChartUnique(Action<string> W)
-    {
-        var roots = AtasRoots();
-        string targetName = Environment.GetEnvironmentVariable("ATAS_TARGET_CHART") ?? "";
-        if (!string.IsNullOrWhiteSpace(targetName))
-        {
-            var headers = FindInRoots(roots, ControlType.Button)
-                .Where(b => Safe(() => b.Current.Name).StartsWith(targetName, StringComparison.OrdinalIgnoreCase))
-                .Select(b => { System.Windows.Rect r; try { r = b.Current.BoundingRectangle; } catch { r = System.Windows.Rect.Empty; } return r; })
-                .Where(r => !r.IsEmpty).ToList();
-            if (headers.Count != 1) { W($"[1] Zielchart '{targetName}' nicht eindeutig (Header-Treffer={headers.Count}) -> Abbruch."); return false; }
-            W($"[1] Zielchart '{targetName}' eindeutig."); return true;
-        }
-        var charts = FindInRoots(roots, ControlType.Pane)
-            .Where(p => Safe(() => p.Current.Name) == "VulkanChartWpf")
-            .Select(p => { System.Windows.Rect r; try { r = p.Current.BoundingRectangle; } catch { r = System.Windows.Rect.Empty; } return r; })
-            .Where(r => !r.IsEmpty && r.Width > 300 && r.Height > 200).ToList();
-        if (charts.Count != 1) { W($"[1] Chart-Pane nicht eindeutig (VulkanChartWpf-Treffer={charts.Count}) -> Abbruch (Zielchart via ATAS_TARGET_CHART konfigurieren)."); return false; }
-        W("[1] Genau ein Chart-Pane (VulkanChartWpf) -> eindeutiger Zielchart."); return true;
-    }
-
     // Stellt Replay auf DATUM-basiert + Zielchart als Modul, sodass 'Datum auswählen' aktiv ist.
     // Transportklicks erfordern aktives Fenster (erster Klick wird sonst verschluckt) -> ForceForeground des Transports.
     private static bool EnsureModule(Action<string> W)
@@ -2767,20 +3368,31 @@ internal static class Program
                 for (int k = 0; k < 3; k++) { if (!mr0.IsEmpty) FgClick(mr0); var m2 = FindBtnAny("Modul auswählen"); try { if (m2 != null) { var tg = m2.GetCurrentPropertyValue(AutomationElement.ControlTypeProperty); } } catch { } if (FindBtnAny("Bar auswählen") != null || FindBtnAny("Datum auswählen") != null) break; }
                 // A4 (Finding 4): KEIN Größte-Fläche-Fallback (ein fremder Chart könnte der größte sein). Stattdessen
                 // den AUSDRÜCKLICH benannten Zielchart über seinen Header identifizieren und bei Mehrdeutigkeit abbrechen.
-                string targetName = Environment.GetEnvironmentVariable("ATAS_TARGET_CHART") ?? "MNQ 4RXV";
-                var roots = AtasRoots();
-                var headers = FindInRoots(roots, ControlType.Button)
-                    .Where(b => Safe(() => b.Current.Name).StartsWith(targetName, StringComparison.OrdinalIgnoreCase))
-                    .Select(b => { System.Windows.Rect r; try { r = b.Current.BoundingRectangle; } catch { r = System.Windows.Rect.Empty; } return r; })
-                    .Where(r => !r.IsEmpty).ToList();
-                if (headers.Count != 1) { W($"[3] Zielchart '{targetName}' nicht eindeutig (Header-Treffer={headers.Count}) -> Abbruch (keine Größte-Fläche-Auswahl)."); return false; }
-                var hx = headers[0].X;
-                var panes = FindInRoots(roots, ControlType.Pane)
-                    .Where(p => Safe(() => p.Current.Name) == "VulkanChartWpf")
-                    .Select(p => { System.Windows.Rect r; try { r = p.Current.BoundingRectangle; } catch { r = System.Windows.Rect.Empty; } return (p, r); })
-                    .Where(t => !t.r.IsEmpty && t.r.Y > 0 && t.r.Width > 300 && t.r.Height > 200 && Math.Abs(t.r.X - hx) < 60).ToList();
-                if (panes.Count != 1) { W($"[3] Zielchart-Pane zu '{targetName}' nicht eindeutig (Pane-Treffer={panes.Count}) -> Abbruch."); return false; }
-                var pr = panes[0].r;
+                // Zielchart-Flaeche zum Anklicken: mit ATAS_TARGET_CHART ueber dessen Header (wie bisher), sonst dieselbe
+                // eindeutige Erkennung wie in Phase 1 (kein fester Chartname, kein fester Renderer-Name, keine Groesste-Flaeche-Wahl).
+                System.Windows.Rect pr;
+                string targetName = Environment.GetEnvironmentVariable("ATAS_TARGET_CHART") ?? "";
+                if (!string.IsNullOrWhiteSpace(targetName))
+                {
+                    var roots = AtasRoots();
+                    var headers = FindInRoots(roots, ControlType.Button)
+                        .Where(b => Safe(() => b.Current.Name).StartsWith(targetName, StringComparison.OrdinalIgnoreCase))
+                        .Select(b => { System.Windows.Rect r; try { r = b.Current.BoundingRectangle; } catch { r = System.Windows.Rect.Empty; } return r; })
+                        .Where(r => !r.IsEmpty).ToList();
+                    if (headers.Count != 1) { W($"[3] Zielchart '{targetName}' nicht eindeutig (Header-Treffer={headers.Count}) -> Abbruch (keine Größte-Fläche-Auswahl)."); return false; }
+                    var hx = headers[0].X;
+                    var cands = ScanChartCandidates().Candidates.Where(c => IsUsable(c) && c.Y > 0 && Math.Abs(c.X - hx) < 60).ToList();
+                    var v3 = SelectChart(cands);
+                    if (v3.Kind != ChartVerdictKind.Unique) { W($"[3] Zielchart-Flaeche zu '{targetName}' nicht eindeutig ({v3.Reason}) -> Abbruch."); return false; }
+                    pr = new System.Windows.Rect(v3.Chosen!.X, v3.Chosen.Y, v3.Chosen.W, v3.Chosen.H);
+                }
+                else
+                {
+                    var v3 = SelectChart(ScanChartCandidates().Candidates);
+                    if (v3.Kind != ChartVerdictKind.Unique) { W($"[3] Zielchart-Flaeche nicht eindeutig ({v3.Reason}) -> Abbruch."); return false; }
+                    pr = new System.Windows.Rect(v3.Chosen!.X, v3.Chosen.Y, v3.Chosen.W, v3.Chosen.H);
+                    targetName = v3.Signal;
+                }
                 W($"[3] Zielchart '{targetName}' rect={(int)pr.X},{(int)pr.Y},{(int)pr.Width}x{(int)pr.Height} -> klicken.");
                 FgClick(pr); Thread.Sleep(900);
             }
@@ -2981,7 +3593,7 @@ internal static class Program
 
     // Maskiertes Datetime-Feld (dd.MM.yyyy HH:mm:ss): fokussieren -> in Feldmitte klicken -> Home ->
     // NUR Ziffern tippen (die Maske setzt '.'/':'/Leer selbst) -> Tab (Commit). Keine Trennzeichen, kein Strg+A.
-    private static bool TypeIntoField(AutomationElement? el, string value)
+    private static bool TypeIntoField(AutomationElement? el, string value, Action<string>? step = null, bool clear = true)
     {
         if (el == null) return false;
         // Editierbare Maske ist 'dd.MM.yyyy HH:mm' = 12 Ziffern (KEINE Sekunden). Nur diese tippen (Sekunden-00 wuerden ueberlaufen).
@@ -2992,23 +3604,26 @@ internal static class Program
             ForceForeground(el); Thread.Sleep(120); // ATAS-Dialog sicher nach vorne (sonst trifft der Klick ein ueberlappendes Fenster)
             System.Windows.Rect r; try { r = el.Current.BoundingRectangle; } catch { return false; }
             if (r.IsEmpty) return false;
-            ClickScreen((int)(r.X + r.Width / 2), (int)(r.Y + r.Height / 2)); Thread.Sleep(280);
-            KeyVk(0x41, ctrl: true);   // Strg+A (alles markieren -> Ersetzmodus)
-            Thread.Sleep(90);
-            KeyVk(0x2E);               // Entf (Feld leeren -> Maske rebaut sauber)
-            Thread.Sleep(90);
+            ClickScreen((int)(r.X + r.Width / 2), (int)(r.Y + r.Height / 2)); Thread.Sleep(280); step?.Invoke("Klick");
+            if (clear)
+            {
+                KeyVk(0x41, ctrl: true);   // Strg+A (alles markieren -> Ersetzmodus)
+                Thread.Sleep(90); step?.Invoke("Strg+A");
+                KeyVk(0x2E);               // Entf (Feld leeren -> Maske rebaut sauber)
+                Thread.Sleep(90); step?.Invoke("Entf");
+            }
             KeyVk(0x24);               // Home -> an Maskenanfang
-            Thread.Sleep(120);
+            Thread.Sleep(120); step?.Invoke("Pos1");
             // In 2er-Gruppen tippen (dd|MM|yyyy|HH|mm|ss) mit Pause an Trenner-Uebergaengen -> Maske verschluckt keine Ziffer.
             int[] grp = { 2, 2, 4, 2, 2 }; int idx = 0;   // dd|MM|yyyy|HH|mm (12 Ziffern)
             foreach (var g in grp)
             {
-                for (int k = 0; k < g && idx < digits.Length; k++, idx++) { SendUnicode(digits[idx]); Thread.Sleep(90); }
+                for (int k = 0; k < g && idx < digits.Length; k++, idx++) { SendUnicode(digits[idx]); Thread.Sleep(90); step?.Invoke($"Ziffer {idx + 1} '{digits[idx]}'"); }
                 Thread.Sleep(220); // Trenner-Uebergang settlen lassen
             }
             Thread.Sleep(220);
             PressTab();                // Commit/Validierung
-            Thread.Sleep(220);
+            Thread.Sleep(220); step?.Invoke("Tab (Feld verlassen)");
             return true;
         }
         catch { return false; }

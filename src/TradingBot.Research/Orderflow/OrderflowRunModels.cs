@@ -23,6 +23,9 @@ public sealed record OrderflowRunRequest
     /// <summary>Slippage-Override in Ticks (null = FeeProfile.EstimatedSlippageTicks).</summary>
     public decimal? SlippageTicksOverride { get; init; }
 
+    /// <summary>Annahme-Szenario Ausführungsverzögerung in Trade-Ticks (0 = Fill am Folge-Tick, Standard).</summary>
+    public int FillDelayTicks { get; init; }
+
     public required IReadOnlyList<StrategyCandidate> Candidates { get; init; }
 
     // Provenienz/Qualitaet (werden mit dem Ergebnis gespeichert):
@@ -169,6 +172,41 @@ public sealed record WsTrade
     public long ExitTimeMs { get; init; }
     public required string EntryTime { get; init; }
     public required string ExitTime { get; init; }
+
+    // ---- Trade-Nachvollzug (ab Provenienz.TradeDetailVersion 1). Alte Laufdateien haben diese Felder NICHT;
+    //      null = nicht belegt (Grund in SignalLink). Werte stammen aus Engine/Mitschnitt, nichts ist geschaetzt. ----
+    /// <summary>Brutto-PnL der Engine (vor Gebuehren; Slippage steckt bereits in den Fillpreisen).</summary>
+    public decimal? GrossPnL { get; init; }
+    /// <summary>Round-Turn-Gebuehren der Engine fuer diesen Trade.</summary>
+    public decimal? Fees { get; init; }
+    /// <summary>Exakte Engine-Fillzeiten (ISO-UTC, 100 ns) — die ms-Felder oben sind abgeschnitten.</summary>
+    public string? EntryTimeUtc { get; init; }
+    public string? ExitTimeUtc { get; init; }
+    /// <summary>0-basierter Index des Fill-Ticks in der Tick-Liste des Laufs (Quellreihenfolge).</summary>
+    public int? EntryTickIndex { get; init; }
+    public int? ExitTickIndex { get; init; }
+    /// <summary>Marktpreis des Fill-Ticks VOR Slippage (Fillpreis = Tickpreis ± Slippage).</summary>
+    public decimal? EntryTickPrice { get; init; }
+    public decimal? ExitTickPrice { get; init; }
+    /// <summary>Signal, das die Position eroeffnet bzw. geschlossen hat (Schluss der Signal-Bar).</summary>
+    public WsSignal? EntrySignal { get; init; }
+    public WsSignal? ExitSignal { get; init; }
+    /// <summary>"verknuepft" oder der Grund, warum Signal/Fill-Ticks nicht belegt zugeordnet werden konnten.</summary>
+    public string? SignalLink { get; init; }
+}
+
+/// <summary>Ein gespeichertes Strategiesignal (Schluss der Signal-Bar). Reason leer = Strategie liefert keinen Text.</summary>
+public sealed record WsSignal
+{
+    public int BarIndex { get; init; }
+    public int TickIndex { get; init; }
+    public required string TimeUtc { get; init; }
+    public required string Direction { get; init; }
+    public decimal ReferencePrice { get; init; }
+    public required string Reason { get; init; }
+    public IReadOnlyList<string> TriggeredConditions { get; init; } = Array.Empty<string>();
+    /// <summary>Positionszustand der Engine unmittelbar vor dem Signal (nur gelesen).</summary>
+    public required string PositionBefore { get; init; }
 }
 
 /// <summary>Maschinenlesbare Herkunft/Grenzen des Laufs (Fingerabdruck, Kosten, Abweichungen zum Harness).</summary>
@@ -190,6 +228,9 @@ public sealed record OrderflowProvenance
 
     /// <summary>Tatsaechlich verwendete Einstellungen/Config-Quellen (nur dieser lokale Lauf).</summary>
     public IReadOnlyDictionary<string, string> SettingsUsed { get; init; } = new Dictionary<string, string>();
+
+    /// <summary>0/fehlend = alte Laufdatei ohne Trade-Nachvollzug; 1 = Signal/Fill-Ticks/Brutto/Gebuehren je Trade.</summary>
+    public int TradeDetailVersion { get; init; }
 }
 
 public sealed record OrderflowCosts

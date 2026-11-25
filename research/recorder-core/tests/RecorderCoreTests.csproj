@@ -15,5 +15,6 @@
     <Compile Include="..\RecorderCore.cs" />
     <Compile Include="..\CoreGate.cs" />
     <Compile Include="..\TokenHandshake.cs" />
+    <Compile Include="..\SharedDataRoot.cs" />
   </ItemGroup>
 </Project>

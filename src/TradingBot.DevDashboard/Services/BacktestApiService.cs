@@ -10,12 +10,33 @@ namespace TradingBot.DevDashboard.Services;
 
 // ---- DTOs (JSON für das React-Dashboard) ----
 public sealed record StrategyParamDef(string Key, string Label, string Type, string Default);
-public sealed record StrategyDef(string Id, string Name, string Description, bool IsReference, IReadOnlyList<StrategyParamDef> Params);
+/// <summary>Strategie-Definition. <see cref="UsesFixedStops"/> = Stop/Ziel kommen aus den Tick-Vorgaben des Laufs (dann sind
+/// StopLossTicks/TakeProfitTicks wirksame Parameter); false = die Strategie setzt Stop/Ziel selbst (z. B. ORB).
+/// <see cref="Engine"/>: "ohlc" (bar-basierte OHLC-Engine auf Zeitkerzen) oder "orderflow-ticks" (bestehender Tick-Orderflow-Pfad:
+/// BacktestEngine, Signal auf N-Tick-Bars mit gemessenem Delta). <see cref="DataRequirements"/> nennt, was der Datensatz liefern muss.</summary>
+public sealed record StrategyDef(string Id, string Name, string Description, bool IsReference, IReadOnlyList<StrategyParamDef> Params,
+    bool UsesFixedStops = true, string Engine = "ohlc", IReadOnlyList<string>? DataRequirements = null);
 public sealed record InstrumentDef(string Symbol, decimal TickSize, decimal TickValue, decimal PointValue, int MaxContracts, int DefaultStopLossTicks, int DefaultTakeProfitTicks);
 /// <summary>Datenquelle. <see cref="DefaultFromUtc"/>/<see cref="DefaultMaxRows"/> beschreiben einen begrenzten,
 /// geeigneten Standard-Ausschnitt für das erste Laden (null = ganze Quelle bzw. Standardgrenze).</summary>
 public sealed record DataSourceDef(string Id, string Kind, string Label, bool Available, string? Note,
-    string? DefaultFromUtc = null, long? DefaultMaxRows = null);
+    string? DefaultFromUtc = null, long? DefaultMaxRows = null, string? Instrument = null, string? InstrumentBasis = null);
+
+/// <summary>
+/// Instrument eines Datensatzes. <see cref="Symbol"/> null = der Datensatz legt kein Instrument fest (dann gilt das gewählte,
+/// es wird nichts vermutet). <see cref="Found"/> = tatsächlich gefundene Symbole (bei Tick-Daten aus den Ticks selbst).
+/// </summary>
+public sealed record DataInstrumentInfo(string? Symbol, string Basis, IReadOnlyList<string> Found)
+{
+    public bool Ambiguous => Found.Count > 1;
+    public bool Conflicts(string requested) => Ambiguous || (Symbol is not null && !string.Equals(Symbol, requested, StringComparison.OrdinalIgnoreCase));
+
+    public string Describe(string requested) =>
+        Ambiguous ? $"Datensatz enthält mehrere Instrumente ({string.Join(", ", Found)}) — kein eindeutiges Instrument."
+        : Symbol is null ? $"Datensatz legt kein Instrument fest ({Basis}) — gewählt: {requested}; nicht aus den Daten prüfbar."
+        : Conflicts(requested) ? $"Datensatz enthält {Symbol} ({Basis}), angefragt ist {requested}."
+        : $"Instrument {Symbol} = Datensatz ({Basis}).";
+}
 public sealed record CandleDto(long T, decimal O, decimal H, decimal L, decimal C, decimal V);
 
 /// <summary>Herkunft/Umfang geladener OHLC-Bars (ohne Strategielauf).</summary>
@@ -106,6 +127,7 @@ public sealed class BacktestApiService
         _feesDir = Path.Combine(repoRoot, "config", "fees");
         _instruments = new InstrumentProfileProvider(cfg, _instrumentsDir);
         _fees = new FeeProfileProvider(cfg, _feesDir);
+        Ticks = new OrderflowTickBacktest(repoRoot);
     }
 
     /// <summary>Nur Beispielprofile im Verzeichnis (ausschließlich *.example.json, keine echten Broker-Werte)?</summary>
@@ -133,8 +155,24 @@ public sealed class BacktestApiService
             "FESTE ORB-Baseline (Zarattini & Aziz 2023) auf MES: erste 5-Min-Kerze ab 09:30 ET, Richtung aus " +
             "Close vs. Open (Doji = kein Trade), Einstieg am Folgebar-Open, Stop am Gegenextrem, Ziel 10R bzw. " +
             "Session-Ende 16:00 ET, 1 Kontrakt. Keine Varianten; Paper-Renditen werden NICHT auf MES übertragen.",
-            true, Array.Empty<StrategyParamDef>())
+            true, Array.Empty<StrategyParamDef>(), UsesFixedStops: false,
+            DataRequirements: new[] { "OHLC-Zeitkerzen (5 Minuten) mit New-York-Sessionzeiten" }),
+        new StrategyDef("deltaflow", "DeltaFlow (Orderflow, Tick-Delta)",
+            "Bestehende Orderflow-Teststrategie: Delta der geschlossenen N-Tick-Bar > +Schwelle ⇒ Long, < −Schwelle ⇒ Short, sonst Flat. " +
+            "Läuft über den bestehenden Tick-Orderflow-Pfad (SinglePositionGate, max. 1 Kontrakt). Technischer Funktionsnachweis, keine Edge-Behauptung.",
+            true, new[]
+            {
+                new StrategyParamDef(TradingBot.Application.Strategies.OrderFlow.DeltaFlowStrategy.ThresholdParameterKey, "Delta-Schwelle (Kontrakte)", "decimal", "30"),
+                new StrategyParamDef(OrderflowTickBacktest.TicksPerBarKey, "Ticks je Orderflow-Bar", "int", "500"),
+            }, UsesFixedStops: false, Engine: OrderflowTickBacktest.EngineKind,
+            DataRequirements: OrderflowTickBacktest.DeltaFlowRequirements(OrderflowTickBacktest.DefaultTicksPerBar))
     };
+
+    /// <summary>Tick-Orderflow-Zugang (bestehender Pfad) — Datenquellen, Laden, Lauf.</summary>
+    public OrderflowTickBacktest Ticks { get; }
+
+    public bool IsTickStrategy(string strategyId) =>
+        GetStrategies().FirstOrDefault(s => string.Equals(s.Id, strategyId, StringComparison.OrdinalIgnoreCase))?.Engine == OrderflowTickBacktest.EngineKind;
 
     public async Task<IReadOnlyList<InstrumentDef>> GetInstrumentsAsync(CancellationToken ct = default)
     {
@@ -155,14 +193,51 @@ public sealed class BacktestApiService
             sierra ? "Aggregiert echte Handelskerzen (Last). Randkerzen werden ausgeschlossen."
                    : "Lokale Sierra-Datei nicht gefunden.",
             DefaultFromUtc: sierra ? SierraDefaultFromUtc : null,
-            DefaultMaxRows: sierra ? SierraDefaultMaxRows : null));
+            DefaultMaxRows: sierra ? SierraDefaultMaxRows : null,
+            Instrument: SierraInstrument, InstrumentBasis: SierraInstrumentBasis));
 
         var ohlcDir = Path.Combine(_repoRoot, "samples", "ohlc");
         if (Directory.Exists(ohlcDir))
             foreach (var f in Directory.EnumerateFiles(ohlcDir, "*.csv").OrderBy(x => x))
                 list.Add(new DataSourceDef("csv:" + Path.GetFileName(f), "ohlc-csv",
                     "OHLC-CSV: " + Path.GetFileName(f), true, null));
+        list.AddRange(Ticks.GetDataSources());
         return list;
+    }
+
+    /// <summary>Instrument der festen lokalen Sierra-Quelle (Kontrakt MESM26; die Datei selbst hat kein Symbolfeld).</summary>
+    public const string SierraInstrument = "MES";
+    public const string SierraInstrumentBasis = "Kontrakt MESM26 der lokalen Sierra-Datei";
+
+    /// <summary>
+    /// Instrument des gewählten Datensatzes: Tick-Quellen aus den Ticks selbst (Symbol jedes Ticks), die feste Sierra-Quelle aus
+    /// ihrem Kontrakt; OHLC-CSV ohne Symbolfeld → kein Instrument (keine Vermutung).
+    /// </summary>
+    public DataInstrumentInfo DataInstrument(BacktestRunRequest req)
+    {
+        if (OrderflowTickBacktest.IsTickSource(req.DataSourceId))
+        {
+            var lt = Ticks.Load(req);
+            var found = Ticks.Symbols(lt);
+            return new DataInstrumentInfo(found.Count == 1 ? found[0] : null,
+                found.Count == 1 ? $"Symbol aller {lt.Set.Ticks.Count:N0} Ticks" : found.Count == 0 ? "keine Ticks" : "mehrere Symbole", found);
+        }
+        if (req.DataSourceId == "sierra-mesm26")
+            return new DataInstrumentInfo(SierraInstrument, SierraInstrumentBasis, new[] { SierraInstrument });
+        return new DataInstrumentInfo(null, "OHLC-CSV ohne Symbolfeld", Array.Empty<string>());
+    }
+
+    /// <summary>
+    /// Harte Sperre vor jedem Engine-Lauf: ein Request, dessen Instrument dem Datensatz widerspricht, wird NICHT gerechnet
+    /// (sonst falsches Instrument-/Kostenprofil bzw. im Tick-Pfad ein leerer Lauf, weil die Engine die Ticks nach Symbol filtert).
+    /// </summary>
+    public void EnsureInstrumentMatches(BacktestRunRequest req)
+    {
+        var di = DataInstrument(req);
+        if (di.Conflicts(req.Symbol))
+            throw new InvalidOperationException(
+                $"Instrument-Widerspruch: {di.Describe(req.Symbol)} Es wird nicht mit einem fremden Instrument- und Kostenprofil gerechnet — " +
+                (di.Symbol is not null ? $"Instrument {di.Symbol} wählen oder einen {req.Symbol}-Datensatz verwenden." : "einen Datensatz mit genau einem Instrument wählen."));
     }
 
     /// <summary>Standard-Startzeitpunkt für das erste Laden der lokalen Sierra-Datei (UTC).</summary>
@@ -181,7 +256,7 @@ public sealed class BacktestApiService
         try
         {
             ct.ThrowIfCancellationRequested();
-            var (candles, lead, trail, issues, source, tf) = LoadCandles(req, req.Symbol);
+            var (candles, lead, trail, issues, source, tf) = LoadCandlesCached(req, req.Symbol);
             if (candles.Count == 0)
                 return Task.FromResult(new BacktestDataResponse
                 {
@@ -215,6 +290,7 @@ public sealed class BacktestApiService
     {
         try
         {
+            EnsureInstrumentMatches(req);   // auch der Chart-Backtest rechnet nie mit einem fremden Instrument
             var instrument = (await _instruments.GetAllAsync(ct)).FirstOrDefault(i =>
                 string.Equals(i.Symbol, req.Symbol, StringComparison.OrdinalIgnoreCase));
             if (instrument is null)
@@ -222,7 +298,7 @@ public sealed class BacktestApiService
 
             var fee = await ResolveFeeAsync(req, ct);
 
-            var (candles, leadPartial, trailPartial, issues, source, tf) = LoadCandles(req, instrument.Symbol);
+            var (candles, leadPartial, trailPartial, issues, source, tf) = LoadCandlesCached(req, instrument.Symbol);
             if (candles.Count == 0)
                 return new BacktestRunResponse { Ok = false, Error = "Keine gültigen OHLC-Bars geladen.", DataIssues = issues };
 
@@ -239,6 +315,7 @@ public sealed class BacktestApiService
                 ExcludePartialEdges = req.ExcludePartialEdges
             };
 
+            System.Threading.Interlocked.Increment(ref _engineRuns);
             var result = _engine.Run(candles, strategy, instrument, fee, config, source, tf, leadPartial, trailPartial);
 
             var dto = candles.Select(c => new CandleDto(
@@ -299,22 +376,78 @@ public sealed class BacktestApiService
         bool InstrumentIsExample,
         bool FeeIsExample);
 
-    /// <summary>Lädt Kerzen, Instrument- und Kostenprofil für wiederholte Läufe.</summary>
+    /// <summary>Lädt Kerzen, Instrument- und Kostenprofil für wiederholte Läufe. Die Kerzen werden je Datenanfrage
+    /// (Quelle, Pfad, Symbol, Zeitrahmen, Zeitraum, Zeilenlimit + Dateistempel) zwischengespeichert: viele Analysen
+    /// eines Auftrags auf DENSELBEN Daten lesen die (große) Quelldatei damit nur einmal.</summary>
     public async Task<RunContext> LoadContextAsync(BacktestRunRequest req, CancellationToken ct = default)
     {
+        EnsureInstrumentMatches(req);   // vor Profil-Auflösung und jedem Engine-Lauf
         var instrument = (await _instruments.GetAllAsync(ct)).FirstOrDefault(i =>
                              string.Equals(i.Symbol, req.Symbol, StringComparison.OrdinalIgnoreCase))
                          ?? throw new InvalidOperationException($"Kein InstrumentProfile für '{req.Symbol}' in config/instruments.");
         var fee = await ResolveFeeAsync(req, ct);
-        var (candles, lead, trail, issues, source, tf) = LoadCandles(req, instrument.Symbol);
+        var (candles, lead, trail, issues, source, tf) = LoadCandlesCached(req, instrument.Symbol);
         return new RunContext(candles, instrument, fee, lead, trail, source, tf, issues,
             OnlyExampleProfiles(_instrumentsDir), req.FeePerSideOverride is null && OnlyExampleProfiles(_feesDir));
+    }
+
+    // ---- Zwischenspeicher geladener Kerzen (begrenzt, prozessweit) ----
+    private sealed record CachedLoad((List<Candle> candles, bool lead, bool trail, IReadOnlyList<OhlcImportIssue> issues, string source, int tf) Data);
+    private readonly object _cacheLock = new();
+    private readonly LinkedList<(string Key, CachedLoad Load)> _cache = new();
+    private readonly Dictionary<string, (int Loads, int Hits)> _loadStats = new(StringComparer.Ordinal);
+    private const int MaxCachedLoads = 4;
+
+    /// <summary>Lese-/Wiederverwendungszähler je Datenanfrage (für die Herkunftsangabe im Bericht).</summary>
+    public (int Loads, int Hits) GetLoadStats(BacktestRunRequest req)
+    {
+        lock (_cacheLock) return _loadStats.TryGetValue(DataKey(req, req.Symbol), out var s) ? s : (0, 0);
+    }
+
+    private string DataKey(BacktestRunRequest req, string symbol)
+    {
+        string path = req.DataSourceId.StartsWith("csv:", StringComparison.Ordinal) || (req.DataSourceId == "csv" && !string.IsNullOrWhiteSpace(req.Path))
+            ? req.Path ?? Path.Combine(_repoRoot, "samples", "ohlc", req.DataSourceId.Substring(4))
+            : req.DataSourceId.StartsWith("ticks-csv:", StringComparison.Ordinal)
+                ? req.Path ?? Path.Combine(_repoRoot, "samples", "ticks", req.DataSourceId["ticks-csv:".Length..])
+                : req.DataSourceId.StartsWith("atas-collection:", StringComparison.Ordinal) ? Ticks.CollectionManifest ?? "" : SierraLocalPath;
+        string stamp = File.Exists(path) ? $"{new FileInfo(path).Length}:{File.GetLastWriteTimeUtc(path).Ticks}" : "missing";
+        return string.Join("|", req.DataSourceId, path, symbol.ToUpperInvariant(), req.TimeframeMinutes, req.FromUtc ?? "", req.ToUtc ?? "",
+            req.MaxRows, stamp,
+            OrderflowTickBacktest.IsTickSource(req.DataSourceId) ? "tpb=" + OrderflowTickBacktest.TicksPerBarOf(req.Params) : "");
+    }
+
+    private (List<Candle> candles, bool lead, bool trail, IReadOnlyList<OhlcImportIssue> issues, string source, int tf)
+        LoadCandlesCached(BacktestRunRequest req, string symbol)
+    {
+        string key = DataKey(req, symbol);
+        lock (_cacheLock)
+        {
+            for (var node = _cache.First; node is not null; node = node.Next)
+                if (node.Value.Key == key)
+                {
+                    _cache.Remove(node); _cache.AddFirst(node);
+                    var s = _loadStats.TryGetValue(key, out var v) ? v : (0, 0);
+                    _loadStats[key] = (s.Item1, s.Item2 + 1);
+                    return node.Value.Load.Data;
+                }
+        }
+        var data = LoadCandles(req, symbol);
+        lock (_cacheLock)
+        {
+            var s = _loadStats.TryGetValue(key, out var v) ? v : (0, 0);
+            _loadStats[key] = (s.Item1 + 1, s.Item2);
+            _cache.AddFirst((key, new CachedLoad(data)));
+            while (_cache.Count > MaxCachedLoads) _cache.RemoveLast();
+        }
+        return data;
     }
 
     /// <summary>Führt die OHLC-Engine auf einem bereits geladenen Kontext aus (optional auf einem Teilbereich).</summary>
     public OhlcBacktestResult RunEngine(RunContext ctx, IStrategy strategy, OhlcBacktestConfig config,
         FeeProfile? feeOverride = null, IReadOnlyList<Candle>? candlesOverride = null)
     {
+        System.Threading.Interlocked.Increment(ref _engineRuns);
         var candles = candlesOverride ?? ctx.Candles;
         bool lead, trail;
         if (candlesOverride is null)
@@ -337,17 +470,25 @@ public sealed class BacktestApiService
             ctx.Source, ctx.TimeframeMinutes, lead, trail);
     }
 
+    private long _engineRuns;
+    /// <summary>Anzahl ausgeführter Engine-Läufe seit Prozessstart (Nachweis: ein Berichtsvergleich rechnet nichts neu).</summary>
+    public long EngineRuns => System.Threading.Interlocked.Read(ref _engineRuns);
+
     /// <summary>Baut eine initialisierte Strategie-Instanz (öffentlich für die Quant-Auswertung).</summary>
     public IStrategy CreateStrategy(BacktestRunRequest req, InstrumentProfile instrument) => BuildStrategy(req, instrument);
 
     private IStrategy BuildStrategy(BacktestRunRequest req, InstrumentProfile instrument)
     {
+        // Keine stille Ersatzstrategie: eine unbekannte Id oder eine Tick-Orderflow-Strategie darf in der OHLC-Engine
+        // NICHT als SMA weiterlaufen (früher Fallback auf MovingAverage).
         var strategy = req.Strategy.ToLowerInvariant() switch
         {
             "movingaverage" or "ma" or "sma" => (IStrategy)new MovingAverageDummyStrategy(),
             "donchian" or "breakout" => new DonchianBreakoutStrategy(),
             "orb" or "openingrange" => new OpeningRangeBreakoutStrategy(),
-            _ => new MovingAverageDummyStrategy()
+            "deltaflow" => throw new InvalidOperationException(
+                "DeltaFlow läuft ausschließlich über den Tick-Orderflow-Pfad (gemessenes Delta je Trade), nicht in der OHLC-Kerzen-Engine."),
+            _ => throw new InvalidOperationException($"Unbekannte Strategie '{req.Strategy}'.")
         };
         strategy.Initialize(new StrategyExecutionContext
         {
@@ -370,6 +511,16 @@ public sealed class BacktestApiService
         DateTimeOffset? fromUtc = ParseUtc(req.FromUtc), toUtc = ParseUtc(req.ToUtc);
         if (fromUtc is DateTimeOffset f0 && toUtc is DateTimeOffset t0 && t0 <= f0)
             throw new ArgumentException("Zeitraum ungültig: 'Bis' muss nach 'Von' liegen.");
+
+        // Tick-Datensatz: Kerzen = volle N-Tick-Orderflow-Bars aus den echten Trade-Ticks (gleiche Bar-Bildung wie der
+        // Orderflow-Lauf). Zeitrahmen 0 = keine Zeitkerzen. Für Chart/Bar-Replay und Session-Aufteilung.
+        if (OrderflowTickBacktest.IsTickSource(req.DataSourceId))
+        {
+            var loaded = Ticks.Load(req);
+            int tpb = OrderflowTickBacktest.TicksPerBarOf(req.Params);
+            var (tickCandles, _) = OrderflowTickBacktest.Bars(loaded.Ticks, tpb, symbol);
+            return (tickCandles, false, false, Array.Empty<OhlcImportIssue>(), $"{tpb}-Tick-Orderflow-Bars aus {loaded.Source}", 0);
+        }
 
         if (req.DataSourceId.StartsWith("csv:", StringComparison.Ordinal) ||
             (req.DataSourceId == "csv" && !string.IsNullOrWhiteSpace(req.Path)))

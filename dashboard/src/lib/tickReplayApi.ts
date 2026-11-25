@@ -7,13 +7,25 @@ import { apiUrl } from "./apiBase.ts";
 const env = (import.meta as any).env ?? {};
 const BASE: string = String(env.VITE_TICKREPLAY_API || apiUrl("/api/tickreplay"));
 
+/** Eine Fassung eines Handelstags (bei mehrfach vorhandenen Tagen; Quellenwahl nach Drop-Status). */
+export interface TickReplayCandidate {
+  id: string; collection: string; recordingId: string; rows: number; totalVolume: number;
+  recorderDrops: number | null; summaryClean: boolean | null; usable: boolean;
+}
+/** id adressiert /meta und /ticks: gleich jobId, ausser bei ungeloesten Konflikten (jobId@Collection, je Fassung eine Zeile).
+ *  selection: single (eine Fassung) | resolved (nach Drop-Status/gleicher Aufnahme gewaehlt) | conflict (bitte waehlen). */
 export interface TickReplaySession {
   jobId: string; day: string; label: string; timezone: string;
   windowStartUtc: string; windowEndUtc: string; rows: number; totalVolume: number;
+  collection?: string; id?: string; recorderDrops?: number | null;
+  selection?: "single" | "resolved" | "conflict"; selectionNote?: string | null; candidates?: TickReplayCandidate[] | null;
 }
 export interface TickReplaySessionList {
   available: boolean; reason: string | null; collectionDir: string; manifestPath: string; sessions: TickReplaySession[];
+  conflicts?: string[] | null;
 }
+/** Adresse einer Session fuer /meta und /ticks. */
+export const sessionId = (s: TickReplaySession) => s.id || s.jobId;
 /** Zeiten der Trades: 100-ns-Einheiten relativ zu anchorUnixMs (auf einer 5-Minuten-Grenze). */
 export interface TickReplayMeta {
   jobId: string; day: string; label: string; timezone: string;
@@ -22,6 +34,8 @@ export interface TickReplayMeta {
   count: number; totalVolume: number; buyVolume: number; sellVolume: number;
   rowBytes: number; csvPath: string; csvSha256: string; manifestPath: string; cache: string; prepareSeconds: number;
   timePrecision: string;
+  id?: string; collection?: string; sliceSha256?: string; sliceBytes?: string;
+  recorderDrops?: number | null; selection?: string; selectionNote?: string | null;
 }
 
 async function fail(r: Response, what: string): Promise<never> {

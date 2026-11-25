@@ -19,14 +19,22 @@ builder.Services.AddSingleton<RithmicDashboardService>(); // Marktdaten-API /api
 // Die Klassen (read-only Simulation) bleiben samt Tests erhalten, sind aber nicht mehr Teil des ausgelieferten Hosts.
 var backtestApi = new BacktestApiService(repoRoot);
 builder.Services.AddSingleton(backtestApi); // OHLC-BACKTEST (Simulation-only, keine Execution/Broker)
-// TICK-REPLAY (read-only): echte Trades einer Collection-Session portionsweise fuer das Research-Dashboard.
-// Collection und Cache sind konfigurierbar (TickReplay:CollectionDir / TickReplay:CacheDir, z. B. per Umgebungsvariable
-// TickReplay__CollectionDir). Der Cache liegt standardmaessig unter artifacts/ (gitignored); Originaldaten werden nur gelesen.
-var tickReplayCollection = builder.Configuration["TickReplay:CollectionDir"]
-    ?? @"F:\ATAS_Data\Collections\MNQ_NewYork_0930-1200_America-New-York_2026-10-26_bis_2026-10-30";
+// TICK-REPLAY / ORDERFLOW-CHART (read-only): echte Trades je Handelstag portionsweise fuer das Research-Dashboard.
+// Standard: ALLE Collections im Datenordner des ATAS Session Collectors (TickReplay:CollectionsRoot, Standard
+// F:\ATAS_Data\ATAS_Data Collection\Collections). Wird TickReplay:CollectionDir gesetzt (z. B. per Umgebungsvariable
+// TickReplay__CollectionDir), gilt nur diese eine Collection. Der Cache liegt standardmaessig unter artifacts/ (gitignored);
+// Originaldaten werden nur gelesen.
+var tickReplayCollection = builder.Configuration["TickReplay:CollectionDir"];
+var tickReplayRoot = builder.Configuration["TickReplay:CollectionsRoot"] ?? @"F:\ATAS_Data\ATAS_Data Collection\Collections";
 var tickReplayCache = builder.Configuration["TickReplay:CacheDir"]
     ?? Path.Combine(repoRoot ?? AppContext.BaseDirectory, "artifacts", "tickreplay-cache");
-builder.Services.AddSingleton(new TickReplayService(tickReplayCollection, tickReplayCache));
+builder.Services.AddSingleton(string.IsNullOrWhiteSpace(tickReplayCollection)
+    ? TickReplayService.ForCollectionsRoot(tickReplayRoot, tickReplayCache)
+    : new TickReplayService(tickReplayCollection, tickReplayCache));
+// Tick-Datenquelle im Backtesting (je Handelstag; manifest-geprüfter Import, nur lesend): nur wenn eine einzelne
+// Collection ausdruecklich konfiguriert ist (TickReplay:CollectionDir).
+if (!string.IsNullOrWhiteSpace(tickReplayCollection))
+    backtestApi.Ticks.CollectionManifest = Path.Combine(tickReplayCollection, "collection_manifest.json");
 // QUANT-RESEARCH (Auswertung, Validierung, Monte Carlo, Overfitting) — rechnet ausschließlich lokal
 // auf den Ergebnissen der OHLC-Engine. Keine Broker-/Marktdaten-Calls, keine Orders.
 builder.Services.AddSingleton(new QuantApiService(backtestApi, repoRoot));
@@ -38,6 +46,9 @@ builder.Services.AddSingleton(sp => new ResearchOrchestrator(
     sp.GetRequiredService<QuantApiService>(),
     sp.GetRequiredService<QuantJobManager>(),
     sp.GetRequiredService<ResearchRunStore>()));
+// BACKTESTING (Ein-Knopf-Bericht + Vergleich gespeicherter Berichte) — nutzt Orchestrator/Quant-Bausteine, keine Orders.
+builder.Services.AddSingleton(sp => new TradingBot.DevDashboard.Services.Quant.Report.BacktestingService(
+    sp.GetRequiredService<QuantApiService>(), sp.GetRequiredService<ResearchOrchestrator>()));
 
 // JSON: Enums als Strings (z. B. ExitReason) für das React-Frontend.
 builder.Services.ConfigureHttpJsonOptions(o =>
@@ -280,6 +291,36 @@ quant.MapPost("/research/campaign/{groupId}/holdout/evaluate", async (string gro
     return res.Ok ? Results.Ok(res) : Results.BadRequest(res);
 });
 
+// BACKTESTING — Ein-Knopf-Bericht: Vorschau (Daten/Kosten/mögliche Prüfungen), Start (EIN Auftrag, alle anwendbaren
+// Analysen im Backend), gespeicherte Berichte und Vergleich OHNE Neuberechnung. Simulation-only, keine Orders.
+var bk = app.MapGroup("/api/backtesting").RequireCors(ReactCors);
+bk.MapGet("/strategies", (BacktestApiService s) => Results.Ok(s.GetStrategies()));
+bk.MapPost("/preview", async (TradingBot.DevDashboard.Services.Quant.Report.BacktestingStartRequest body,
+    TradingBot.DevDashboard.Services.Quant.Report.BacktestingService s, CancellationToken ct) =>
+{
+    var res = await s.PreviewAsync(body, ct);
+    return res.Ok ? Results.Ok(res) : Results.BadRequest(res);
+});
+bk.MapPost("/start", async (TradingBot.DevDashboard.Services.Quant.Report.BacktestingStartRequest body,
+    TradingBot.DevDashboard.Services.Quant.Report.BacktestingService s, CancellationToken ct) =>
+{
+    var res = await s.StartAsync(body, ct);
+    return res.Ok ? Results.Ok(res) : Results.BadRequest(res);
+});
+bk.MapGet("/reports", async (TradingBot.DevDashboard.Services.Quant.Report.BacktestingService s, CancellationToken ct) =>
+    Results.Ok(await s.ListAsync(ct)));
+bk.MapGet("/reports/{id}", async (string id, ResearchOrchestrator orch, CancellationToken ct) =>
+{
+    var res = await orch.GetAsync(id, ct);
+    return res.Ok ? Results.Ok(res) : Results.NotFound(res);
+});
+bk.MapPost("/reports/{id}/cancel", (string id, ResearchOrchestrator orch) => Results.Ok(new { cancelled = orch.Cancel(id) }));
+bk.MapPost("/compare", async (CompareRequestDto body, TradingBot.DevDashboard.Services.Quant.Report.BacktestingService s, CancellationToken ct) =>
+{
+    var res = await s.CompareAsync(body.RunIds ?? Array.Empty<string>(), ct);
+    return res.Ok ? Results.Ok(res) : Results.BadRequest(res);
+});
+
 // Paper-Research-Einträge (Quelle, Hypothese, Regeln, dokumentierte Abweichungen).
 quant.MapGet("/papers", async (QuantApiService s, CancellationToken ct) => Results.Ok(await s.ListPapersAsync(ct)));
 quant.MapPost("/papers", async (PaperResearchEntry entry, QuantApiService s, CancellationToken ct) =>
@@ -306,3 +347,6 @@ static async Task<IResult> RithmicCall<T>(Func<Task<T>> call)
         return Results.Json(new { success = false, message = ex.Message }, statusCode: StatusCodes.Status502BadGateway);
     }
 }
+
+/// <summary>Auswahl gespeicherter Berichte für den Vergleich (keine Neuberechnung).</summary>
+internal sealed record CompareRequestDto(IReadOnlyList<string>? RunIds);

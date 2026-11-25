@@ -16,6 +16,7 @@
     <AssemblyName>AtasReplayProbe</AssemblyName>
     <RootNamespace>AtasReplayProbe</RootNamespace>
     <LangVersion>latest</LangVersion>
+    <Version>1.5.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
@@ -26,6 +27,8 @@
   <!-- A4 (Recheck): denselben Token-Handshake wie der Recorder nutzen (Single Source of Truth, kein Drift). -->
   <ItemGroup>
     <Compile Include="..\recorder-core\TokenHandshake.cs" />
+    <!-- Gemeinsame Datenordner-Konfiguration: dieselbe Quelldatei wie Recorder, Oberflaeche und Setup. -->
+    <Compile Include="..\recorder-core\SharedDataRoot.cs" />
   </ItemGroup>
 
 </Project>

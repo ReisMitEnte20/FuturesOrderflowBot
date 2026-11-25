@@ -14,7 +14,11 @@ public enum ResearchStepStatus
     NotComputable = 3,
     Failed = 4,
     Cancelled = 5,
-    Skipped = 6
+    Skipped = 6,
+    /// <summary>Für diese Strategie/Konfiguration fachlich nicht anwendbar (z. B. kein Parametersweep ohne Parameter).</summary>
+    NotApplicable = 7,
+    /// <summary>Anwendbar, aber zu wenig Daten (z. B. „25 Sessions benötigt, 5 vorhanden").</summary>
+    InsufficientData = 8
 }
 
 /// <summary>Zustand eines Schritts in der Ablaufsteuerung (dauerhaft mit dem Lauf gespeichert).</summary>
@@ -81,6 +85,18 @@ public sealed record ResearchStartRequest
     /// (PRODUKT-/METHODENKONVENTION, keine universelle statistische Garantie). Darunter: kein Sieger,
     /// keine Erfolgswahrscheinlichkeit. Default 20.</summary>
     public int MinComparisonObservations { get; init; } = 20;
+
+    // --- Ein-Knopf-Bericht (Backtesting) ---
+    /// <summary>"classic" = bisherige Research-Kette; "full" = vollständiger Backtest-Bericht (alle zwölf Analysen).</summary>
+    public string Profile { get; init; } = "classic";
+    /// <summary>Session-ausgerichteter Walk-forward (Fold-Grenzen auf Handelstag-Anfängen).</summary>
+    public bool SessionAligned { get; init; }
+    public int TrainSessions { get; init; }
+    public int TestSessions { get; init; }
+    /// <summary>"orb" oder "tradedate" (siehe <see cref="QuantWalkForwardRequest.SessionCalendar"/>).</summary>
+    public string SessionCalendar { get; init; } = "orb";
+    /// <summary>Analyseprofil des vollständigen Berichts (nur bei Profile = "full").</summary>
+    public Report.FullReportOptions? Report { get; init; }
 }
 
 /// <summary>
@@ -113,6 +129,8 @@ public sealed record ResearchRunRecord
 {
     public required string RunId { get; init; }
     public string? CampaignId { get; init; }
+    /// <summary>Unveränderte Basis-Kampagnen-Id der Anfrage (für den Mehrfachstart-Schutz).</summary>
+    public string? CampaignKey { get; init; }
     public required ResearchStartRequest Config { get; init; }
     public string? DataSha { get; init; }
     public bool IsDemo { get; init; }
@@ -154,6 +172,9 @@ public sealed record ResearchRunRecord
 
     public ResearchHoldoutProposal? HoldoutProposal { get; init; }
     public IReadOnlyList<string> Notes { get; init; } = Array.Empty<string>();
+
+    /// <summary>Vollständiger Backtest-Bericht (nur Profil "full"); Abschnitte werden nach jedem Schritt gespeichert.</summary>
+    public Report.BacktestReport? Report { get; init; }
 
     // --- Mehrstrategie-Vergleich: Zuordnung eines Laufs zu einer Kampagnen-Gruppe und Strategie-Familie ---
     /// <summary>Eindeutige Id der übergreifenden Vergleichs-Kampagne (mehrere Familien-Läufe teilen sie). Null bei Einzellauf.</summary>
@@ -217,6 +238,10 @@ public sealed record ResearchCampaignStartRequest
     public bool IsDemo { get; init; }
     /// <summary>Mindestanzahl gemeinsamer OOS-Perioden für einen belastbaren Vergleich (Konvention). Default 20.</summary>
     public int MinComparisonObservations { get; init; } = 20;
+    public bool SessionAligned { get; init; }
+    public int TrainSessions { get; init; }
+    public int TestSessions { get; init; }
+    public string SessionCalendar { get; init; } = "orb";
 }
 
 /// <summary>Kurzüberblick einer Vergleichs-Kampagne (für die Auswahlliste im Frontend).</summary>

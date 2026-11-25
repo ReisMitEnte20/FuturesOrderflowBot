@@ -7,7 +7,7 @@ namespace AtasSessionCollector;
 
 internal static class Program
 {
-    public const string AppVersion = "1.2.5";
+    public const string AppVersion = "1.5.0";
 
     [STAThread]
     private static int Main(string[] args)
@@ -47,6 +47,26 @@ internal static class SelfTest
     {
         try { AttachConsole(-1); } catch { }  // an aufrufende Shell anheften (WinExe hat sonst keine Konsole)
         Line("== ATAS-Session-Collector Selftest (Zeitzonen & Kalender) ==\n");
+
+        // --- Benutzerdefiniertes Fenster (Uhrzeit mit Sekunden + Zeitzone) ---
+        {
+            var c = SessionCalendar.Custom(new TimeSpan(14, 30, 0), new TimeSpan(14, 32, 0), SessionCalendar.BerlinTzId);
+            var d = SessionCalendar.PlanDay(new DateOnly(2026, 10, 26), c);
+            Expect(d.WillRecord && d.UtcStart == new DateTime(2026, 10, 26, 13, 30, 0) && d.UtcEnd == new DateTime(2026, 10, 26, 13, 32, 0), "Custom 26.10.2026 14:30:00-14:32:00 Europe/Berlin -> UTC 13:30:00-13:32:00", "");
+            var dSummer = SessionCalendar.PlanDay(new DateOnly(2026, 7, 1), c);
+            Expect(dSummer.UtcStart == new DateTime(2026, 7, 1, 12, 30, 0), "Custom Sommerzeit 01.07.2026 14:30 Berlin -> 12:30Z", "");
+            Expect(SessionCalendar.CollectionFolderName("MNQ", c, new DateOnly(2026, 10, 26), new DateOnly(2026, 10, 26)) == "MNQ_Custom_143000-143200_Europe-Berlin_2026-10-26_bis_2026-10-26", "Custom Ordnername mit Sekunden + Zone", "");
+            var c2 = SessionCalendar.Custom(new TimeSpan(14, 30, 0), new TimeSpan(14, 33, 0), SessionCalendar.BerlinTzId);
+            Expect(SessionCalendar.CollectionFolderName("MNQ", c, new DateOnly(2026, 10, 26), new DateOnly(2026, 10, 26)) != SessionCalendar.CollectionFolderName("MNQ", c2, new DateOnly(2026, 10, 26), new DateOnly(2026, 10, 26)), "Custom: anderes Testfenster -> anderer Ordner (Resume verwechselt nicht)", "");
+            var gap = SessionCalendar.PlanDay(new DateOnly(2026, 3, 29), SessionCalendar.Custom(new TimeSpan(2, 30, 0), new TimeSpan(2, 40, 0), SessionCalendar.BerlinTzId));
+            Expect(gap.Status == DayStatus.Invalid && !gap.WillRecord, "Custom: 29.03.2026 02:30 Berlin existiert nicht -> Invalid", "");
+            var amb = SessionCalendar.PlanDay(new DateOnly(2026, 10, 25), SessionCalendar.Custom(new TimeSpan(2, 30, 0), new TimeSpan(2, 40, 0), SessionCalendar.BerlinTzId));
+            Expect(amb.Status == DayStatus.Invalid, "Custom: 25.10.2026 02:30 Berlin mehrdeutig -> Invalid", "");
+            Expect(SessionCalendar.PlanDay(new DateOnly(2026, 10, 24), c).Status == DayStatus.Weekend, "Custom: Wochenende uebersprungen", "");
+            Expect(SessionCalendar.ValidateCustom(new TimeSpan(14, 32, 0), new TimeSpan(14, 30, 0)) != null, "Custom: Ende vor Start abgelehnt", "");
+            Expect(SessionCalendar.TryParseClock("14:30:05", out var tt) && tt == new TimeSpan(14, 30, 5) && !SessionCalendar.TryParseClock("14:30", out _) && !SessionCalendar.TryParseClock("24:00:00", out _), "Custom: HH:mm:ss streng", "");
+            Expect(SessionCalendar.CollectionFolderName("MNQ", SessionCalendar.Get(SessionId.NewYork), new DateOnly(2026, 10, 26), new DateOnly(2026, 10, 28)) == "MNQ_NewYork_0930-1200_America-New-York_2026-10-26_bis_2026-10-28", "NY-Ordnername unveraendert (bestehende Collections/Resume)", "");
+        }
 
         // --- Zeitzonenfaelle rund um die versetzten Sommerzeitwechsel 2026 ---
         // EU-Sommerzeit endet 2026-10-25, US-Sommerzeit endet 2026-11-01.
@@ -98,6 +118,38 @@ internal static class SelfTest
         string fn = SessionCalendar.CollectionFolderName("MNQ", ny, new DateOnly(2026, 10, 26), new DateOnly(2026, 10, 28));
         Expect(fn == "MNQ_NewYork_0930-1200_America-New-York_2026-10-26_bis_2026-10-28",
             "Ordnername", fn);
+
+        // --- Tagesergebnis: 'check' der Bruecke zeigt Grund + beide Tick-Drop-Zahlen (Regression 17.07.2026) ---
+        {
+            var day = SessionCalendar.PlanDay(new DateOnly(2026, 7, 17), ny);
+            string json = "{\"result\": \"check\", \"jobId\": \"j\", \"rowsAppended\": 0, \"statusReasons\": [\"recorder_tick_drops\"], "
+                        + "\"note\": \"Abschnitt NICHT uebernommen: Recorder-Drops in den Tick-Dateien (ticks.csv: 21230, ticks.ndjson: 21228; gesamt 243149)\"}";
+            var r = CollectorRunner.Classify(day, 8, false, json, 1.0);
+            Expect(r.Outcome == DayOutcome.Failed && r.Detail.Contains("result='check'") && r.Detail.Contains("ticks.csv: 21230") && r.Detail.Contains("ticks.ndjson: 21228"),
+                "Tick-Drops: Tag NICHT ok, Grund mit beiden Drop-Zahlen sichtbar", r.Detail);
+        }
+
+        // --- Archivierung: Vormerken nur der in DIESEM Lauf committeten Tage; Fehlerbericht; Analyse-Text ---
+        {
+            string man = "{\"jobs\":{" +
+                "\"a\":{\"status\":\"committed\",\"recordingId\":\"MNQ_ALT\",\"appendedAtUtc\":\"2026-11-20T10:00:00+00:00\"}," +
+                "\"b\":{\"status\":\"committed\",\"recordingId\":\"MNQ_NEU\",\"appendedAtUtc\":\"2026-11-24T18:05:00.123456+00:00\"}," +
+                "\"c\":{\"status\":\"open\",\"recordingId\":\"MNQ_OFFEN\",\"appendedAtUtc\":\"2026-11-24T18:06:00+00:00\"}}}";
+            var ids = ArchiveRunner.RecordingsCommittedSince(man, new DateTime(2026, 11, 24, 18, 0, 0, DateTimeKind.Utc));
+            Expect(ids.Count == 1 && ids[0] == "MNQ_NEU", "Archivierung: nur in diesem Lauf committete Aufnahmen vorgemerkt", string.Join(",", ids));
+            using var cdoc = System.Text.Json.JsonDocument.Parse("{\"event\":\"result\",\"status\":\"out_of_space\",\"freedBytes\":1000000000,\"recordings\":[" +
+                "{\"recording\":\"MNQ_A\",\"files\":[{\"file\":\"dom.ndjson\",\"result\":\"archived\",\"origSize\":4000000000,\"zstSize\":300000000}]}," +
+                "{\"recording\":\"MNQ_B\",\"error\":\"voll\",\"files\":[{\"file\":\"bbo.ndjson\",\"result\":\"verify_failed\",\"reason\":\"Entpacktes Archiv weicht ab\"}]}]}");
+            var ct = ArchiveRunner.DescribeCompress(cdoc.RootElement);
+            Expect(ct.Contains("Platzmangel") && ct.Contains("1 von 2") && ct.Contains("MNQ_B bbo.ndjson: verify_failed") && ct.Contains("Original bleibt erhalten"),
+                "Archivierung: Bericht nennt Platzmangel, Fehler und erhaltene Originale", ct.Replace("\n", " | "));
+            using var adoc = System.Text.Json.JsonDocument.Parse("{\"recordingsBytes\":226000000000,\"disk\":{\"used\":835000000000,\"free\":125000000000,\"total\":960000000000}," +
+                "\"byKind\":{\"DOM\":{\"rawBytes\":68000000000,\"archivedBytes\":0}},\"eligible\":[{\"recording\":\"R1\",\"bytes\":1400000000,\"rawBytes\":1400000000,\"date\":\"2026-01-02\"}]," +
+                "\"archived\":[],\"unclear\":[],\"skipped\":[{\"recording\":\"R2\",\"bytes\":2000000000,\"date\":\"2026-02-04\",\"reason\":\"Recorder-Drops gemeldet (totalDrops=120820)\"}]}");
+            var at = ArchiveRunner.DescribeAnalysis(adoc.RootElement);
+            Expect(at.Contains("226,00 GB") && at.Contains("Geeignet zum Komprimieren: 1") && at.Contains("Recorder-Drops gemeldet") && at.Contains("R2"),
+                "Archivierung: Analyse zeigt Belegung, geeignete und uebersprungene Aufnahmen mit Grund", "");
+        }
 
         Line("");
         Line(_fail == 0 ? "ERGEBNIS: ALLE BESTANDEN" : $"ERGEBNIS: {_fail} FEHLGESCHLAGEN");

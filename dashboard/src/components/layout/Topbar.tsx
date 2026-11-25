@@ -16,8 +16,9 @@ const STATUS_POLL_MS = 10_000;
 const PAGES: Record<string, { title: string; subtitle: string }> = {
   "/": { title: "Live Desk", subtitle: "Positionen · Signale · Orders" },
   "/signals": { title: "Signals", subtitle: "Signale der Strategien" },
-  "/backtest": { title: "Backtest", subtitle: "OHLC-Simulation" },
-  "/research": { title: "Research", subtitle: "Quant- und Orderflow-Auswertung" },
+  "/backtesting": { title: "Backtesting", subtitle: "Strategie testen · vergleichen · Bericht" },
+  "/backtest": { title: "Chart-Backtest", subtitle: "OHLC-Simulation" },
+  "/research": { title: "Backtesting · Research", subtitle: "Quant- und Orderflow-Auswertung (bisherige Ansicht)" },
   "/market": { title: "Market Data", subtitle: "Rithmic · nur Marktdaten" },
   "/pipeline": { title: "Pipeline", subtitle: "Datenfluss der Strategien" },
   "/settings": { title: "Settings", subtitle: "Datenquelle und Verbindung" },

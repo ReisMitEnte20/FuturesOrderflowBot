@@ -109,6 +109,174 @@ public sealed class AtasCollectionImporter
         }, path, hash, evidence);
     }
 
+    /// <summary>Ergebnis eines Tagesabschnitts: nur die im Manifest festgeschriebenen Bytes [SliceStart, SliceEnd) des Jobs.</summary>
+    public sealed record SliceResult(ImportedMarketDataSet Data, string CsvPath, long SliceStart, long SliceEnd, string SliceSha256,
+        string RecordingId, string RunId, Dictionary<string, string> Evidence);
+
+    /// <summary>
+    /// Liest GENAU den committeten Byte-Abschnitt eines Jobs (byteOffsetBefore..byteOffsetAfter laut Manifest) – ohne
+    /// Durchlauf der ganzen Collection-CSV. Gleiche Regeln wie <see cref="ImportDay"/> für jede Zeile (Job, Aufnahme-/Lauf-
+    /// Identität, MNQ, Fenster [start, end), chronologisch, Aggressor) und Abgleich von Zeilen und Buy/Sell/Gesamtvolumen
+    /// mit dem Manifest. Der Abschnitt muss an Zeilengrenzen liegen; die Datei darf seit dem Manifest nur gewachsen sein
+    /// (append-only). Der SHA-256 des Abschnitts dient als persistenter Änderungsnachweis. Fail-closed, keine Deduplizierung.
+    /// </summary>
+    public SliceResult ImportJobSlice(string manifestPath, string jobId)
+    {
+        using var manifestStream = new FileStream(manifestPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var doc = JsonDocument.Parse(manifestStream);
+        var root = doc.RootElement;
+        Require(root.GetProperty("schemaVersion").GetString() == "atas-collection-trades-1", "Collection schema");
+        Require(root.GetProperty("session").GetString() == "NewYork", "Session");
+        var timezone = root.GetProperty("timezone").GetString();
+        Require(timezone is "Eastern Standard Time" or "America/New_York", "Timezone");
+        Require(root.GetProperty("jobs").TryGetProperty(jobId, out var job), "Job not in manifest: " + jobId);
+        Require(job.GetProperty("status").GetString() == "committed", "Job not committed");
+        Require(job.GetProperty("coverageStatus").GetString() == "complete", "Incomplete coverage");
+        var window = job.GetProperty("window");
+        Require(window.GetProperty("interval").GetString() == "[start, end)", "Window interval");
+        string start = window.GetProperty("start").GetString()!, end = window.GetProperty("end").GetString()!;
+        bool hasBefore = job.TryGetProperty("byteOffsetBefore", out var ob), hasAfter = job.TryGetProperty("byteOffsetAfter", out var oa);
+        Require(hasBefore && hasAfter, "Job byte offsets missing");
+        long sliceStart = ob.GetInt64(), sliceEnd = oa.GetInt64();
+        Require(sliceStart >= 0 && sliceEnd > sliceStart, "Job byte offsets invalid");
+        string recordingId = job.GetProperty("recordingId").GetString() ?? "", runId = job.GetProperty("runId").GetString() ?? "";
+        long expectedRows = job.GetProperty("rowsAppended").GetInt64();
+        var expected = job.GetProperty("trades");
+        Require(expected.GetProperty("rows").GetInt64() == expectedRows, "Job rows mismatch (manifest)");
+        var csv = root.GetProperty("csv");
+        Require(sliceEnd <= csv.GetProperty("committedBytes").GetInt64(), "Job slice beyond committedBytes");
+        string path = Path.GetFullPath(csv.GetProperty("path").GetString()!, Path.GetDirectoryName(Path.GetFullPath(manifestPath))!);
+
+        using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1 << 16);
+        Require(file.Length >= csv.GetProperty("committedBytes").GetInt64(), "CSV shorter than committedBytes (truncated or replaced)");
+        // Kopfzeile (Spaltennamen) vom Dateianfang.
+        string headerLine = ReadFirstLine(file, out long headerBytes);
+        var header = headerLine.Split(',');
+        var columns = header.Select((name, i) => (name, i)).ToDictionary(x => x.name, x => x.i);
+        foreach (var name in new[] { "job_id", "recording_id", "run_id", "t_market_utc", "instrument", "price", "volume", "aggressor_side" })
+            Require(columns.ContainsKey(name), "Missing column: " + name);
+        // Abschnitt muss an Zeilengrenzen liegen (Anfang direkt nach '\n' bzw. Dateianfang mit Kopfzeile, Ende auf '\n').
+        if (sliceStart > 0) { Require(sliceStart >= headerBytes, "Job slice overlaps header"); Require(ByteAt(file, sliceStart - 1) == (byte)'\n', "Job slice does not start at a line boundary"); }
+        Require(ByteAt(file, sliceEnd - 1) == (byte)'\n', "Job slice does not end at a line boundary");
+
+        file.Position = sliceStart;
+        using var hashing = new HashingSliceStream(file, sliceEnd - sliceStart);
+        using var parser = new TextFieldParser(hashing) { TextFieldType = FieldType.Delimited, TrimWhiteSpace = false };
+        parser.SetDelimiters(",");
+        if (sliceStart == 0)
+        {
+            var h = parser.ReadFields() ?? throw new InvalidDataException("Missing CSV header");
+            Require(h.SequenceEqual(header), "CSV header mismatch");
+        }
+        var ticks = new List<MarketTick>();
+        decimal buy = 0, sell = 0;
+        string? previous = null;
+        while (!parser.EndOfData)
+        {
+            var fields = parser.ReadFields()!;
+            Require(fields.Length == header.Length, "CSV field count");
+            string Get(string name) => fields[columns[name]];
+            Require(Get("job_id") == jobId, "Foreign job inside job slice");
+            Require(Get("instrument") == "MNQ", "Instrument must be MNQ");
+            Require(Get("recording_id") == recordingId && Get("run_id") == runId, "Recording/run identity mismatch");
+            string rawTime = Get("t_market_utc");
+            var timestamp = ParseNanoseconds(rawTime);
+            Require(string.CompareOrdinal(rawTime, start) >= 0 && string.CompareOrdinal(rawTime, end) < 0, "Tick outside manifest window");
+            Require(previous is null || string.CompareOrdinal(rawTime, previous) >= 0, "Nonchronological ticks");
+            previous = rawTime;
+            decimal price = decimal.Parse(Get("price"), NumberStyles.AllowDecimalPoint | NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture);
+            decimal volume = decimal.Parse(Get("volume"), NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture);
+            Require(price > 0 && volume > 0, "Invalid price/volume");
+            var side = Get("aggressor_side").ToLowerInvariant() switch
+            {
+                "buy" => AggressorSide.Buy,
+                "sell" => AggressorSide.Sell,
+                _ => throw new InvalidDataException("InsufficientData: missing/invalid aggressor classification")
+            };
+            if (side == AggressorSide.Buy) buy += volume; else sell += volume;
+            ticks.Add(new MarketTick { Symbol = "MNQ", Timestamp = timestamp, Price = price, Volume = volume, Aggressor = side });
+        }
+        Require(hashing.Remaining == 0, "Job slice not fully read");
+        Require(ticks.Count > 0 && ticks.Count == expectedRows, "Imported rows mismatch");
+        Require(buy == expected.GetProperty("buyVolume").GetDecimal() && sell == expected.GetProperty("sellVolume").GetDecimal()
+            && buy + sell == expected.GetProperty("totalVolume").GetDecimal() && expected.GetProperty("unknownVolume").GetDecimal() == 0, "Volume reconciliation failed");
+        string sliceSha = hashing.HashHex();
+        var evidence = new Dictionary<string, string>
+        {
+            ["mode"] = "atas-collection-job-slice", ["collection.manifest"] = Path.GetFullPath(manifestPath), ["collection.jobId"] = jobId,
+            ["slice.bytes"] = $"[{sliceStart}, {sliceEnd})", ["slice.sha256"] = sliceSha,
+            ["window.fromUtc"] = start, ["window.toUtc"] = end, ["window.interval"] = "[start, end)",
+            ["import.rows"] = ticks.Count.ToString(CultureInfo.InvariantCulture),
+            ["import.reconciliation"] = "job rows and buy/sell/total volumes matched; every row belongs to this job; no deduplication",
+        };
+        return new SliceResult(new ImportedMarketDataSet
+        {
+            Symbol = "MNQ", SourceType = MarketDataSourceType.AggressorTick, Ticks = ticks,
+            Quality = new OrderFlowDataQualityReport { SourceType = MarketDataSourceType.AggressorTick, RowsRead = ticks.Count, RowsAccepted = ticks.Count },
+            Capabilities = new OrderFlowCapabilities { SupportsDeltaCvd = true, SupportsAbsorption = true, SupportsBarImbalance = true }
+        }, path, sliceStart, sliceEnd, sliceSha, recordingId, runId, evidence);
+    }
+
+    /// <summary>SHA-256 eines Byte-Abschnitts (Änderungsnachweis ohne Parsen).</summary>
+    public static string HashSlice(string csvPath, long sliceStart, long sliceEnd)
+    {
+        using var file = new FileStream(csvPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1 << 16);
+        Require(file.Length >= sliceEnd, "CSV shorter than job slice");
+        file.Position = sliceStart;
+        using var s = new HashingSliceStream(file, sliceEnd - sliceStart);
+        var buf = new byte[1 << 20];
+        while (s.Read(buf, 0, buf.Length) > 0) { }
+        return s.HashHex();
+    }
+
+    private static string ReadFirstLine(FileStream file, out long bytes)
+    {
+        file.Position = 0;
+        var acc = new List<byte>(256);
+        int b;
+        while ((b = file.ReadByte()) >= 0 && b != '\n')
+        {
+            acc.Add((byte)b);
+            Require(acc.Count < 1 << 16, "CSV header too long");
+        }
+        Require(b == '\n', "CSV header not terminated");
+        bytes = acc.Count + 1;
+        return System.Text.Encoding.UTF8.GetString(acc.ToArray()).TrimEnd('\r');
+    }
+
+    private static int ByteAt(FileStream file, long position)
+    {
+        file.Position = position;
+        return file.ReadByte();
+    }
+
+    /// <summary>Liest höchstens <c>length</c> Bytes ab der aktuellen Position und hasht dabei alles Gelesene.</summary>
+    private sealed class HashingSliceStream(Stream inner, long length) : Stream
+    {
+        private readonly IncrementalHash _hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        public long Remaining { get; private set; } = length;
+        public string HashHex() => Convert.ToHexString(_hash.GetHashAndReset()).ToLowerInvariant();
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            if (Remaining <= 0) return 0;
+            int n = inner.Read(buffer, offset, (int)Math.Min(count, Remaining));
+            if (n <= 0) throw new EndOfStreamException("CSV ended inside job slice");
+            _hash.AppendData(buffer, offset, n);
+            Remaining -= n;
+            return n;
+        }
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        protected override void Dispose(bool disposing) { if (disposing) _hash.Dispose(); base.Dispose(disposing); }
+    }
+
     private static DateTimeOffset ParseNanoseconds(string value)
     {
         Require(value.Length == 30 && value[19] == '.' && value[29] == 'Z'

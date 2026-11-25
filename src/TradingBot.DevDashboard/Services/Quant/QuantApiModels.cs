@@ -64,6 +64,12 @@ public sealed record QuantWalkForwardRequest
     public bool SessionAligned { get; init; }
     public int TrainSessions { get; init; }
     public int TestSessions { get; init; }
+    /// <summary>Session-Kalender bei <see cref="SessionAligned"/>: "orb" (09:30 ET, reguläre US-Handelstage; Standard) oder
+    /// "tradedate" (CME-Handelstag, Beginn 17:00 Chicago-Zeit) — beides nur aus Zeitstempeln bestimmt.</summary>
+    public string SessionCalendar { get; init; } = "orb";
+    /// <summary>Mindesttradezahl je TRAININGSabschnitt. Ein Kandidat mit weniger Trades nimmt an der Auswahl dieses
+    /// Fensters nicht teil (vorab festgelegt; 0 = keine Untergrenze).</summary>
+    public int MinTrainTrades { get; init; }
 
     /// <summary>Kandidaten-Parametersätze. Die Auswahl je Fenster erfolgt ausschließlich im Training.</summary>
     public IReadOnlyList<Dictionary<string, string>> Candidates { get; init; } = Array.Empty<Dictionary<string, string>>();

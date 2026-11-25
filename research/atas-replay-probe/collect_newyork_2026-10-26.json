@@ -1,0 +1,14 @@
+{
+  "_hinweis": "EIN vollstaendiges NewYork-Sessionfenster (benutzerdefiniert, Europe/Berlin) bei 100x. 15:30-18:00 Berlin == 14:30-17:00 UTC (DST-korrekt via TimeZoneInfo).",
+  "session": "NewYork",
+  "year": 2026,
+  "timezone": "W. Europe Standard Time",
+  "speed": "100x",
+  "collectionDir": "F:\\ATAS_Data\\Collections\\MNQ_NewYork_1530-1800_Europe-Berlin_2026-10-26_bis_2026-10-26",
+  "python": "python",
+  "collectorScript": "A:\\Projects\\FuturesOrderflowBot\\research\\data-bridge\\atas_collect.py",
+  "keepRecorderAttached": false,
+  "windows": [
+    { "startBerlin": "26.10.2026 15:30:00", "endBerlin": "26.10.2026 18:00:00" }
+  ]
+}

@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mehrstrategie-Prototyp</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --line:#2a2f3a;
+    --fg:#e6e9ef; --mut:#9aa3b2; --accent:#4da3ff;
+    --s0:#4da3ff; --s1:#ffb454; --s2:#c08cff;
+    --pos:#3fb950; --neg:#f06a6a; --warn:#e3b341;
+  }
+  @media (prefers-color-scheme: light){
+    :root:not([data-theme="dark"]){
+      --bg:#f6f7f9; --panel:#ffffff; --panel2:#f0f2f5; --line:#e2e6ec;
+      --fg:#1b2027; --mut:#5a6472; --accent:#1769d6;
+      --s0:#1769d6; --s1:#c7791b; --s2:#7b4fd0;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;padding:16px}
+  .wrap{max-width:1000px;margin:0 auto}
+  h1{font-size:20px;margin:0 0 2px}
+  .sub{color:var(--mut);font-size:12px;margin-bottom:14px}
+  .banner{background:rgba(227,179,65,.12);border:1px solid var(--warn);border-radius:10px;padding:10px 14px;margin-bottom:14px}
+  .banner b{color:var(--warn)}
+  .banner ul{margin:6px 0 0;padding-left:18px;color:var(--mut);font-size:12.5px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
+  .card .k{color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+  .card .v{font-size:15px;margin-top:2px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:14px}
+  .panel h2{font-size:14px;margin:0 0 10px;color:var(--fg)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:right;padding:6px 8px;border-bottom:1px solid var(--line)}
+  th:first-child,td:first-child{text-align:left}
+  th{color:var(--mut);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.03em}
+  .pos{color:var(--pos)} .neg{color:var(--neg)}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:middle}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px;font-size:12.5px;color:var(--mut)}
+  select{background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:13px}
+  .scroll{max-height:320px;overflow:auto;border:1px solid var(--line);border-radius:8px}
+  .mono{font-variant-numeric:tabular-nums}
+  svg{display:block;width:100%;height:auto}
+  .foot{color:var(--mut);font-size:11.5px;margin-top:10px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Mehrstrategie-Prototyp — lokale Ergebnisansicht</h1>
+  <div class="sub" id="sub"></div>
+  <div class="banner" id="banner"></div>
+  <div class="grid" id="meta"></div>
+
+  <div class="panel">
+    <h2>Equity-Kurven (getrennte Ledgers, gleiche Datenbasis)</h2>
+    <div class="legend" id="legend"></div>
+    <div id="chart"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Ergebnis je Strategie</h2>
+    <table id="summary"><thead><tr>
+      <th>Strategie</th><th>Nutzt OF</th><th>Trades</th><th>Brutto</th><th>Gebühren</th><th>Netto-PnL</th><th>End-Equity</th>
+    </tr></thead><tbody></tbody></table>
+  </div>
+
+  <div class="panel">
+    <h2>Trades <select id="pick"></select></h2>
+    <div class="scroll"><table id="trades"><thead><tr>
+      <th>#</th><th>Richtung</th><th>Entry</th><th>Entry-Preis</th><th>Exit</th><th>Exit-Preis</th><th>Netto</th>
+    </tr></thead><tbody></tbody></table></div>
+    <div class="foot" id="tfoot"></div>
+  </div>
+
+  <div class="foot" id="prov"></div>
+</div>
+
+<script>window.DATA = __DATA_JSON__;</script>
+<script>
+(function(){
+  const D = window.DATA;
+  const COL = ['var(--s0)','var(--s1)','var(--s2)'];
+  const eur = n => (n<0?'−':'') + Math.abs(n).toFixed(2);
+  const cls = n => n>0?'pos':(n<0?'neg':'');
+
+  document.getElementById('sub').textContent =
+    `${D.config.symbol} · Fenster ${D.window.start.slice(11,19)}–${D.window.end.slice(11,19)} UTC (23.06.2026) · `+
+    `${D.data.ticks.toLocaleString('de')} Ticks → ${D.data.fullBars} volle ${D.config.ticksPerBar}-Tick-Bars (+${D.data.remainderTicks} Rest-Ticks ausgeschlossen)`;
+
+  document.getElementById('banner').innerHTML =
+    '<b>⚠ Technischer Funktionsnachweis — keine Profitabilitätsaussage.</b>'+
+    '<ul>'+D.caveats.map(c=>'<li>'+c+'</li>').join('')+'</ul>';
+
+  const meta = [
+    ['Instrument', D.config.symbol+' (CME)'],
+    ['Startkapital', eur(D.config.initialCapital)+' $ je Strategie'],
+    ['Gebühr', D.config.feePerSide.toFixed(2)+' $/Kontrakt/Seite'],
+    ['Slippage', D.config.slippageTicks+' Tick adverse'],
+    ['PointValue', D.config.pointValue.toFixed(2)+' $/Pkt'],
+    ['Ausführung', 'Signal @ Bar-Close → Fill @ next Open'],
+  ];
+  document.getElementById('meta').innerHTML = meta.map(m=>
+    `<div class="card"><div class="k">${m[0]}</div><div class="v mono">${m[1]}</div></div>`).join('');
+
+  // Legend
+  document.getElementById('legend').innerHTML = D.strategies.map((s,i)=>
+    `<span><span class="dot" style="background:${COL[i]}"></span>${s.name} · End ${eur(s.finalEquity)} $</span>`).join('');
+
+  // Equity chart (SVG)
+  const W=940,H=320,PL=60,PR=14,PT=12,PB=26;
+  const pts = D.strategies.map(s=>s.equity.map(p=>({x:Date.parse(p.t),y:+p.e})));
+  const xs = pts.flat().map(p=>p.x), ys = pts.flat().map(p=>p.y);
+  const x0=Math.min(...xs), x1=Math.max(...xs);
+  let y0=Math.min(...ys,D.config.initialCapital), y1=Math.max(...ys,D.config.initialCapital);
+  const pad=(y1-y0)*0.08||10; y0-=pad; y1+=pad;
+  const X=v=>PL+(v-x0)/(x1-x0||1)*(W-PL-PR);
+  const Y=v=>PT+(1-(v-y0)/(y1-y0||1))*(H-PT-PB);
+  let svg=`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img">`;
+  // y gridlines
+  const ticks=5;
+  for(let i=0;i<=ticks;i++){const yv=y0+(y1-y0)*i/ticks;const yy=Y(yv);
+    svg+=`<line x1="${PL}" y1="${yy}" x2="${W-PR}" y2="${yy}" stroke="var(--line)" stroke-width="1"/>`;
+    svg+=`<text x="${PL-8}" y="${yy+4}" fill="var(--mut)" font-size="11" text-anchor="end">${Math.round(yv).toLocaleString('de')}</text>`;}
+  // baseline (start capital)
+  const yb=Y(D.config.initialCapital);
+  svg+=`<line x1="${PL}" y1="${yb}" x2="${W-PR}" y2="${yb}" stroke="var(--mut)" stroke-dasharray="4 4" stroke-width="1"/>`;
+  // x labels (start/end)
+  const fmt=ms=>new Date(ms).toISOString().slice(11,19);
+  svg+=`<text x="${PL}" y="${H-8}" fill="var(--mut)" font-size="11">${fmt(x0)}</text>`;
+  svg+=`<text x="${W-PR}" y="${H-8}" fill="var(--mut)" font-size="11" text-anchor="end">${fmt(x1)}</text>`;
+  // lines
+  pts.forEach((p,i)=>{
+    const d=p.map((q,j)=>(j?'L':'M')+X(q.x).toFixed(1)+' '+Y(q.y).toFixed(1)).join(' ');
+    svg+=`<path d="${d}" fill="none" stroke="${COL[i]}" stroke-width="2" stroke-linejoin="round"/>`;
+  });
+  svg+='</svg>';
+  document.getElementById('chart').innerHTML=svg;
+
+  // Summary
+  document.querySelector('#summary tbody').innerHTML = D.strategies.map((s,i)=>
+    `<tr>
+       <td><span class="dot" style="background:${COL[i]}"></span>${s.name}</td>
+       <td>${s.usesOrderflow?'ja (Delta/Bid/Ask)':'nein'}</td>
+       <td class="mono">${s.trades}</td>
+       <td class="mono ${cls(s.gross)}">${eur(s.gross)}</td>
+       <td class="mono">${s.fees.toFixed(2)}</td>
+       <td class="mono ${cls(s.netPnL)}">${eur(s.netPnL)} $</td>
+       <td class="mono">${eur(s.finalEquity)} $</td>
+     </tr>`).join('');
+
+  // Trades selector
+  const pick=document.getElementById('pick');
+  pick.innerHTML=D.strategies.map((s,i)=>`<option value="${i}">${s.name}</option>`).join('');
+  function renderTrades(i){
+    const s=D.strategies[i];
+    document.querySelector('#trades tbody').innerHTML=s.tradeList.map((t,j)=>
+      `<tr>
+         <td class="mono">${j+1}</td>
+         <td style="color:${t.dir>0?'var(--pos)':'var(--neg)'}">${t.dir>0?'LONG':'SHORT'}${t.eod?' · EoD':''}</td>
+         <td class="mono">${t.entry}</td><td class="mono">${(+t.entryPrice).toFixed(2)}</td>
+         <td class="mono">${t.exit}</td><td class="mono">${(+t.exitPrice).toFixed(2)}</td>
+         <td class="mono ${cls(t.net)}">${eur(t.net)}</td>
+       </tr>`).join('');
+    const eod=s.tradeList.filter(t=>t.eod).length;
+    document.getElementById('tfoot').textContent=`${s.trades} Trades (davon ${eod} EndOfData-Exit). Teilbar nicht signalgebend.`;
+  }
+  pick.onchange=()=>renderTrades(+pick.value);
+  renderTrades(0);
+
+  document.getElementById('prov').textContent =
+    `Quelle: ${D.dataFile} · erzeugt ${D.generatedUtc.slice(0,19).replace('T',' ')} UTC · `+
+    `reproduzierbar (zweiter Lauf identisch), Ledgers isoliert (solo==kombiniert). Nativer Footprint & DOM NICHT als Eingabe genutzt.`;
+})();
+</script>
+</body>
+</html>

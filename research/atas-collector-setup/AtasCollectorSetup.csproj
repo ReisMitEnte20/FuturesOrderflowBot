@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Setup.exe des ATAS Session Collectors. Installiert die Dateien aus dem Ordner 'payload' NEBEN der Setup.exe
+    (Oberflaeche, Probe, Bridge, private Python-Laufzeit, Recorder), stellt alle Komponenten auf denselben Datenordner
+    ein und prueft das Ergebnis. Bewusst NICHT Teil von TradingBot.sln. Paketierung: build-package.ps1.
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>Setup</AssemblyName>
+    <RootNamespace>AtasCollectorSetup</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <Version>1.5.0</Version>
+    <Product>ATAS Session Collector Setup</Product>
+    <Deterministic>true</Deterministic>
+    <ApplicationHighDpiMode>SystemAware</ApplicationHighDpiMode>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="../recorder-core/SharedDataRoot.cs" Link="SharedDataRoot.cs" />
+  </ItemGroup>
+
+</Project>

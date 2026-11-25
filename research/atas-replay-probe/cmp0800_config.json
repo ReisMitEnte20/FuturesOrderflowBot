@@ -1,0 +1,14 @@
+{
+  "_hinweis": "Einzelfenster-Aufnahme bei 100x fuer den 1x/100x-Vergleich (eigene Vergleichs-Collection, getrennt vom Sammellauf).",
+  "session": "_cmp0800",
+  "year": 2026,
+  "timezone": "W. Europe Standard Time",
+  "speed": "100x",
+  "collectionDir": "F:\\ATAS_Data\\Collections\\_cmp0800_2026",
+  "python": "python",
+  "collectorScript": "A:\\Projects\\FuturesOrderflowBot\\research\\data-bridge\\atas_collect.py",
+  "keepRecorderAttached": false,
+  "windows": [
+    { "startBerlin": "26.10.2026 09:00:00", "endBerlin": "26.10.2026 09:01:00" }
+  ]
+}

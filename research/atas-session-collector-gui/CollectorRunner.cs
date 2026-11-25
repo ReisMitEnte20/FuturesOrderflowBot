@@ -64,8 +64,16 @@ public sealed class CollectorRunner
     private Process? _current;
     private volatile bool _stopRequested;
 
-    /// <summary>Kontrolliert stoppen: wirkt nach dem aktuell laufenden Fenster. KEIN Prozess-Kill.</summary>
-    public void RequestStop() => _stopRequested = true;
+    private string? _stopFile;
+
+    /// <summary>Kontrolliert stoppen: die laufende Aufnahme-Steuerung erhaelt die Anforderung ueber eine Datei
+    /// (ATAS_COLLECTOR_STOPFILE) und beendet die Wiedergabe sofort mit sauberem Abschluss (Replay verlassen, Recorder
+    /// entfernen, Writer abschliessen); danach startet kein weiteres Fenster. KEIN Prozess-Kill.</summary>
+    public void RequestStop()
+    {
+        _stopRequested = true;
+        try { if (_stopFile != null) File.WriteAllText(_stopFile, DateTime.Now.ToString("o")); } catch { }
+    }
 
     /// <summary>Not-Aus: toetet den laufenden Probe-Prozess SAMT Kindprozessen (Python) sofort.
     /// KEIN sauberes Finalisieren. ATAS (OFT.Platform) ist NICHT Teil dieses Prozessbaums und bleibt unberuehrt.</summary>
@@ -81,11 +89,13 @@ public sealed class CollectorRunner
     {
         _stopRequested = false;
         Directory.CreateDirectory(plan.CollectionDir);
+        _stopFile = Path.Combine(Path.GetDirectoryName(plan.RecordingsDir) ?? plan.CollectionDir, "Logs", "stop.request");
+        try { Directory.CreateDirectory(Path.GetDirectoryName(_stopFile)!); if (File.Exists(_stopFile)) File.Delete(_stopFile); } catch { }
         string combined = Path.Combine(plan.CollectionDir, "run_protocol.txt");
         AppendCombined(combined, $"\n================ GUI-SAMMELLAUF  {DateTime.Now:yyyy-MM-dd HH:mm:ss} ================\n" +
             $"Instrument={plan.Instrument}  Session={plan.Session.Name} ({plan.Session.TzIana})  Speed={plan.Speed}\n" +
             $"Angeforderter Bereich (Soll): {plan.From:yyyy-MM-dd} bis {plan.To:yyyy-MM-dd} (inklusive)\n" +
-            $"Aufnahmefenster (Session-Lokalzeit): {plan.Session.LocalStart:hh\\:mm}–{plan.Session.LocalEnd:hh\\:mm} {plan.Session.TzIana}\n" +
+            $"Aufnahmefenster (Session-Lokalzeit): {plan.Session.LocalStart:hh\\:mm\\:ss}–{plan.Session.LocalEnd:hh\\:mm\\:ss} {plan.Session.TzIana}\n" +
             $"Collection: {plan.CollectionDir}\n");
 
         long csvBefore = CsvBytes(plan);
@@ -209,7 +219,12 @@ public sealed class CollectorRunner
             python = plan.Python,
             collectorScript = plan.CollectorScript,
             keepRecorderAttached = false,
-            windows = new[] { new { startBerlin = day.BerlinStartString, endBerlin = day.BerlinEndString } },
+            // UTC-Grenzen sind verbindlich; die Probe rechnet sie selbst in die Zeitzone des ATAS-Datumsdialogs um und prueft
+            // den von ATAS bestaetigten Ladebereich. Session-Lokalzeit nur zur Nachvollziehbarkeit.
+            windows = new[] { new {
+                startUtc = day.UtcStart.ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture),
+                endUtc = day.UtcEnd.ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture),
+                sessionLocal = $"{day.LocalStart:yyyy-MM-dd HH:mm:ss}..{day.LocalEnd:HH:mm:ss} {plan.Session.TzIana}" } },
         };
         File.WriteAllText(path, JsonSerializer.Serialize(cfg, new JsonSerializerOptions { WriteIndented = true }));
     }
@@ -227,6 +242,7 @@ public sealed class CollectorRunner
         };
         // Portabel: Rohaufnahme-Ordner unter dem gewaehlten Datenordner an die Probe uebergeben (kein festes F:).
         psi.Environment["ATAS_RECORDINGS_DIR"] = recordingsDir;
+        if (_stopFile != null) psi.Environment["ATAS_COLLECTOR_STOPFILE"] = _stopFile;
         psi.ArgumentList.Add("collect");
         psi.ArgumentList.Add(cfgPath);
         psi.ArgumentList.Add(protoPath);
@@ -243,12 +259,12 @@ public sealed class CollectorRunner
         return p.ExitCode;
     }
 
-    private static DayResult Classify(DayPlan day, int rc, bool sawSkip, string appendJson, double runtimeSec)
+    internal static DayResult Classify(DayPlan day, int rc, bool sawSkip, string appendJson, double runtimeSec)
     {
         if (sawSkip)
             return new DayResult(day.Date, DayOutcome.Reused, 0, 0, 0, 0, runtimeSec, "bereits committed – wiederverwendet (kein Doppel-Anhaengen)");
 
-        string result = "";
+        string result = "", note = "";
         long rows = 0, vol = 0, buy = 0, sell = 0;
         if (appendJson != "")
         {
@@ -257,6 +273,8 @@ public sealed class CollectorRunner
                 using var doc = JsonDocument.Parse(appendJson);
                 var r = doc.RootElement;
                 result = r.TryGetProperty("result", out var vr) ? (vr.GetString() ?? "") : "";
+                // Grund der Bruecke bei 'check' (z.B. Recorder-Drops mit beiden Tick-Datei-Zahlen) sichtbar machen.
+                note = r.TryGetProperty("note", out var vn) && vn.ValueKind == JsonValueKind.String ? (vn.GetString() ?? "") : "";
                 if (r.TryGetProperty("trades", out var t) && t.ValueKind == JsonValueKind.Object)
                 {
                     rows = t.TryGetProperty("rows", out var vrr) ? vrr.GetInt64() : 0;
@@ -269,7 +287,7 @@ public sealed class CollectorRunner
         }
 
         if (rc != 0)
-            return new DayResult(day.Date, DayOutcome.Failed, rows, vol, buy, sell, runtimeSec, $"Probe rc={rc}, result='{result}'");
+            return new DayResult(day.Date, DayOutcome.Failed, rows, vol, buy, sell, runtimeSec, $"Probe rc={rc}, result='{result}'" + (note == "" ? "" : " - " + note));
         if (result == "committed" && rows > 0)
             return new DayResult(day.Date, DayOutcome.Ok, rows, vol, buy, sell, runtimeSec, "committed");
         if (result is "empty" || (result == "committed" && rows == 0))
@@ -337,7 +355,7 @@ public sealed class CollectorRunner
         sb.AppendLine("== Angefordert (Soll) ==");
         sb.AppendLine($"Instrument : {plan.Instrument}");
         sb.AppendLine($"Session    : {plan.Session.Name} ({plan.Session.DisplayName}) / {plan.Session.TzIana}");
-        sb.AppendLine($"Fenster    : {plan.Session.LocalStart:hh\\:mm}–{plan.Session.LocalEnd:hh\\:mm} Session-Lokalzeit");
+        sb.AppendLine($"Fenster    : {plan.Session.LocalStart:hh\\:mm\\:ss}–{plan.Session.LocalEnd:hh\\:mm\\:ss} Session-Lokalzeit");
         sb.AppendLine($"Bereich    : {plan.From:yyyy-MM-dd} bis {plan.To:yyyy-MM-dd} (inklusive)");
         sb.AppendLine($"Geschw.    : {plan.Speed}");
         int planned = plan.RecordDays.Count, skipped = plan.AllDays.Count - planned;

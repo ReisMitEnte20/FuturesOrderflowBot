@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <AssemblyName>OrderFlowReplayRecorder</AssemblyName>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="OrderFlowReplayRecorder.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="ATAS.Indicators"><HintPath>C:\Program Files (x86)\ATAS Platform\ATAS.Indicators.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="ATAS.DataFeedsCore"><HintPath>C:\Program Files (x86)\ATAS Platform\ATAS.DataFeedsCore.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="ATAS.Types"><HintPath>C:\Program Files (x86)\ATAS Platform\ATAS.Types.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="OFT.Core"><HintPath>C:\Program Files (x86)\ATAS Platform\OFT.Core.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="OFT.Rendering"><HintPath>C:\Program Files (x86)\ATAS Platform\OFT.Rendering.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="OFT.Attributes"><HintPath>C:\Program Files (x86)\ATAS Platform\OFT.Attributes.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="OFT.Models"><HintPath>C:\Program Files (x86)\ATAS Platform\OFT.Models.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Utils.Common"><HintPath>C:\Program Files (x86)\ATAS Platform\Utils.Common.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+</Project>

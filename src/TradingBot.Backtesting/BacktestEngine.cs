@@ -58,7 +58,7 @@ public sealed class BacktestEngine : IBacktestEngine
 
         decimal slippageTicks = request.Config.SlippageTicksOverride ?? request.Fee.EstimatedSlippageTicks;
         var fillModel = new FillModel();
-        var adapter = new BacktestExecutionAdapter(fillModel, request.Instrument, slippageTicks, request.RejectOrder);
+        var adapter = new BacktestExecutionAdapter(fillModel, request.Instrument, slippageTicks, request.RejectOrder, request.Config.FillDelayTicks);
 
         var context = new BacktestOrderContextProvider(
             request.Instrument, request.Fee, request.Broker, request.Risk, dailyState, positions, clock);

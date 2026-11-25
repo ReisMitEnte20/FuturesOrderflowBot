@@ -1,0 +1,16 @@
+# Vorlage für einen BENANNTEN Cloudflare-Tunnel (KEIN Quick-Tunnel) vor die schreibgeschützte Demo-Vorschau.
+# Voraussetzung: eigener Cloudflare-Account + eine bei Cloudflare verwaltete Domain + Zero Trust (Access).
+# Kopieren nach  ~/.cloudflared/config.yml  und <TUNNEL-ID> / <deine-domain> einsetzen.
+#
+# WICHTIG: Bevor der Tunnel läuft, im Zero-Trust-Dashboard eine ACCESS-APPLICATION für den Hostnamen anlegen
+# (Policy: nur erlaubte E-Mails), sonst wäre der Ursprung ungeschützt öffentlich.
+
+tunnel: <TUNNEL-ID>
+credentials-file: C:\Users\<DEIN-USER>\.cloudflared\<TUNNEL-ID>.json
+
+ingress:
+  # Der Tunnel zeigt ausschließlich auf den lokalen, schreibgeschützten Demo-Proxy (Port 8088),
+  # NICHT direkt auf Backend :5034 oder das Dev-Frontend :5899.
+  - hostname: research-demo.<deine-domain>
+    service: http://127.0.0.1:8088
+  - service: http_status:404

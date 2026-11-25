@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { FootprintChart, type FpBar } from "@/components/research/FootprintChart";
 import { CandleProfileChart, type Bubble } from "@/components/research/CandleProfileChart";
 import { FlowPanels } from "@/components/research/FlowPanels";
@@ -6,6 +6,8 @@ import type { ChartTrade } from "@/lib/replay";
 import {
   type WorkspaceData, type WsTrade, type WsRunIndexEntry, cvdSeries, vwapSeries, volumeProfile, barPriceOccupancy, tradeBubbles, buildSnapshot, isAvailable, tapeCoverage,
 } from "@/lib/workspace";
+import { makeFocus, runCosts, runReplayTarget, type ReplayFocus } from "@/lib/tradeReplay";
+import { TradeJournal, TradeCalc, SignalFacts, ExitFacts, fmtEt } from "@/components/research/TradeJournal";
 
 const KEY = "#3cf0a0", RED = "#f0566a";
 const eur = (n: number) => (n < 0 ? "−" : "") + "$" + Math.abs(n).toFixed(2);
@@ -20,8 +22,10 @@ const DEFAULT: Layout = {
   maximized: false, bubbleMinVol: 10,
 };
 
-export function ResearchWorkspace() {
+export function ResearchWorkspace({ onOpenInReplay }: { onOpenInReplay?: (f: ReplayFocus) => void } = {}) {
   const [d, setD] = useState<WorkspaceData | null>(null);
+  const replayKey = useRef(0);
+  const [showJournal, setShowJournal] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [stratIdx, setStratIdx] = useState(1);
   const [selected, setSelected] = useState<number | null>(null);
@@ -141,6 +145,10 @@ export function ResearchWorkspace() {
   const goTrade = (delta: number) => { if (!tradeIdx.length) return; const np = curPos < 0 ? (delta > 0 ? 0 : tradeIdx.length - 1) : (curPos + delta + tradeIdx.length) % tradeIdx.length; pick(tradeIdx[np]); };
   const posCol = (s?: string) => (s === "Flat" || !s ? "var(--fg-faint)" : s === "Long" ? KEY : RED);
   const startBal = d.provenance?.startingBalance;
+  const runLabel = runId || src || "unbekannt";
+  const replayTarget = runReplayTarget(d);
+  const replayBlocked = !onOpenInReplay ? "Replay-Ansicht nicht eingebunden" : replayTarget.why;
+  const costs = runCosts(d);
 
   const inner = (
     <div className={`flex flex-col gap-2 ${lay.maximized ? "fixed inset-0 z-50 bg-[#020d1e] p-3 overflow-auto" : ""}`}>
@@ -257,6 +265,30 @@ export function ResearchWorkspace() {
                 <button onClick={() => tgl("modules", "status")} className="ml-auto text-[var(--key)]">Details</button>
               </div>}
         </div>
+      </div>
+
+      {/* 5. Trade-Journal (rueckblickend) mit Sprung ins Tick-Replay + Ergebnisrechnung des ausgewaehlten Trades */}
+      <div className="border border-[var(--line)] rounded-lg bg-[#051327]">
+        <button onClick={() => setShowJournal((s) => !s)} className="w-full px-2 py-1 text-left text-[10px] uppercase tracking-wide text-[var(--fg-faint)] border-b border-[var(--line)] bg-[var(--bg-2)]">
+          {showJournal ? "▾" : "▸"} Trade-Journal · {strat.name} · {strat.trades.length} abgeschlossene Trades · Lauf {runLabel}
+          {replayBlocked ? <span className="normal-case ml-2" style={{ color: RED }}>Replay: {replayBlocked}</span> : <span className="normal-case ml-2">Replay-Tag {replayTarget.day} (Collection-Job {replayTarget.jobId})</span>}
+        </button>
+        {showJournal && (
+          <div className="grid gap-2 p-2 grid-cols-1 2xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
+            <div style={{ height: 300 }}>
+              <TradeJournal trades={strat.trades} candidate={strat.name} selected={selected} onSelect={pick} replayBlocked={replayBlocked}
+                onReplay={(t) => onOpenInReplay?.(makeFocus(++replayKey.current, runLabel, d, strat.name, t))} />
+            </div>
+            <div className="text-[10.5px] mono border border-[var(--line)] rounded px-2 py-1.5 overflow-auto" style={{ maxHeight: 300 }} data-testid="journal-detail">
+              {selTrade ? <>
+                <div className="text-[var(--fg)] mb-1">Trade #{selTrade.index + 1} · <b style={{ color: sideCol(selTrade.side) }}>{selTrade.side}</b> · Entry {fmtEt(selTrade.entryTimeUtc, selTrade.entryTimeMs)} → Exit {fmtEt(selTrade.exitTimeUtc, selTrade.exitTimeMs)} ET (America/New_York) <span className="text-[var(--fg-faint)]">(rückblickend, abgeschlossen)</span></div>
+                <SignalFacts s={selTrade.entrySignal} bar={selTrade.entrySignal ? d.candles[selTrade.entrySignal.barIndex] : null} ticksPerBar={d.meta.ticksPerBar} label="Signal (Entry)" />
+                <ExitFacts t={selTrade} bar={selTrade.exitSignal ? d.candles[selTrade.exitSignal.barIndex] : null} ticksPerBar={d.meta.ticksPerBar} />
+                <div className="mt-1 border-t border-[var(--line)] pt-1"><TradeCalc t={selTrade} costs={costs} runId={runLabel} candidate={strat.name} /></div>
+              </> : <span className="text-[var(--fg-faint)]">Trade im Journal anklicken für die Ergebnisrechnung.</span>}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

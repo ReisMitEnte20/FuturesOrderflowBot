@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -21,6 +22,10 @@ public sealed class MainForm : Form
     private readonly TextBox _instrument = new() { Text = "MNQ", ReadOnly = true, Width = 90 };
     private readonly TextBox _output = new() { Text = "", Width = 360, ReadOnly = true };   // Datenordner (portabel, per Durchsuchen gewaehlt)
     private readonly Button _browse = new() { Text = "\u2026", Width = 32 };
+    // Benutzerdefinierter Zeitraum (nur aktiv bei Session "Benutzerdefiniert")
+    private readonly TextBox _cStart = new() { Text = "14:30:00", Width = 80 };
+    private readonly TextBox _cEnd = new() { Text = "14:32:00", Width = 80 };
+    private readonly ComboBox _cZone = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 170 };
 
     private readonly Label _summary = new() { AutoSize = false, Height = 54, Dock = DockStyle.Top, Padding = new Padding(4) };
     private readonly ListView _grid = new() { View = View.Details, FullRowSelect = true, GridLines = true, Dock = DockStyle.Fill };
@@ -36,6 +41,16 @@ public sealed class MainForm : Form
     private readonly ProgressBar _progress = new() { Dock = DockStyle.Top, Height = 18, Style = ProgressBarStyle.Continuous };
     private readonly TextBox _details = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill, Font = new Font(FontFamily.GenericMonospace, 8f), WordWrap = false };
 
+    // Speicher / Archivierung (laeuft nie parallel zu einem Sammellauf)
+    private readonly Button _arAnalyze = new() { Text = "Speicher analysieren", Width = 150, Height = 30 };
+    private readonly Button _arCompress = new() { Text = "Vorhandene Aufnahmen komprimieren", Width = 230, Height = 30 };
+    private readonly Button _arRestore = new() { Text = "Aufnahme wiederherstellen …", Width = 190, Height = 30 };
+    private readonly Button _arStop = new() { Text = "Archivierung abbrechen", Width = 160, Height = 30, Enabled = false };
+    private readonly CheckBox _arAuto = new() { Text = "Neue Aufnahmen automatisch nach dem Sammellauf komprimieren", AutoSize = true, Margin = new Padding(12, 8, 3, 3) };
+    private readonly CollectorOptions _options = CollectorOptions.Load();
+    private ArchiveRunner? _archive;
+    private bool _archiveBusy;
+
     private readonly Dictionary<DateOnly, ListViewItem> _rows = new();
     private CollectorRunner? _runner;
     private CancellationTokenSource? _cts;
@@ -44,9 +59,12 @@ public sealed class MainForm : Form
     public MainForm()
     {
         Text = $"ATAS-Session-Collector v{Program.AppVersion}";
-        Width = 1020; Height = 740; StartPosition = FormStartPosition.CenterScreen; MinimumSize = new Size(900, 600);
+        Width = 1080; Height = 820; StartPosition = FormStartPosition.CenterScreen; MinimumSize = new Size(900, 640);
 
         foreach (var s in SessionCalendar.Sessions) _session.Items.Add(s.DisplayName);
+        _session.Items.Add("Benutzerdefiniert (Uhrzeit + Zeitzone)");
+        foreach (var z in SessionCalendar.CustomZones) _cZone.Items.Add(z.Display);
+        _cZone.SelectedIndex = 0;
         _session.SelectedIndex = 0;
         _speed.Items.AddRange(new object[] { "0.1x", "0.3x", "0.5x", "1x", "5x", "10x", "100x", "1000x" });
         _speed.SelectedItem = "100x";
@@ -63,6 +81,9 @@ public sealed class MainForm : Form
         _to.ValueChanged += (_, _) => RefreshPreview();
         _session.SelectedIndexChanged += (_, _) => RefreshPreview();
         _speed.SelectedIndexChanged += (_, _) => RefreshPreview();
+        _cStart.TextChanged += (_, _) => RefreshPreview();
+        _cEnd.TextChanged += (_, _) => RefreshPreview();
+        _cZone.SelectedIndexChanged += (_, _) => RefreshPreview();
         _output.TextChanged += (_, _) => RefreshPreview();
         _browse.Click += (_, _) => BrowseOutput();
         _start.Click += async (_, _) => await StartRun(resume: false);
@@ -71,6 +92,12 @@ public sealed class MainForm : Form
         _openDir.Click += (_, _) => OpenDir();
         _copyRec.Click += (_, _) => CopyRecorderPath();
         _hardstop.Click += (_, _) => HardStop();
+        _arAuto.Checked = _options.autoArchiveAfterRun;
+        _arAuto.CheckedChanged += (_, _) => { _options.autoArchiveAfterRun = _arAuto.Checked; try { _options.Save(); } catch (Exception ex) { AppendDetail("Option nicht gespeichert: " + ex.Message); } };
+        _arAnalyze.Click += async (_, _) => await ArchiveAnalyze();
+        _arCompress.Click += async (_, _) => await ArchiveCompress(null, ask: true);
+        _arRestore.Click += async (_, _) => await ArchiveRestore();
+        _arStop.Click += (_, _) => { _archive?.RequestStop(); _arStop.Enabled = false; _stepLabel.Text = "Archivierung: Abbruch angefordert - aktuelle Datei wird verworfen, Original bleibt."; };
 
         RefreshPreview();
     }
@@ -152,12 +179,24 @@ public sealed class MainForm : Form
 
         Row("Von (Datum):", _from, "Bis (Datum):", _to);
         Row("Session:", _session, "Geschwindigkeit:", _speed);
+        var custom = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Margin = new Padding(0) };
+        custom.Controls.Add(new Label { Text = "Start", AutoSize = true, Margin = new Padding(3, 8, 3, 3) }); custom.Controls.Add(_cStart);
+        custom.Controls.Add(new Label { Text = "Ende", AutoSize = true, Margin = new Padding(3, 8, 3, 3) }); custom.Controls.Add(_cEnd);
+        custom.Controls.Add(new Label { Text = "(HH:mm:ss, je Tag)", AutoSize = true, Margin = new Padding(3, 8, 3, 3) });
+        Row("Benutzerdefiniert:", custom, "Zeitzone:", _cZone);
         var outPanel = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Margin = new Padding(0) };
         outPanel.Controls.Add(_output); outPanel.Controls.Add(_browse);
         Row("Instrument:", _instrument, "Datenordner:", outPanel);
 
         var runBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 48, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(8, 6, 8, 6) };
         runBar.Controls.AddRange(new Control[] { _start, _resume, _stop, _openDir, _copyRec, _hardstop });
+
+        var archiveBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 66, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(8, 2, 8, 2), WrapContents = true };
+        archiveBar.Controls.Add(new Label { Text = "Speicher / Archivierung:", AutoSize = true, Margin = new Padding(3, 9, 6, 3), Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold) });
+        archiveBar.Controls.AddRange(new Control[] { _arAnalyze, _arCompress, _arRestore, _arStop });
+        archiveBar.SetFlowBreak(_arStop, true);                 // Option in eigener Zeile (Text vollstaendig sichtbar)
+        _arAuto.Margin = new Padding(158, 2, 3, 3);
+        archiveBar.Controls.Add(_arAuto);
 
         _grid.Columns.Add("Datum", 90);
         _grid.Columns.Add("Status", 150);
@@ -182,12 +221,28 @@ public sealed class MainForm : Form
         split.Panel2.Controls.Add(_stepLabel);
 
         Controls.Add(split);
+        Controls.Add(archiveBar);
         Controls.Add(runBar);
         Controls.Add(inputs);
     }
 
     // ---------------- Vorschau ----------------
-    private SessionDef CurrentSession => SessionCalendar.Sessions[_session.SelectedIndex];
+    private bool IsCustom => _session.SelectedIndex >= SessionCalendar.Sessions.Count;
+
+    /// <summary>Aktuelle Session; bei "Benutzerdefiniert" aus Start/Ende/Zeitzone. Fehler -> null + Grund.</summary>
+    private SessionDef? TryCurrentSession(out string? error)
+    {
+        error = null;
+        _cStart.Enabled = _cEnd.Enabled = _cZone.Enabled = IsCustom;
+        if (!IsCustom) return SessionCalendar.Sessions[_session.SelectedIndex];
+        if (!SessionCalendar.TryParseClock(_cStart.Text, out var st)) { error = "Startzeit ungueltig (Format HH:mm:ss)."; return null; }
+        if (!SessionCalendar.TryParseClock(_cEnd.Text, out var en)) { error = "Endzeit ungueltig (Format HH:mm:ss)."; return null; }
+        error = SessionCalendar.ValidateCustom(st, en);
+        if (error != null) return null;
+        return SessionCalendar.Custom(st, en, SessionCalendar.CustomZones[Math.Max(0, _cZone.SelectedIndex)].TzId);
+    }
+
+    private SessionDef CurrentSession => TryCurrentSession(out _) ?? SessionCalendar.Sessions[0];
 
     private (DateOnly from, DateOnly to) Range()
     {
@@ -199,7 +254,14 @@ public sealed class MainForm : Form
     private void RefreshPreview()
     {
         var (from, to) = Range();
-        var s = CurrentSession;
+        var s0 = TryCurrentSession(out var sessErr);
+        if (s0 == null)
+        {
+            _grid.Items.Clear(); _rows.Clear();
+            _summary.Text = "Benutzerdefinierter Zeitraum ungueltig: " + sessErr;
+            return;
+        }
+        var s = s0;
         var days = SessionCalendar.PlanRange(from, to, s);
         _rows.Clear();
         _grid.BeginUpdate();
@@ -208,9 +270,10 @@ public sealed class MainForm : Form
         {
             var it = new ListViewItem(d.Date.ToString("yyyy-MM-dd"));
             it.SubItems.Add(d.WillRecord ? (d.Status == DayStatus.EarlyCloseTrading ? "geplant (verkuerzt)" : "geplant") : d.Status.ToString());
-            it.SubItems.Add($"{d.LocalStart:HH:mm}\u2013{d.LocalEnd:HH:mm}");
-            it.SubItems.Add($"{d.BerlinStart:HH:mm}\u2013{d.BerlinEnd:HH:mm}");
-            it.SubItems.Add($"{d.UtcStart:HH:mm}\u2013{d.UtcEnd:HH:mm}");
+            string tf = IsCustom ? "HH:mm:ss" : "HH:mm";
+            it.SubItems.Add($"{d.LocalStart.ToString(tf)}\u2013{d.LocalEnd.ToString(tf)}");
+            it.SubItems.Add(d.Status == DayStatus.Invalid ? "-" : $"{d.BerlinStart.ToString(tf)}\u2013{d.BerlinEnd.ToString(tf)}");
+            it.SubItems.Add(d.Status == DayStatus.Invalid ? "-" : $"{d.UtcStart.ToString(tf)}Z\u2013{d.UtcEnd.ToString(tf)}Z");
             it.SubItems.Add("");
             it.SubItems.Add("");
             it.SubItems.Add(d.Reason ?? "");
@@ -225,9 +288,9 @@ public sealed class MainForm : Form
         string dd = _output.Text;
         string recPath = string.IsNullOrWhiteSpace(dd) ? "(Datenordner waehlen)" : AppPaths.Recordings(dd);
         _summary.Text =
-            $"Session: {s.DisplayName}  |  Zeitzone: {s.TzIana}  |  Geschwindigkeit: {_speed.SelectedItem}  |  Instrument: {_instrument.Text}\n" +
+            $"Session: {s.DisplayName}{(IsCustom ? $" {s.LocalStart:hh\\:mm\\:ss}\u2013{s.LocalEnd:hh\\:mm\\:ss}" : "")}  |  Zeitzone: {s.TzIana}  |  Geschwindigkeit: {_speed.SelectedItem}  |  Instrument: {_instrument.Text}\n" +
             $"Geplante Aufnahme-Tage: {planned}   (kalendarisch uebersprungen: {skipped})   |   Ausgabe-Collection: {collName}\n" +
-            $"Recorder-Ordner (einmalig in ATAS als 'Output-Ordner' setzen): {recPath}";
+            $"Recorder-Ordner (wird dem Recorder automatisch uebergeben, keine Eingabe in ATAS noetig): {recPath}";
     }
 
     private void BrowseOutput() => ChooseDataDir();
@@ -248,16 +311,22 @@ public sealed class MainForm : Form
     {
         if (string.IsNullOrWhiteSpace(_output.Text)) { MessageBox.Show(this, "Noch kein Datenordner gewaehlt."); return; }
         var rec = AppPaths.Recordings(_output.Text);
-        try { Clipboard.SetText(rec); MessageBox.Show(this, "Recorder-Ordner in die Zwischenablage kopiert:\n\n" + rec + "\n\nDiesen Pfad in ATAS beim Indikator 'OF Replay Recorder' als 'Output-Ordner' eintragen (einmalige Einrichtung).", "Recorder-Ordner", MessageBoxButtons.OK, MessageBoxIcon.Information); }
+        try { Clipboard.SetText(rec); MessageBox.Show(this, "Recorder-Ordner in die Zwischenablage kopiert:\n\n" + rec + "\n\nDer Recorder erhaelt diesen Ordner automatisch ueber die gemeinsame Konfiguration; in ATAS ist keine Eingabe noetig.", "Recorder-Ordner", MessageBoxButtons.OK, MessageBoxIcon.Information); }
         catch (Exception ex) { MessageBox.Show(this, "Kopieren fehlgeschlagen: " + ex.Message); }
     }
 
     // ---------------- Lauf ----------------
     private async Task StartRun(bool resume)
     {
+        if (_archiveBusy) { MessageBox.Show(this, "Die Archivierung laeuft noch. Bitte warten oder 'Archivierung abbrechen'.", "Archivierung aktiv", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+        var runStartUtc = DateTime.UtcNow;
         var (from, to) = Range();
-        var s = CurrentSession;
+        var s = TryCurrentSession(out var sessErr);
+        if (s == null) { MessageBox.Show(this, "Benutzerdefinierter Zeitraum ungueltig: " + sessErr, "Zeitraum", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
         var days = SessionCalendar.PlanRange(from, to, s);
+        var invalid = days.Where(d => d.Status == DayStatus.Invalid).ToList();
+        if (invalid.Count > 0)
+        { MessageBox.Show(this, "Nicht eindeutige Ortszeit:\n" + string.Join("\n", invalid.Select(d => $"{d.Date:yyyy-MM-dd}: {d.Reason}")), "Zeitumstellung", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
         if (days.Count(d => d.WillRecord) == 0)
         {
             MessageBox.Show(this, "Im gewaehlten Bereich liegt kein Handelstag (nur Wochenende/Feiertage).", "Nichts zu tun", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -339,14 +408,163 @@ public sealed class MainForm : Form
             return;
         }
         if (summary != null) ShowSummary(summary);
+        // Erst NACH dem Sammellauf (Probe beendet, kein Replay mehr): in diesem Lauf importierte Tage archivieren.
+        // Ein Archivierungsfehler aendert am Import nichts (die Collection wird nicht angefasst).
+        if (summary != null && _arAuto.Checked) await AutoArchiveAfterRun(summary, runStartUtc);
+    }
+
+    // ---------------- Speicher / Archivierung ----------------
+    private bool ArchiveReady(out string dataDir)
+    {
+        dataDir = _output.Text;
+        if (_archiveBusy) return false;
+        if (!_start.Enabled) { MessageBox.Show(this, "Waehrend eines Sammellaufs wird nicht archiviert (Replay-Leistung). Bitte nach dem Lauf erneut.", "Sammellauf aktiv"); return false; }
+        if (!AppPaths.Validate(dataDir, out var why)) { MessageBox.Show(this, "Datenordner nicht verfuegbar: " + why); return false; }
+        _archive = new ArchiveRunner(_tools, dataDir);
+        if (!_archive.ScriptPresent) { MessageBox.Show(this, "bridge\\atas_archive.py fehlt in der Installation: " + _tools.ArchiveScript); return false; }
+        return true;
+    }
+
+    private void SetArchiveBusy(bool busy)
+    {
+        _archiveBusy = busy;
+        _start.Enabled = _resume.Enabled = !busy;          // kein Sammellauf waehrend der Archivierung
+        _arAnalyze.Enabled = _arCompress.Enabled = _arRestore.Enabled = !busy;
+        _arStop.Enabled = busy;
+        _arAuto.Enabled = true;
+    }
+
+    private void WireArchiveEvents(ArchiveRunner ar, int totalRecordings)
+    {
+        int recIdx = 0;
+        ar.Log += line => BeginInvoke(() => AppendDetail("  [archiv] " + line));
+        ar.Event += ev => BeginInvoke(() =>
+        {
+            string kind = ev.TryGetProperty("event", out var k) ? k.GetString() ?? "" : "";
+            if (kind == "recording")
+            {
+                recIdx++;
+                _progress.Maximum = Math.Max(1, totalRecordings);
+                _progress.Value = Math.Min(_progress.Maximum, Math.Max(0, recIdx - 1));
+                _stepLabel.Text = $"Archivierung {recIdx}/{Math.Max(totalRecordings, recIdx)}: {ev.GetProperty("recording").GetString()} ({(ev.TryGetProperty("date", out var d) ? d.GetString() : "")})";
+            }
+            else if (kind == "file")
+            {
+                string res = ev.GetProperty("result").GetString() ?? "";
+                long o = ev.TryGetProperty("origSize", out var os) && os.ValueKind == JsonValueKind.Number ? os.GetInt64() : 0;
+                long z = ev.TryGetProperty("zstSize", out var zs) && zs.ValueKind == JsonValueKind.Number ? zs.GetInt64() : 0;
+                AppendDetail($"  {ev.GetProperty("recording").GetString()}  {ev.GetProperty("file").GetString(),-18} {res,-16} {ArchiveRunner.Gb(o)} -> {ArchiveRunner.Gb(z)}" +
+                             (ev.TryGetProperty("reason", out var why) ? "  " + why.GetString() : ""));
+            }
+            else if (kind == "block")
+            {
+                long done = ev.GetProperty("done").GetInt64(), total = Math.Max(1, ev.GetProperty("total").GetInt64());
+                _stepLabel.Text = $"Archivierung {recIdx}/{Math.Max(totalRecordings, recIdx)}: {ev.GetProperty("file").GetString()} {100 * done / total} %";
+            }
+        });
+    }
+
+    private async Task<JsonElement?> RunAnalyze(string dataDir)
+    {
+        _stepLabel.Text = "Speicher wird analysiert … (nur lesend)";
+        var (code, res) = await _archive!.AnalyzeAsync(dataDir);
+        if (res == null || code != 0) { AppendDetail($"Analyse fehlgeschlagen (rc={code})."); return null; }
+        return res;
+    }
+
+    private async Task ArchiveAnalyze()
+    {
+        if (!ArchiveReady(out var dataDir)) return;
+        SetArchiveBusy(true);
+        try
+        {
+            var res = await RunAnalyze(dataDir);
+            if (res == null) return;
+            var text = ArchiveRunner.DescribeAnalysis(res.Value);
+            AppendDetail("\n=== SPEICHER-ANALYSE " + DateTime.Now.ToString("HH:mm:ss") + " ===\n" + text);
+            _stepLabel.Text = "Speicher analysiert (Details unten).";
+            MessageBox.Show(this, ArchiveRunner.DescribeAnalysis(res.Value, withSkippedList: false), "Speicher analysieren", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        finally { SetArchiveBusy(false); }
+    }
+
+    private async Task ArchiveCompress(IReadOnlyCollection<string>? only, bool ask)
+    {
+        if (!ArchiveReady(out var dataDir)) return;
+        SetArchiveBusy(true);
+        try
+        {
+            int total;
+            if (ask)
+            {
+                var pre = await RunAnalyze(dataDir);
+                if (pre == null) return;
+                total = pre.Value.GetProperty("eligible").GetArrayLength();
+                AppendDetail("\n=== VORSCHAU ARCHIVIERUNG ===\n" + ArchiveRunner.DescribeAnalysis(pre.Value));
+                if (total == 0) { MessageBox.Show(this, "Keine weiteren Aufnahmen zum Komprimieren.\n\n" + ArchiveRunner.DescribeAnalysis(pre.Value, false), "Nichts zu tun"); return; }
+                var ok = MessageBox.Show(this,
+                    ArchiveRunner.DescribeAnalysis(pre.Value, false) +
+                    "\nJede Datei wird verlustfrei komprimiert (zstd), vollstaendig zurueckgelesen und per SHA-256 verglichen; erst dann wird das " +
+                    "Rohoriginal entfernt. Collections bleiben unveraendert. Abbruch jederzeit moeglich, Fortsetzen mit demselben Knopf.\n\nJetzt komprimieren?",
+                    "Vorhandene Aufnahmen komprimieren", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (ok != DialogResult.Yes) return;
+            }
+            else total = only?.Count ?? 0;
+            WireArchiveEvents(_archive!, total);
+            AppendDetail($"\n=== ARCHIVIERUNG START {DateTime.Now:HH:mm:ss} ===");
+            var (code, res) = await _archive!.CompressAsync(dataDir, only);
+            string text = res != null ? ArchiveRunner.DescribeCompress(res.Value) : $"Archivierung ohne Ergebnis beendet (rc={code}).";
+            AppendDetail(text);
+            _progress.Value = _progress.Maximum;
+            _stepLabel.Text = text.Split('\n')[0];
+            if (ask) MessageBox.Show(this, text, "Archivierung", MessageBoxButtons.OK, code == 0 ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+        }
+        finally { SetArchiveBusy(false); }
+    }
+
+    private async Task AutoArchiveAfterRun(RunSummary s, DateTime runStartUtc)
+    {
+        try
+        {
+            var mp = Path.Combine(s.CollectionDir, "collection_manifest.json");
+            if (!File.Exists(mp)) return;
+            var ids = ArchiveRunner.RecordingsCommittedSince(File.ReadAllText(mp), runStartUtc);
+            AppendDetail($"\n[Archivierung] {ids.Count} in diesem Lauf importierte Aufnahme(n) vorgemerkt.");
+            if (ids.Count == 0) return;
+            await ArchiveCompress(ids, ask: false);
+        }
+        catch (Exception ex) { AppendDetail("[Archivierung] nicht ausgefuehrt: " + ex.Message + " (Importierte Tage bleiben unveraendert.)"); }
+    }
+
+    private async Task ArchiveRestore()
+    {
+        if (!ArchiveReady(out var dataDir)) return;
+        using var dlg = new FolderBrowserDialog { Description = "Archivierte Aufnahme (Ordner unter Recordings) waehlen", UseDescriptionForTitle = true, SelectedPath = AppPaths.Recordings(dataDir) };
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        var dir = dlg.SelectedPath;
+        if (!Directory.EnumerateFiles(dir, "*.zst").Any()) { MessageBox.Show(this, "In diesem Ordner liegen keine .zst-Archive.", "Nichts wiederherzustellen"); return; }
+        if (MessageBox.Show(this, $"Aufnahme {Path.GetFileName(dir)} bytegenau wiederherstellen?\n\nJede Datei wird entpackt und per SHA-256 gegen den archivierten Pruefwert verglichen; erst dann wird das Archiv entfernt. " +
+                              "Die Aufnahme wird danach nicht mehr automatisch komprimiert.", "Aufnahme wiederherstellen", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+        SetArchiveBusy(true);
+        try
+        {
+            WireArchiveEvents(_archive!, 1);
+            var (code, res) = await _archive!.RestoreAsync(dir);
+            string text = res == null ? $"Wiederherstellung ohne Ergebnis (rc={code})."
+                : (res.Value.TryGetProperty("ok", out var ok) && ok.GetBoolean() ? "Wiederherstellung erfolgreich: alle Dateien bytegenau (SHA-256) zurueckgewandelt."
+                   : "Wiederherstellung NICHT vollstaendig - Archive bleiben erhalten:\n" + res.Value.ToString());
+            AppendDetail(text);
+            MessageBox.Show(this, text, "Aufnahme wiederherstellen");
+        }
+        finally { SetArchiveBusy(false); }
     }
 
     private void StopRun()
     {
         _runner?.RequestStop();
         _stop.Enabled = false;
-        _stop.Text = "Stoppe nach aktuellem Fenster \u2026";
-        _stepLabel.Text = "Kontrollierter Stopp angefordert \u2013 der laufende Tag wird sauber beendet.";
+        _stop.Text = "Stoppe \u2026";
+        _stepLabel.Text = "Kontrollierter Stopp angefordert \u2013 Wiedergabe wird beendet, Recorder entfernt, Writer abgeschlossen; kein weiterer Tag.";
         AppendDetail("[Bedienung] Kontrolliert stoppen angefordert (kein Prozess-Kill).");
     }
 
@@ -394,6 +612,7 @@ public sealed class MainForm : Form
         _stop.Enabled = running;
         if (!running) _stop.Text = "Kontrolliert stoppen";
         _openDir.Enabled = true;
+        _arAnalyze.Enabled = _arCompress.Enabled = _arRestore.Enabled = !running && !_archiveBusy;   // nie parallel zum Replay
     }
 
     private void SetRowStatus(DateOnly d, string status, Color color)
@@ -449,6 +668,16 @@ public sealed class MainForm : Form
                 "Lauf aktiv", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
             if (r != DialogResult.Yes) { e.Cancel = true; return; }
             _runner?.RequestStop();
+        }
+        if (_archiveBusy)
+        {
+            var r = MessageBox.Show(this,
+                "Die Archivierung laeuft. Beim Schliessen wird sie abgebrochen: die gerade bearbeitete Datei bleibt als Original erhalten, " +
+                "ein halbes Archiv wird beim naechsten Lauf verworfen. Fortsetzen spaeter mit 'Vorhandene Aufnahmen komprimieren'.\n\nJetzt schliessen?",
+                "Archivierung aktiv", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+            if (r != DialogResult.Yes) { e.Cancel = true; return; }
+            _archive?.RequestStop();
+            _archive?.KillCurrentTree();
         }
         base.OnFormClosing(e);
     }

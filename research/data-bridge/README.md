@@ -23,6 +23,25 @@ python atas_bridge.py <recording_dir> --start 2026-10-26T08:00:00Z --end 2026-10
 - **Atomare Veröffentlichung**: Schreiben in ein temporäres Ziel, Parquet validieren, dann atomar umbenennen.
   Ein Abbruch hinterlässt **kein** partielles Parquet neben dem alten Manifest; bestehendes Ziel bleibt intakt.
 
+## Archivierung der Rohaufnahmen (`atas_archive.py`)
+
+Verlustfreie Zstandard-Archive (`<name>.zst`, Standard-zstd aus 64-MiB-Frames) direkt im Aufnahmeordner. Leseweg:
+`atas_archive.open_text/open_binary/sha256_file/exists` lesen roh oder `.zst` gleich; Bridge (`atas_collect`,
+`atas_bridge`) und `atas-recorder/validate_recording.py` nutzen ihn. Hashes = Original-Bytes, daher bleiben
+`inputHashes` der Collections gültig. `meta.json`, `summary.json`, `archive.json` werden nie komprimiert.
+
+```
+python atas_archive.py analyze  --data-dir <Datenordner>                 # nur lesend
+python atas_archive.py compress --data-dir <Datenordner> [--stop-file F] # nur geeignete, importierte Aufnahmen
+python atas_archive.py restore  --recording <Aufnahmeordner>             # bytegenau zurück (SHA-256 geprüft)
+python atas_archive.py verify   --recording <Aufnahmeordner>             # Archive voll entpacken + prüfen
+```
+
+Ablauf je Datei: lesen + SHA-256 → `.zst.tmp` → vollständig entpacken und vergleichen → nicht kleiner? verwerfen →
+Quelle unverändert (Größe, Zeitstempel, erneuter Hash)? → Eintrag in `archive.json` → umbenennen → Original löschen.
+Abbruch an jeder Stelle ist fortsetzbar; liegen Original und Archiv nebeneinander, wird nur nach voller Prüfung beider
+gelöscht. Tests: `test_atas_archive.py`.
+
 ## Tests
 ```
 python -m pytest test_atas_bridge.py -q

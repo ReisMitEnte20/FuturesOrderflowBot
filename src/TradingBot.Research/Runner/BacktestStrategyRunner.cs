@@ -117,7 +117,7 @@ public sealed class BacktestStrategyRunner : IStrategyBacktestRunner
             Broker = inputs.Broker,
             Risk = inputs.Risk,
             Account = inputs.Account,
-            Config = new BacktestConfiguration { SlippageTicksOverride = inputs.SlippageTicksOverride }
+            Config = new BacktestConfiguration { SlippageTicksOverride = inputs.SlippageTicksOverride, FillDelayTicks = inputs.FillDelayTicks }
         };
 
         var result = await _engine.RunAsync(request, cancellationToken).ConfigureAwait(false);
