@@ -136,6 +136,9 @@ export function SessionsReplay({ runId, day, trade, onParams }: {
     p: eng!.p, total: st!.total, loaded: st!.loaded, clock, seg: k, atEnd: r.atEnd, playing: r.playing, hold: !!r.holding, pause: !!r.inPause,
     segs: L!.segs.map((s, i) => ({ id: s.id, applied: segTicks(i), candles: [...byBucket.values()].filter((c) => c.firstIdx >= s.firstIdx && c.firstIdx < s.firstIdx + s.count).length })),
     markers: markers.length, transition: transMsg,
+    // Marker des fokussierten Journal-Trades (Prüfbarkeit: unsichtbar vor dem Fill, beim Fill zum Journalpreis).
+    focus: focusTrade ? { trade: focusTrade.index, markers: markers.filter((m) => m.label.includes(`#${focusTrade.index + 1} `)).map((m) => ({ kind: m.kind, price: m.price })) } : null,
+    lastTickIso: st && lastIdx >= 0 && L ? new Date(L.baseAnchorMs + st.t[lastIdx] / 10_000).toISOString() : null,
   }) : "";
 
   return (

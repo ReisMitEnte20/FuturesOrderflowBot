@@ -70,6 +70,10 @@ public sealed class BacktestEngine : IBacktestEngine
 
         int ticks = 0, signals = 0, submitted = 0, riskRejected = 0, brokerRejected = 0;
         bool cancelled = false;
+        string? stopReason = null;
+        DateTimeOffset? stoppedBefore = null;
+        Domain.Models.MarketTick? lastTick = null;
+        var orders = new List<BacktestOrderRecord>();
 
         try
         {
@@ -82,17 +86,32 @@ public sealed class BacktestEngine : IBacktestEngine
             {
                 if (cancellationToken.IsCancellationRequested) { cancelled = true; break; }
 
+                // Optionaler Guard VOR dem Tick (vor Uhr/Fills/Strategie): stoppt der Lauf, erreicht dieser Tick nichts.
+                if (request.TickGuard is { } guard)
+                {
+                    var p = positions.GetPosition(request.Symbol);
+                    var reason = guard(new BacktestTickGuardContext(tick, adapter.PendingCount, p?.Side ?? PositionSide.Flat, p?.Quantity ?? 0));
+                    if (reason is not null) { stopReason = reason; stoppedBefore = tick.Timestamp; break; }
+                }
+
                 clock.Set(tick.Timestamp);
                 feedHealth.RecordTick(tick);
                 adapter.ProcessTick(tick);          // Fills offener Orders VOR der Strategie
                 ticks++;
+                lastTick = tick;
 
                 var signal = request.Strategy.OnTick(tick);
                 if (signal is null) continue;
                 signals++;
+                var posAtSubmit = positions.GetPosition(request.Symbol);
 
                 var state = await orderManager.ProcessSignalAsync(signal, cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
+
+                if (state is not null)
+                    orders.Add(new BacktestOrderRecord(state.OrderId, signal.SignalId, signal.Timestamp, signal.Direction, signal.StrategyName,
+                        signal.Reason, signal.ReferencePrice, state.Side, state.RequestedQuantity, state.OrderType, state.Lifecycle,
+                        posAtSubmit?.Side ?? PositionSide.Flat, posAtSubmit?.Quantity ?? 0));
 
                 if (state is null)
                 {
@@ -127,10 +146,22 @@ public sealed class BacktestEngine : IBacktestEngine
 
         var stats = BacktestStatisticsCalculator.Compute(positions.Trades, adapter.TotalSlippageCost);
         var finalPos = positions.GetPosition(request.Symbol);
+        bool open = finalPos is not null && finalPos.Quantity != 0 && finalPos.Side != PositionSide.Flat;
+        decimal unrealizedAtLast = open && lastTick is not null
+            ? positions.MarkToMarket(request.Symbol, lastTick.Price, request.Instrument).UnrealizedGrossPnL
+            : 0m;
 
         return new BacktestResult
         {
-            Status = cancelled ? BacktestRunStatus.Cancelled : BacktestRunStatus.Completed,
+            Status = cancelled ? BacktestRunStatus.Cancelled : stopReason is not null ? BacktestRunStatus.Stopped : BacktestRunStatus.Completed,
+            Message = stopReason,
+            StopReason = stopReason,
+            StoppedBeforeTickUtc = stoppedBefore,
+            LastTickUtc = lastTick?.Timestamp,
+            LastTickPrice = lastTick?.Price,
+            FinalPositionUnrealizedAtLastTick = unrealizedAtLast,
+            Orders = orders,
+            TradeLinks = positions.Links.ToList(),
             Statistics = stats,
             Trades = positions.Trades.ToList(),
             TicksProcessed = ticks,

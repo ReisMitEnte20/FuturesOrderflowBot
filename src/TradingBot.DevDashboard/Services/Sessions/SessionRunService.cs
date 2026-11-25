@@ -44,7 +44,25 @@ public sealed record SessionTransitionDto(
 public sealed record SessionTradeDto(
     int Index, string Day, string Session, string SessionLabel, string SegmentId, string Collection, string RecordingId, string Side, int Qty,
     string EntryTimeUtc, decimal EntryPrice, string ExitTimeUtc, decimal ExitPrice, decimal GrossPnL, decimal Fees, decimal NetPnL,
-    string ExitReason, bool CrossedPause, decimal BalanceAfter);
+    string ExitReason, bool CrossedPause, decimal BalanceAfter,
+    string EntryCause = "", string ExitCause = "", string? EntrySignalUtc = null, string? ExitSignalUtc = null,
+    string? EntrySignalId = null, string? EntryOrderId = null, string? EntryFillId = null,
+    string? ExitSignalId = null, string? ExitOrderId = null, string? ExitFillId = null);
+
+/// <summary>Abbruch an einer Sessiongrenze: letzter beobachteter Preis, offene Bewertung und realisiertes Ergebnis GETRENNT.</summary>
+public sealed record SessionRunStopDto(
+    string Reason, string SegmentId, string Session, string SessionLabel, string Day, string SessionEndUtc, string CloseOutUtc,
+    string? SessionCloseSignalUtc, string? LastTickUtc, decimal? LastObservedPrice, string OpenPosition, string? OpenSide, int OpenQuantity,
+    decimal? OpenAvgPrice, decimal UnrealizedGrossAtLastPrice, decimal RealizedGross, decimal RealizedFees, decimal RealizedNet,
+    decimal BalanceRealized, int PendingOrders, string? StoppedBeforeTickUtc, IReadOnlyList<string> NotRunSegments, string Note);
+
+/// <summary>Häufigkeit eines Ein- oder Ausstiegsgrunds je Session.</summary>
+public sealed record SessionReasonCountDto(string Session, string Kind, string Cause, int Count);
+
+/// <summary>ID-Prüfung des Journals: jede Order hat genau ein Signal, jeder Trade eigene Ein-/Ausstiegs-Order und -Fill.</summary>
+public sealed record JournalIntegrityDto(int OrdersSubmitted, int OrdersLinkedToTrades, int OrdersUnlinked, int DistinctSignalIds,
+    int DistinctEntryFillIds, int DistinctExitFillIds, int FillsSharedByTwoTrades, int OverlappingTrades, int TradesWithExitBeforeEntry,
+    IReadOnlyList<string> Notes);
 
 public sealed record SessionSummaryDto(string Key, string Label, int Sessions, int Trades, int Winners, int Losers, decimal GrossPnL, decimal Fees, decimal NetPnL,
     int EntrySignals, int SuppressedAfterCloseOut);
@@ -89,6 +107,12 @@ public sealed record SessionRunResult
     public int OrdersRejectedByRisk { get; init; }
     public int OrdersUnfilledAtEnd { get; init; }
     public string FinalPosition { get; init; } = "Flat";
+    /// <summary>Gesetzt, wenn der Lauf an einer Sessiongrenze bzw. am Datenende mit offener Position/Order abgebrochen wurde.</summary>
+    public SessionRunStopDto? Stop { get; init; }
+    /// <summary>Kontraktprüfung zwischen den Aufnahmen („Kontraktidentität ungeprüft“, wenn die Kennung unbekannt ist).</summary>
+    public string ContractCheck { get; init; } = "";
+    public IReadOnlyList<SessionReasonCountDto> ReasonCounts { get; init; } = Array.Empty<SessionReasonCountDto>();
+    public JournalIntegrityDto? Integrity { get; init; }
     public IReadOnlyList<IndicatorPolicyDto> IndicatorPolicy { get; init; } = Array.Empty<IndicatorPolicyDto>();
     public IReadOnlyList<string> Rules { get; init; } = Array.Empty<string>();
     public double ElapsedSeconds { get; init; }
@@ -126,7 +150,7 @@ public sealed class SessionRunService
         new IndicatorPolicyDto("Session-VWAP", "zurückgesetzt", "Startet je Session neu (nur Ticks dieser Session)."),
         new IndicatorPolicyDto("Kontostand, realisiertes PnL, Gebühren, Drawdown", "läuft weiter", "Ein Konto über alle Sessions und Tage."),
         new IndicatorPolicyDto("Tagesrisiko (Tagesverlust, Trades/Tag, Verlustserie)", "läuft über den Handelstag weiter", "Gilt je UTC-Kalendertag für London und New York gemeinsam; neuer Tag = neuer Zustand."),
-        new IndicatorPolicyDto("Position und offene Orders", "müssen glatt sein", "Close-Out-Regel vor Sessionende; ein Übertrag über die Pause wird als Vorfall ausgewiesen."),
+        new IndicatorPolicyDto("Position und offene Orders", "müssen glatt sein", "Close-Out-Regel vor Sessionende. Ist vor dem ersten Tick der nächsten Session noch eine Position oder Order offen, wird der Lauf gestoppt (unvollständig) – kein Übertrag über die Pause."),
         new IndicatorPolicyDto("Zeitfenster-Indikatoren über die Pause (z. B. gleitende Mittel über Zeit, ATR)", "nicht gültig", "Werden von DeltaFlow nicht verwendet. Ein Fenster, das die unbeobachtete Pause überspannt, gilt nicht als gültig – solche Indikatoren müssten nach Sessionstart neu aufgewärmt werden."),
         new IndicatorPolicyDto("SinglePositionGate", "kein eigener Zustand", "Liest ausschließlich den tatsächlichen Engine-Positionszustand."),
     };
@@ -191,10 +215,13 @@ public sealed class SessionRunService
         {
             MarketData = feed, Symbol = instrument.Symbol, Strategy = gate, Instrument = instrument, Fee = orq.Fee, Broker = orq.Broker,
             Risk = risk, Account = orq.Account,
-            Config = new BacktestConfiguration { SlippageTicksOverride = orq.SlippageTicksOverride }
+            Config = new BacktestConfiguration { SlippageTicksOverride = orq.SlippageTicksOverride },
+            // Sessiongrenze: offene Position/Order vor dem ersten Tick der nächsten Session → Lauf stoppt VOR diesem Tick.
+            TickGuard = c => gate.BeforeTick(c.NextTick.Timestamp, c.PositionQuantity, c.PendingOrders)
         }, ct);
 
-        var result = Evaluate(baseResult with { StrategyName = cand.Name }, engineResult, gate, feed, risk.MaxDailyLoss, req.InitialBalance);
+        var result = Evaluate(baseResult with { StrategyName = cand.Name }, engineResult, gate, feed, risk.MaxDailyLoss, req.InitialBalance,
+            segments.Select(x => x.Segment).ToList(), req.DeltaThreshold);
         return await Save(result with { ElapsedSeconds = Math.Round(sw.Elapsed.TotalSeconds, 2) }, ct);
     }
 
@@ -203,7 +230,7 @@ public sealed class SessionRunService
         "Ein Lauf der bestehenden Tick-Engine mit EINER Strategieinstanz und EINEM Konto über alle Sessions und Tage.",
         "Die Pause wird nicht abgewartet: nach dem letzten London-Tick folgt sofort der erste New-York-Tick mit seinem originalen Marktzeitstempel; die Engine-Uhr springt auf diese Marktzeit (zeitbasierte Abläufe sehen die tatsächlich vergangene Marktzeit).",
         $"Session-Close-Regel (vorab festgelegt): ab Sessionende − {closeOut} min keine neuen Einstiege; eine offene Position erhält ein Flat-Signal, das die Engine mit dem vorhandenen Fill-/Kostenmodell am nächsten Tick füllt. Kein rückwirkender Ausstieg auf dem letzten Tick.",
-        "Kommt vor dem Sessionende kein Tick mehr (kein zulässiger Fill), wird das ausgewiesen; eine dennoch offene Position wird am ersten Tick nach der Pause glattgestellt und als Vorfall markiert.",
+        "Kommt nach der Glattstellung kein ausführbarer Tick mehr vor dem Sessionende, stoppt der Lauf als „unvollständig – Position vor Sessionende nicht glattstellbar“: kein rückwirkender Fill auf dem letzten Tick, keine Glattstellung am ersten Tick nach der Pause, keine offene Order in der nächsten Session. Letzter beobachteter Preis, offene Bewertung und realisiertes Ergebnis werden getrennt gezeigt.",
         "In der Pause entstehen keine Kurse, Ticks oder Fills.",
         "Tagesverlustlimit: der RiskManager (fail-closed) prüft je UTC-Kalendertag – hat London das Limit erreicht, sind in New York an diesem Tag keine neuen Einstiege möglich."
     };
@@ -284,11 +311,27 @@ public sealed class SessionRunService
 
     // ---------------------------------------------------------------------------------------------------------------
 
-    private static SessionRunResult Evaluate(SessionRunResult r, BacktestResult res, SessionGateStrategy gate, SessionTickFeed feed,
-        decimal maxDailyLoss, decimal start)
+    internal static SessionRunResult Evaluate(SessionRunResult r, BacktestResult res, SessionGateStrategy gate, SessionTickFeed feed,
+        decimal maxDailyLoss, decimal start, IReadOnlyList<SessionSegment> plannedSegments, decimal deltaThreshold)
     {
         var obs = gate.Observations.Where(o => o.Ticks > 0).ToList();
-        var trades = res.Trades.OrderBy(t => t.ExitTime).ThenBy(t => t.EntryTime).ToList();
+        // Engine-Trades in Abschlussreihenfolge, mit den Order-/Fill-IDs (gleicher Index) und dem auslösenden Signal je Order.
+        var linked = res.Trades.Select((t, i) => (T: t, L: i < res.TradeLinks.Count ? res.TradeLinks[i] : null))
+            .OrderBy(x => x.T.ExitTime).ThenBy(x => x.T.EntryTime).ToList();
+        var trades = linked.Select(x => x.T).ToList();
+        var orderById = res.Orders.GroupBy(o => o.OrderId).ToDictionary(g => g.Key, g => g.First());
+        string thr = deltaThreshold.ToString("0.##", CultureInfo.InvariantCulture);
+        string EntryCause(BacktestOrderRecord? o) => o is null ? "?" : o.SignalDirection switch
+        {
+            SignalDirection.Long => o.SignalStrategy.StartsWith("DeltaFlow", StringComparison.Ordinal) ? $"Long-Signal: Bar-Delta > +{thr}" : "Long-Signal",
+            SignalDirection.Short => o.SignalStrategy.StartsWith("DeltaFlow", StringComparison.Ordinal) ? $"Short-Signal: Bar-Delta < −{thr}" : "Short-Signal",
+            _ => o.SignalDirection.ToString()
+        };
+        string ExitCause(BacktestOrderRecord? o) => o is null ? "?"
+            : o.SignalStrategy == SessionGateStrategy.SessionCloseStrategyName ? "Session-Close-Regel (Close-Out-Grenze)"
+            : o.SignalDirection == SignalDirection.Flat
+                ? (o.SignalStrategy.StartsWith("DeltaFlow", StringComparison.Ordinal) ? $"Flat-Signal: |Bar-Delta| ≤ {thr}" : "Flat-Signal")
+                : $"Gegensignal {o.SignalDirection}: schließt nur (kein Reverse)";
         SessionSegmentObservation? SegOf(DateTimeOffset t) => obs.FirstOrDefault(o => t >= o.Segment.StartUtc && t < o.Segment.EndUtc);
 
         // --- Trades mit Session, Ausstiegsgrund, Kontostand ---
@@ -296,8 +339,10 @@ public sealed class SessionRunService
         var tradeDtos = new List<SessionTradeDto>();
         var closeFill = new Dictionary<string, BacktestTrade>();
         int idx = 0;
-        foreach (var t in trades)
+        foreach (var (t, link) in linked)
         {
+            BacktestOrderRecord? eo = link is not null && orderById.TryGetValue(link.EntryOrderId, out var a1) ? a1 : null;
+            BacktestOrderRecord? xo = link is not null && orderById.TryGetValue(link.ExitOrderId, out var a2) ? a2 : null;
             var es = SegOf(t.EntryTime); var xs = SegOf(t.ExitTime);
             bool crossed = es is null || xs is null || es.Segment.Id != xs.Segment.Id;
             string reason = "Signal";
@@ -314,7 +359,10 @@ public sealed class SessionRunService
             tradeDtos.Add(new SessionTradeDto(idx++, seg?.Segment.Day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "", seg?.Segment.SessionKey ?? "?",
                 seg?.Segment.Label ?? "?", seg?.Segment.Id ?? "", feed.Loaded.TryGetValue(seg?.Segment.Id ?? "", out var lm) ? lm.Meta.Collection : "",
                 lm.Meta?.RecordingId ?? "", t.Side.ToString(), t.Quantity, Iso(t.EntryTime), t.EntryPrice, Iso(t.ExitTime), t.ExitPrice,
-                t.GrossPnL, t.Fees, t.NetPnL, reason, crossed, bal));
+                t.GrossPnL, t.Fees, t.NetPnL, reason, crossed, bal,
+                EntryCause(eo), ExitCause(xo), eo is null ? null : Iso(eo.SignalTime), xo is null ? null : Iso(xo.SignalTime),
+                eo?.SignalId.ToString(), link?.EntryOrderId.ToString(), link?.EntryFillId.ToString(),
+                xo?.SignalId.ToString(), link?.ExitOrderId.ToString(), link?.ExitFillId.ToString()));
         }
 
         // --- Segmente ---
@@ -399,10 +447,63 @@ public sealed class SessionRunService
                 IsoN(hit), hitSession, entriesAfter, signalsAfter, notes));
         }
 
-        string status = res.Status == BacktestRunStatus.Completed ? "Completed" : res.Status.ToString();
+        // --- Abbruch an der Sessiongrenze bzw. offene Position/Order am Datenende ---
+        SessionRunStopDto? stop = null;
+        bool openAtEnd = res.FinalPositionSide != PositionSide.Flat && res.FinalPositionQuantity != 0;
+        if (res.Status == BacktestRunStatus.Stopped || (res.Status == BacktestRunStatus.Completed && (openAtEnd || res.OrdersUnfilledAtEnd > 0)))
+        {
+            var bs = gate.BoundaryStop;
+            var lastObs = obs.LastOrDefault();
+            var seg = bs?.Segment ?? lastObs?.Segment;
+            string reason = bs?.Reason ?? (openAtEnd ? SessionGateStrategy.NotFlattenableReason : SessionGateStrategy.PendingOrderReason);
+            var notRun = plannedSegments.Where(p => seg is null || p.StartUtc >= seg.EndUtc).Select(p => p.Id).ToList();
+            decimal realizedNet = trades.Sum(t => t.NetPnL);
+            stop = new SessionRunStopDto(reason, seg?.Id ?? "", seg?.SessionKey ?? "", seg?.Label ?? "",
+                seg?.Day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "", seg is null ? "" : Iso(seg.EndUtc), seg is null ? "" : Iso(seg.CloseOutUtc),
+                IsoN(bs?.SessionCloseSignalUtc ?? lastObs?.SessionCloseSignalUtc), IsoN(res.LastTickUtc), res.LastTickPrice,
+                openAtEnd ? FormattableString.Invariant($"{res.FinalPositionSide} {res.FinalPositionQuantity} @ {res.FinalPositionAvgPrice}") : "Flat",
+                openAtEnd ? res.FinalPositionSide.ToString() : null, res.FinalPositionQuantity, openAtEnd ? res.FinalPositionAvgPrice : null,
+                res.FinalPositionUnrealizedAtLastTick, trades.Sum(t => t.GrossPnL), trades.Sum(t => t.Fees), realizedNet, start + realizedNet,
+                res.OrdersUnfilledAtEnd, IsoN(res.StoppedBeforeTickUtc), notRun,
+                "Offene Bewertung = Position zum letzten beobachteten Preis (brutto, ohne Ausstiegsgebühren/Slippage, NICHT gebucht). " +
+                "Realisiert = nur geschlossene Trades. Kein Fill wurde erfunden; die nächste Session wurde nicht gestartet.");
+        }
+
+        // --- Kontraktidentität: zwei unbekannte Kennungen sind kein Nachweis ---
+        var contracts = feed.Loaded.Values.Select(v => v.Meta.Contract ?? "").Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        static bool Unknown(string c) => string.IsNullOrWhiteSpace(c) || c.Equals("unknown", StringComparison.OrdinalIgnoreCase);
+        string contractCheck = contracts.Count == 0 ? "keine Session geladen"
+            : contracts.All(Unknown) ? "Kontraktidentität ungeprüft – Kennung in den Aufnahmen „unknown“; zwei unbekannte Kennungen sind kein Nachweis."
+            : contracts.Any(Unknown) ? "Kontraktidentität ungeprüft – mindestens eine Aufnahme ohne Kennung."
+            : contracts.Count == 1 ? $"geprüft: einheitlich {contracts[0]}" : $"uneinheitlich: {string.Join(" / ", contracts)}";
+
+        // --- Ein-/Ausstiegsgründe je Session ---
+        var reasonCounts = tradeDtos.SelectMany(t => new[] { (t.Session, Kind: "Einstieg", Cause: t.EntryCause), (t.Session, Kind: "Ausstieg", Cause: t.ExitCause) })
+            .GroupBy(x => x).Select(g => new SessionReasonCountDto(g.Key.Session, g.Key.Kind, g.Key.Cause, g.Count()))
+            .OrderBy(x => x.Session, StringComparer.Ordinal).ThenBy(x => x.Kind, StringComparer.Ordinal).ThenByDescending(x => x.Count).ToList();
+
+        // --- ID-Prüfung: getrennte, geschlossene Positionen? ---
+        var links = linked.Where(x => x.L is not null).Select(x => x.L!).ToList();
+        var linkedOrders = links.SelectMany(l => new[] { l.EntryOrderId, l.ExitOrderId }).ToHashSet();
+        var entryFills = links.Select(l => l.EntryFillId).ToList();
+        var exitFills = links.Select(l => l.ExitFillId).ToList();
+        int shared = entryFills.Intersect(exitFills).Count() + (entryFills.Count - entryFills.Distinct().Count()) + (exitFills.Count - exitFills.Distinct().Count());
+        var byEntry = trades.OrderBy(t => t.EntryTime).ToList();
+        int overlapping = byEntry.Zip(byEntry.Skip(1)).Count(p => p.Second.EntryTime < p.First.ExitTime);
+        var integrityNotes = new List<string>();
+        if (links.Count != trades.Count) integrityNotes.Add($"{trades.Count - links.Count} Trades ohne ID-Verknüpfung.");
+        var unlinked = res.Orders.Where(o => !linkedOrders.Contains(o.OrderId)).ToList();
+        if (unlinked.Count > 0)
+            integrityNotes.Add(FormattableString.Invariant($"Nicht verknüpfte Orders: {string.Join(", ", unlinked.GroupBy(o => o.Lifecycle).Select(g => $"{g.Key} {g.Count()}"))} (z. B. offen am Ende)."));
+        var integrity = new JournalIntegrityDto(res.Orders.Count, res.Orders.Count(o => linkedOrders.Contains(o.OrderId)), unlinked.Count,
+            res.Orders.Select(o => o.SignalId).Distinct().Count(), entryFills.Distinct().Count(), exitFills.Distinct().Count(), shared, overlapping,
+            trades.Count(t => t.ExitTime < t.EntryTime), integrityNotes);
+
+        string status = stop is not null ? "Incomplete" : res.Status == BacktestRunStatus.Completed ? "Completed" : res.Status.ToString();
         return r with
         {
-            Status = status, Error = res.Status == BacktestRunStatus.Completed ? null : res.Message,
+            Status = status, Error = stop is not null ? stop.Reason : res.Status == BacktestRunStatus.Completed ? null : res.Message,
+            Stop = stop, ContractCheck = contractCheck, ReasonCounts = reasonCounts, Integrity = integrity,
             SkippedAtLoad = feed.Skipped.ToList(), Segments = segDtos, Transitions = transitions, Trades = tradeDtos, BySession = bySession, Total = total,
             ByDay = byDay, EndBalance = start + trades.Sum(t => t.NetPnL), MaxDrawdown = maxDd, TicksProcessed = res.TicksProcessed,
             SignalsGenerated = res.SignalsGenerated, OrdersSubmitted = res.OrdersSubmitted, OrdersRejectedByRisk = res.OrdersRejectedByRisk,

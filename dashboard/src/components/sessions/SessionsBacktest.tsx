@@ -193,7 +193,27 @@ function RunReport({ run, onOpenChart }: { run: SessionRunResult; onOpenChart: (
           <button className={btnOn} onClick={() => onOpenChart()} data-testid="ln-open-chart">Trades im Chart</button>
         </div>
         {run.skippedAtLoad.length > 0 && <ul className="list-disc pl-4 text-[var(--gold)]">{run.skippedAtLoad.map((s) => <li key={s}>{s}</li>)}</ul>}
+        {run.contractCheck && <div className={run.contractCheck.startsWith("geprüft") ? "text-[var(--fg-dim)]" : "text-[var(--gold)]"} data-testid="ln-contract">{run.contractCheck}</div>}
       </Box>
+
+      {run.stop && (
+        <Box title={`Lauf abgebrochen: ${run.stop.reason}`} testid="ln-stop">
+          <div className="text-[var(--red)]">
+            {run.stop.day} {run.stop.sessionLabel}: Sessionende {t7(run.stop.sessionEndUtc).slice(11, 16)} UTC, Close-Out {t7(run.stop.closeOutUtc).slice(11, 16)} UTC
+            {run.stop.sessionCloseSignalUtc ? ` · Flat-Signal ${t7(run.stop.sessionCloseSignalUtc).slice(11)} ohne ausführbaren Folge-Tick` : " · kein Tick nach der Close-Out-Grenze"}
+          </div>
+          <table className="font-mono">
+            <tbody>
+              <tr><td className="pr-4 text-[var(--fg-faint)]">Letzter beobachteter Preis</td><td>{num(run.stop.lastObservedPrice)} <span className="text-[var(--fg-dim)]">({t7(run.stop.lastTickUtc)})</span></td></tr>
+              <tr><td className="pr-4 text-[var(--fg-faint)]">Offene Position</td><td>{run.stop.openPosition}{run.stop.pendingOrders ? ` · ${run.stop.pendingOrders} offene Order(s) – nicht in die nächste Session übernommen` : ""}</td></tr>
+              <tr><td className="pr-4 text-[var(--fg-faint)]">Offene Bewertung (nicht gebucht)</td><td className={pnlCls(run.stop.unrealizedGrossAtLastPrice)}>{money(run.stop.unrealizedGrossAtLastPrice)}</td></tr>
+              <tr><td className="pr-4 text-[var(--fg-faint)]">Realisiert (geschlossene Trades)</td><td><span className={pnlCls(run.stop.realizedNet)}>{money(run.stop.realizedNet)}</span> netto · Brutto {money(run.stop.realizedGross)} · Gebühren {money(run.stop.realizedFees)} · Konto {money(run.stop.balanceRealized)}</td></tr>
+              <tr><td className="pr-4 text-[var(--fg-faint)]">Nicht gelaufen</td><td>{run.stop.notRunSegments.join(", ") || "–"}</td></tr>
+            </tbody>
+          </table>
+          <p className="text-[var(--fg-faint)]">{run.stop.note}</p>
+        </Box>
+      )}
 
       <Box title="Übergänge (Sprung über die Pause)" testid="ln-transitions">
         <table className="w-full font-mono">
@@ -246,6 +266,23 @@ function RunReport({ run, onOpenChart }: { run: SessionRunResult; onOpenChart: (
         </table>
       </Box>
 
+      {(run.reasonCounts?.length || run.integrity) && (
+        <Box title="Ein-/Ausstiegsgründe und ID-Prüfung" testid="ln-reasons">
+          <table className="font-mono">
+            <thead><tr className="text-left text-[var(--fg-faint)]">{["Session", "Art", "Grund", "Anzahl"].map((h) => <th key={h} className="pr-3 font-normal">{h}</th>)}</tr></thead>
+            <tbody>{(run.reasonCounts ?? []).map((r) => <tr key={r.session + r.kind + r.cause}><td className="pr-3">{r.session}</td><td className="pr-3">{r.kind}</td><td className="pr-3">{r.cause}</td><td>{r.count}</td></tr>)}</tbody>
+          </table>
+          {run.integrity && (
+            <div className="text-[var(--fg-dim)]" data-testid="ln-integrity">
+              Orders {run.integrity.ordersSubmitted} · davon mit Trade verknüpft {run.integrity.ordersLinkedToTrades} · unverknüpft {run.integrity.ordersUnlinked} ·
+              verschiedene Signal-IDs {run.integrity.distinctSignalIds} · Einstiegs-Fills {run.integrity.distinctEntryFillIds} · Ausstiegs-Fills {run.integrity.distinctExitFillIds} ·
+              von zwei Trades geteilte Fills {run.integrity.fillsSharedByTwoTrades} · überlappende Trades {run.integrity.overlappingTrades}
+              {run.integrity.notes.length > 0 && <div className="text-[var(--gold)]">{run.integrity.notes.join(" ")}</div>}
+            </div>
+          )}
+        </Box>
+      )}
+
       <Box title={`Journal (${run.trades.length} Trades)`} testid="ln-journal">
         <div className="flex gap-1">
           {[["all", "Alle"], ["London", "London"], ["NewYork", "New York"]].map(([k, l]) => (
@@ -253,13 +290,14 @@ function RunReport({ run, onOpenChart }: { run: SessionRunResult; onOpenChart: (
         </div>
         <div className="max-h-[360px] overflow-y-auto">
           <table className="w-full font-mono">
-            <thead className="sticky top-0 bg-[var(--panel)]"><tr className="text-left text-[var(--fg-faint)]">{["#", "Tag", "Session", "Seite", "Einstieg (UTC)", "Ausstieg (UTC)", "Brutto", "Gebühren", "Netto", "Grund", "Konto", ""].map((h) => <th key={h} className="pr-2 font-normal">{h}</th>)}</tr></thead>
+            <thead className="sticky top-0 bg-[var(--panel)]"><tr className="text-left text-[var(--fg-faint)]">{["#", "Tag", "Session", "Seite", "Einstieg (UTC)", "Ausstieg (UTC)", "Brutto", "Gebühren", "Netto", "Grund", "Konto", "IDs", ""].map((h) => <th key={h} className="pr-2 font-normal">{h}</th>)}</tr></thead>
             <tbody>{trades.slice(0, 2000).map((t) => (
               <tr key={t.index} className={t.crossedPause ? "text-[var(--red)]" : ""}>
                 <td className="pr-2">{t.index + 1}</td><td className="pr-2">{t.day}</td><td className="pr-2">{t.sessionLabel}</td><td className="pr-2">{t.side}</td>
                 <td className="pr-2">{t.entryTimeUtc.slice(11, 23)} @ {num(t.entryPrice)}</td><td className="pr-2">{t.exitTimeUtc.slice(11, 23)} @ {num(t.exitPrice)}</td>
                 <td className={cn("pr-2", pnlCls(t.grossPnL))}>{money(t.grossPnL)}</td><td className="pr-2">{money(t.fees)}</td>
-                <td className={cn("pr-2", pnlCls(t.netPnL))}>{money(t.netPnL)}</td><td className="pr-2 text-[10px]">{t.exitReason}</td><td className="pr-2">{money(t.balanceAfter)}</td>
+                <td className={cn("pr-2", pnlCls(t.netPnL))}>{money(t.netPnL)}</td><td className="pr-2 text-[10px]" title={t.entryCause ? `Einstieg: ${t.entryCause}` : undefined}>{t.exitCause || t.exitReason}</td><td className="pr-2">{money(t.balanceAfter)}</td>
+                <td className="pr-2 text-[10px] text-[var(--fg-faint)]" title={t.entryOrderId ? `Signal ${t.entrySignalId} → Order ${t.entryOrderId} → Fill ${t.entryFillId}\nSignal ${t.exitSignalId} → Order ${t.exitOrderId} → Fill ${t.exitFillId}` : undefined}>{t.entryFillId ? `${t.entryFillId.slice(0, 8)}/${t.exitFillId?.slice(0, 8)}` : "–"}</td>
                 <td><button className={btn} onClick={() => onOpenChart(t.day, t.index)} data-testid={`ln-trade-chart-${t.index}`}>Im Chart</button></td>
               </tr>))}</tbody>
           </table>

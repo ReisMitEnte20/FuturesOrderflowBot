@@ -91,10 +91,20 @@ public sealed class LondonNewYorkSessionTests
 
     private static DateTimeOffset At(string hhmmss) => SessionFixtures.Utc("2026-03-20T" + hhmmss + "Z");
 
-    private static async Task<(BacktestResult Res, SessionGateStrategy Gate)> Run(IStrategy inner, List<MarketTick> ticks, RiskConfig? risk = null)
+    /// <summary>Lauf wie im SessionRunService: Session-Gate + Sessiongrenzen-Guard der Engine.</summary>
+    private static async Task<(BacktestResult Res, SessionGateStrategy Gate)> RunGuarded(IStrategy inner, List<MarketTick> ticks, RiskConfig? risk = null)
     {
         var gate = new SessionGateStrategy(inner, Segments());
-        var res = await new BacktestEngine().RunAsync(BacktestTestData.Request(gate, ticks, risk: risk));
+        var res = await new BacktestEngine().RunAsync(BacktestTestData.Request(gate, ticks, risk: risk) with
+        {
+            TickGuard = c => gate.BeforeTick(c.NextTick.Timestamp, c.PositionQuantity, c.PendingOrders)
+        });
+        return (res, gate);
+    }
+
+    private static async Task<(BacktestResult Res, SessionGateStrategy Gate)> Run(IStrategy inner, List<MarketTick> ticks, RiskConfig? risk = null)
+    {
+        var (res, gate) = await RunGuarded(inner, ticks, risk);
         res.Status.Should().Be(BacktestRunStatus.Completed, res.Message);
         return (res, gate);
     }
@@ -181,19 +191,106 @@ public sealed class LondonNewYorkSessionTests
     }
 
     [Fact]
-    public async Task Without_a_tick_after_close_out_the_position_is_flagged_and_flattened_at_the_first_tick_after_the_pause()
+    public async Task Open_position_without_any_tick_after_close_out_stops_the_run_before_the_first_new_york_tick()
     {
         var ticks = Minutes(LStart, LEnd.AddMinutes(-10), i => 20000m + i, AggressorSide.Buy); // London-Daten enden vor der Close-Out-Grenze
         ticks.AddRange(Minutes(NStart, NEnd, i => 20100m, AggressorSide.Buy));
         var strat = new ScriptByTime(new() { [At("10:00:30")] = SignalDirection.Long });
+        var (res, gate) = await RunGuarded(strat, ticks);
+
+        res.Status.Should().Be(BacktestRunStatus.Stopped);
+        res.StopReason.Should().Be(SessionGateStrategy.NotFlattenableReason);
+        res.StoppedBeforeTickUtc.Should().Be(At("13:30:30"), "gestoppt VOR dem ersten New-York-Tick");
+        gate.Observations.Should().ContainSingle("New York wurde nicht gestartet");
+        gate.Observations[0].CloseOutReachedUtc.Should().BeNull("kein Tick ab der Grenze – kein zulässiger Fill vor dem Sessionende möglich");
+        res.Trades.Should().BeEmpty("weder rückwirkender Fill auf dem letzten London-Tick noch Glattstellung nach der Pause");
+        res.FinalPositionSide.Should().Be(PositionSide.Long);
+        res.LastTickUtc.Should().Be(At("10:49:30"));
+        res.LastTickPrice.Should().Be(20000m + 169);
+        // Offene Bewertung zum letzten beobachteten Preis – getrennt vom (leeren) realisierten Ergebnis.
+        res.FinalPositionUnrealizedAtLastTick.Should().Be((res.LastTickPrice!.Value - res.FinalPositionAvgPrice) * 20m);
+        gate.BoundaryStop!.Segment.Id.Should().Be("L");
+        gate.BoundaryStop.LastTickPrice.Should().Be(20169m);
+    }
+
+    /// <summary>London: Long 09:00, Flat 09:30 (geschlossen), Long 10:00 bleibt offen; London-Ticks enden genau mit dem Close-Out-Tick
+    /// 10:55:30 → Flat-Signal dort, aber KEIN ausführbarer Tick mehr vor 11:00.</summary>
+    private static List<MarketTick> FlattenWithoutFollowTick(decimal firstNewYorkPrice)
+    {
+        var ticks = Minutes(LStart, LEnd.AddMinutes(-4), i => 20000m + i, AggressorSide.Buy); // letzter Tick 10:55:30
+        var ny = Minutes(NStart, NEnd, i => 20100m - i, AggressorSide.Sell);
+        ny[0] = ny[0] with { Price = firstNewYorkPrice };
+        ticks.AddRange(ny);
+        return ticks;
+    }
+
+    private static ScriptByTime LondonScript() => new(new()
+    {
+        [At("09:00:30")] = SignalDirection.Long, [At("09:30:30")] = SignalDirection.Flat, [At("10:00:30")] = SignalDirection.Long,
+        [At("13:35:30")] = SignalDirection.Short,
+    });
+
+    [Fact]
+    public async Task Flatten_signal_on_the_last_london_tick_is_not_filled_after_the_pause_and_the_order_does_not_reach_new_york()
+    {
+        var (res, gate) = await RunGuarded(LondonScript(), FlattenWithoutFollowTick(20100m));
+
+        res.Status.Should().Be(BacktestRunStatus.Stopped);
+        res.StopReason.Should().Be(SessionGateStrategy.NotFlattenableReason);
+        gate.Observations[0].SessionCloseSignalUtc.Should().Be(At("10:55:30"));
+        res.OrdersUnfilledAtEnd.Should().Be(1, "die Glattstellungs-Order bleibt offen – sie wird NICHT am ersten New-York-Tick gefüllt");
+        gate.BoundaryStop!.PendingOrders.Should().Be(1);
+        res.Trades.Should().ContainSingle("nur der vor der Close-Out-Grenze geschlossene London-Trade");
+        res.Trades.Should().OnlyContain(t => t.ExitTime < LEnd);
+        res.FinalPositionSide.Should().Be(PositionSide.Long);
+        res.LastTickUtc.Should().Be(At("10:55:30"));
+        gate.Observations.Should().ContainSingle();
+        gate.Observations[0].Incidents.Should().ContainSingle(i => i.Contains("Position vor Sessionende nicht glattstellbar"));
+    }
+
+    [Fact]
+    public async Task Regression_changing_only_the_first_new_york_price_does_not_change_the_stopped_london_result()
+    {
+        var (a, _) = await RunGuarded(LondonScript(), FlattenWithoutFollowTick(20100m));
+        var (b, _) = await RunGuarded(LondonScript(), FlattenWithoutFollowTick(5_000m)); // drastisch anderer erster NY-Preis
+
+        b.Status.Should().Be(BacktestRunStatus.Stopped);
+        b.Trades.Should().BeEquivalentTo(a.Trades, o => o.WithStrictOrdering());
+        b.Trades.Sum(t => t.NetPnL).Should().Be(a.Trades.Sum(t => t.NetPnL));
+        b.Trades.Sum(t => t.Fees).Should().Be(a.Trades.Sum(t => t.Fees));
+        b.LastTickPrice.Should().Be(a.LastTickPrice);
+        b.FinalPositionUnrealizedAtLastTick.Should().Be(a.FinalPositionUnrealizedAtLastTick);
+        b.FinalPositionAvgPrice.Should().Be(a.FinalPositionAvgPrice);
+        b.TicksProcessed.Should().Be(a.TicksProcessed);
+        b.StopReason.Should().Be(a.StopReason);
+        a.Trades.Should().NotContain(t => t.ExitPrice == 20100m || t.ExitPrice == 5_000m, "kein Fill zum New-York-Preis");
+    }
+
+    [Fact]
+    public async Task Without_the_boundary_guard_a_carried_position_fails_the_run_closed_instead_of_flattening_after_the_pause()
+    {
+        var gate = new SessionGateStrategy(LondonScript(), Segments());
+        var res = await new BacktestEngine().RunAsync(BacktestTestData.Request(gate, FlattenWithoutFollowTick(20100m)));
+        res.Status.Should().Be(BacktestRunStatus.Failed);
+        res.Message.Should().Contain("über die Pause");
+    }
+
+    [Fact]
+    public async Task Flat_account_at_the_london_end_still_jumps_to_new_york_with_the_guard_active()
+    {
+        var ticks = Minutes(LStart, LEnd, i => 20000m + i, AggressorSide.Buy);
+        ticks.AddRange(Minutes(NStart, NEnd, i => 20300m - i, AggressorSide.Sell));
+        var strat = new ScriptByTime(new() { [At("09:00:30")] = SignalDirection.Long, [At("09:30:30")] = SignalDirection.Flat,
+            [At("14:00:30")] = SignalDirection.Short, [At("14:30:30")] = SignalDirection.Flat });
         var (res, gate) = await Run(strat, ticks);
 
-        gate.Observations[0].CloseOutReachedUtc.Should().BeNull("kein Tick ab der Grenze – kein zulässiger Fill vor dem Sessionende möglich");
-        gate.Observations[1].Incidents.Should().ContainSingle(i => i.Contains("über die Pause"));
-        res.Trades.Should().ContainSingle();
-        res.Trades[0].EntryTime.Should().BeBefore(LEnd);
-        res.Trades[0].ExitTime.Should().Be(At("13:31:30"), "Glattstellung erst mit dem ersten echten Tick nach der Pause – nichts in der Pause erfunden");
-        res.FinalPositionSide.Should().Be(PositionSide.Flat);
+        gate.BoundaryStop.Should().BeNull();
+        gate.Observations.Should().HaveCount(2);
+        res.Trades.Should().HaveCount(2);
+        res.StopReason.Should().BeNull();
+        res.TradeLinks.Should().HaveCount(2);
+        res.Orders.Should().HaveCount(4);
+        res.TradeLinks.Select(l => l.EntryFillId).Should().OnlyHaveUniqueItems().And.NotIntersectWith(res.TradeLinks.Select(l => l.ExitFillId));
     }
 
     [Fact]

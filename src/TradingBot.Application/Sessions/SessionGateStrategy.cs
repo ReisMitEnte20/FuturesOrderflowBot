@@ -15,6 +15,10 @@ public interface ISessionAware
     int OnSessionStart(SessionSegment segment);
 }
 
+/// <summary>Abbruch an einer Sessiongrenze: letzter beobachteter Stand der betroffenen Session (nichts aus der nächsten Session).</summary>
+public sealed record SessionBoundaryStop(SessionSegment Segment, string Reason, DateTimeOffset? LastTickUtc, decimal? LastTickPrice,
+    string PositionAtLastTick, int PendingOrders, DateTimeOffset? SessionCloseSignalUtc, DateTimeOffset? CloseOutReachedUtc);
+
 /// <summary>Beobachtung des Session-Gates je Segment (rein beschreibend; Trades/PnL stammen allein aus der Engine).</summary>
 public sealed class SessionSegmentObservation
 {
@@ -55,8 +59,10 @@ public sealed class SessionSegmentObservation
 /// <item>Ab <c>CloseOutUtc</c> (geplantes Sessionende minus Vorlauf, aus dem Plan bekannt – nicht aus dem Wissen, welcher Tick
 /// der letzte ist): neue Einstiege werden unterdrückt; eine offene Position erhält EIN Flat-Signal, das die Engine mit dem
 /// vorhandenen Fill-/Kostenmodell am nächsten Tick füllt.</item>
-/// <item>Ist beim ersten Tick einer neuen Session trotzdem eine Position offen (kein zulässiger Fill vor der Grenze), wird das
-/// als Vorfall ausgewiesen und sofort glattgestellt – nichts wird in der Pause erfunden.</item>
+/// <item>Ist vor dem ersten Tick der nächsten Session noch eine Position oder Order offen (kein ausführbarer Tick vor der
+/// Grenze), stoppt der Lauf über <see cref="BeforeTick"/> VOR diesem Tick als „unvollständig – Position vor Sessionende nicht
+/// glattstellbar“: kein rückwirkender Fill auf dem letzten Tick, keine Glattstellung nach der Pause, keine Order in der
+/// nächsten Session. Nichts wird in der Pause erfunden.</item>
 /// </list>
 /// Die Zeit ist ausschließlich die Marktzeit der Ticks; in der Pause wird nicht gewartet.
 /// </summary>
@@ -102,26 +108,21 @@ public sealed class SessionGateStrategy : IStrategy, IPositionManagerAware
         if (s >= _segments.Count || tick.Timestamp < _segments[s].StartUtc)
             throw new InvalidOperationException($"Tick {tick.Timestamp:O} liegt in keinem geplanten Sessionfenster – Lauf abgebrochen (fail-closed).");
 
-        TradeSignal? carriedFlatten = null;
         if (s != _seg)
         {
-            if (_cur is not null && _cur.LastTickUtc is not null && _cur.SignalOnLastTick)
-                _cur.Incidents.Add("Am letzten Tick vor der Pause wurde noch ein Signal ausgegeben – ein Fill ist erst nach der Pause möglich.");
+            // Fail-closed: eine Position über die Pause darf es nicht geben. Der Lauf muss VOR diesem Tick über
+            // BeforeTick(...) (Engine-TickGuard) gestoppt worden sein – hier wird NICHT nach der Pause glattgestellt.
+            // Geprüft wird auch die Position am letzten Tick der Vorsession: ohne Guard hätte die Engine eine dort offene
+            // Glattstellungs-Order bereits mit DIESEM Tick (nach der Pause) gefüllt.
+            var carried = OpenPosition(tick.Symbol);
+            if (_cur is not null && (carried is not null || _cur.PositionAtLastTick != "Flat"))
+                throw new InvalidOperationException($"Position {(carried is null ? _cur.PositionAtLastTick : Describe(carried))} würde über die Pause in {_segments[s].Id} getragen bzw. dort gefüllt – ohne Sessiongrenzen-Guard ist der Lauf ungültig (fail-closed).");
             _seg = s;
             _flattenSent = false;
             var seg = _segments[s];
             _cur = new SessionSegmentObservation { Segment = seg };
             _obs.Add(_cur);
             if (_inner is ISessionAware aware) _cur.DiscardedPartialBarTicksAtStart = aware.OnSessionStart(seg);
-
-            // Position nach den Fills dieses ersten Ticks: offen = über die Pause getragen → ausweisen und sofort schließen.
-            var open = OpenPosition(tick.Symbol);
-            if (open is not null && _obs.Count > 1)
-            {
-                _cur.Incidents.Add($"Position {Describe(open)} über die Pause getragen: beim ersten Tick nach der Pause noch offen (kein zulässiger Fill vor der Grenze) – sofort glattgestellt; Gap-Risiko.");
-                carriedFlatten = Flatten(tick, open, "Glattstellung: Position über die Pause getragen");
-                _flattenSent = true;
-            }
         }
 
         var cur = _cur!;
@@ -140,8 +141,7 @@ public sealed class SessionGateStrategy : IStrategy, IPositionManagerAware
         // Innere Strategie sieht JEDEN Tick (Bar-Zustand bleibt konsistent); ihr Signal wird ggf. unterdrückt.
         var sig = _inner.OnTick(tick);
         TradeSignal? result;
-        if (carriedFlatten is not null) result = carriedFlatten;
-        else if (tick.Timestamp >= cur.Segment.CloseOutUtc)
+        if (tick.Timestamp >= cur.Segment.CloseOutUtc)
         {
             if (cur.CloseOutReachedUtc is null)
             {
@@ -169,6 +169,34 @@ public sealed class SessionGateStrategy : IStrategy, IPositionManagerAware
         }
         cur.SignalOnLastTick = result is not null;
         return result;
+    }
+
+    /// <summary>Text, mit dem ein Lauf an der Sessiongrenze abgebrochen wird (offene Position).</summary>
+    public const string NotFlattenableReason = "unvollständig – Position vor Sessionende nicht glattstellbar";
+    /// <summary>Text, mit dem ein Lauf an der Sessiongrenze abgebrochen wird (flach, aber Order noch offen).</summary>
+    public const string PendingOrderReason = "unvollständig – offene Order an der Sessiongrenze";
+
+    /// <summary>Stopp an der Sessiongrenze (gesetzt von <see cref="BeforeTick"/>), sonst null.</summary>
+    public SessionBoundaryStop? BoundaryStop { get; private set; }
+
+    /// <summary>
+    /// Sessiongrenzen-Guard für die Engine (VOR Uhr, Fills und Strategie des nächsten Ticks): liegt der nächste Tick nicht mehr
+    /// in der laufenden Session und ist noch eine Position oder Order offen, wird der Lauf vor diesem Tick gestoppt. So wird
+    /// weder rückwirkend der letzte Tick als Fill benutzt noch am ersten Tick nach der Pause glattgestellt, und keine offene
+    /// Order gelangt in die nächste Session. Rückgabe: Stoppgrund oder null (weiterlaufen).
+    /// </summary>
+    public string? BeforeTick(DateTimeOffset nextTickUtc, int openQuantity, int pendingOrders)
+    {
+        if (_seg < 0 || _cur is null || nextTickUtc < _segments[_seg].EndUtc) return null;
+        if (openQuantity == 0 && pendingOrders == 0) return null;
+        string reason = openQuantity != 0 ? NotFlattenableReason : PendingOrderReason;
+        var seg = _segments[_seg];
+        BoundaryStop = new SessionBoundaryStop(seg, reason, _cur.LastTickUtc, _cur.LastTickPrice, _cur.PositionAtLastTick, pendingOrders,
+            _cur.SessionCloseSignalUtc, _cur.CloseOutReachedUtc);
+        _cur.Incidents.Add(_cur.SessionCloseSignalUtc is { } sc
+            ? FormattableString.Invariant($"{reason}: Flat-Signal {sc:HH:mm:ss.fff} UTC ausgegeben, aber nach ihm kein ausführbarer Tick vor Sessionende {seg.EndUtc:HH:mm} UTC – Lauf gestoppt.")
+            : FormattableString.Invariant($"{reason}: nach der Close-Out-Grenze {seg.CloseOutUtc:HH:mm} UTC kein Tick mehr vor Sessionende {seg.EndUtc:HH:mm} UTC – Lauf gestoppt."));
+        return reason;
     }
 
     public TradeSignal? OnCandle(Candle candle) => null;

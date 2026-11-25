@@ -157,6 +157,65 @@ public sealed class LondonNewYorkPlanAndRunTests
         r.Transitions.Single().BalanceAfter.Should().Be(r.Transitions.Single().BalanceBefore, "Kontostand bleibt beim Übergang erhalten");
     }
 
+    /// <summary>London-Aufnahme 08:00–11:00, aber Ticks nur bis 10:40 (vor der Close-Out-Grenze): eine offene Position ist vor dem
+    /// Sessionende nicht mehr glattstellbar. Optional wird NUR der erste New-York-Preis verändert.</summary>
+    private static async Task<SessionRunResult> StoppedRun(decimal? firstNyPrice)
+    {
+        var s = Utc("2026-01-15T08:00:00Z"); var e = Utc("2026-01-15T11:00:00Z");
+        var ldn = new JobSpec("London", s, e, "LS", Ticks(s, Utc("2026-01-15T10:40:00Z"), 1500, 41));
+        var ny = NewYork("2026-01-15", "NS", seed: 42);
+        if (firstNyPrice is decimal p)
+        {
+            var t = ny.Ticks.ToList();
+            t[0] = (t[0].T, p, t[0].Vol, t[0].Buy);
+            ny = ny with { Ticks = t };
+        }
+        var env = Setup(new[] { ldn }, new[] { ny });
+        return await env.Run.RunAsync(new SessionRunRequest { From = "2026-01-15", To = "2026-01-15", TicksPerBar = 50, DeltaThreshold = 0 });
+    }
+
+    [Fact]
+    public async Task Open_position_that_cannot_be_flattened_before_the_session_end_stops_the_run_as_incomplete()
+    {
+        var r = await StoppedRun(null);
+
+        r.Status.Should().Be("Incomplete");
+        r.Stop.Should().NotBeNull();
+        r.Stop!.Reason.Should().Be("unvollständig – Position vor Sessionende nicht glattstellbar");
+        r.Stop.Session.Should().Be("London");
+        r.Stop.LastTickUtc.Should().StartWith("2026-01-15T10:39", "letzter beobachteter London-Tick");
+        r.Stop.OpenQuantity.Should().Be(1);
+        r.Stop.LastObservedPrice.Should().NotBeNull();
+        r.Stop.RealizedNet.Should().Be(r.Trades.Sum(t => t.NetPnL), "realisiert = nur geschlossene Trades");
+        r.Stop.BalanceRealized.Should().Be(r.StartBalance + r.Stop.RealizedNet);
+        r.Stop.StoppedBeforeTickUtc.Should().StartWith("2026-01-15T14:30", "vor dem ersten New-York-Tick angehalten");
+        r.Stop.NotRunSegments.Should().ContainSingle(x => x.StartsWith("NewYork"));
+        r.Segments.Should().ContainSingle("New York wurde nicht gestartet");
+        r.Trades.Should().OnlyContain(t => t.Session == "London" && string.CompareOrdinal(t.ExitTimeUtc, "2026-01-15T10:40") < 0);
+        r.ContractCheck.Should().StartWith("Kontraktidentität ungeprüft");
+        r.Integrity!.FillsSharedByTwoTrades.Should().Be(0);
+        r.Integrity.OverlappingTrades.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Regression_a_drastically_different_first_new_york_price_leaves_the_stopped_london_result_unchanged()
+    {
+        var a = await StoppedRun(null);
+        var b = await StoppedRun(1_000m);
+
+        b.Status.Should().Be("Incomplete");
+        b.Stop!.LastObservedPrice.Should().Be(a.Stop!.LastObservedPrice);
+        b.Stop.UnrealizedGrossAtLastPrice.Should().Be(a.Stop.UnrealizedGrossAtLastPrice);
+        b.Stop.RealizedNet.Should().Be(a.Stop.RealizedNet);
+        b.Stop.RealizedFees.Should().Be(a.Stop.RealizedFees);
+        b.Stop.OpenPosition.Should().Be(a.Stop.OpenPosition);
+        b.Stop.PendingOrders.Should().Be(a.Stop.PendingOrders);
+        b.EndBalance.Should().Be(a.EndBalance);
+        b.TicksProcessed.Should().Be(a.TicksProcessed);
+        b.Trades.Select(t => (t.EntryTimeUtc, t.EntryPrice, t.ExitTimeUtc, t.ExitPrice, t.NetPnL))
+            .Should().Equal(a.Trades.Select(t => (t.EntryTimeUtc, t.EntryPrice, t.ExitTimeUtc, t.ExitPrice, t.NetPnL)));
+    }
+
     [Fact]
     public async Task Range_without_any_complete_day_runs_nothing_and_says_why()
     {

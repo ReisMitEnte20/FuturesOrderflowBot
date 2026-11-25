@@ -42,6 +42,21 @@ export interface SessionTrade {
   index: number; day: string; session: string; sessionLabel: string; segmentId: string; collection: string; recordingId: string;
   side: string; qty: number; entryTimeUtc: string; entryPrice: number; exitTimeUtc: string; exitPrice: number;
   grossPnL: number; fees: number; netPnL: number; exitReason: string; crossedPause: boolean; balanceAfter: number;
+  entryCause?: string; exitCause?: string; entrySignalUtc?: string | null; exitSignalUtc?: string | null;
+  entrySignalId?: string | null; entryOrderId?: string | null; entryFillId?: string | null;
+  exitSignalId?: string | null; exitOrderId?: string | null; exitFillId?: string | null;
+}
+/** Abbruch an einer Sessiongrenze: letzter Preis, offene Bewertung (nicht gebucht) und realisiertes Ergebnis getrennt. */
+export interface SessionRunStop {
+  reason: string; segmentId: string; session: string; sessionLabel: string; day: string; sessionEndUtc: string; closeOutUtc: string;
+  sessionCloseSignalUtc: string | null; lastTickUtc: string | null; lastObservedPrice: number | null; openPosition: string; openSide: string | null;
+  openQuantity: number; openAvgPrice: number | null; unrealizedGrossAtLastPrice: number; realizedGross: number; realizedFees: number; realizedNet: number;
+  balanceRealized: number; pendingOrders: number; stoppedBeforeTickUtc: string | null; notRunSegments: string[]; note: string;
+}
+export interface SessionReasonCount { session: string; kind: string; cause: string; count: number; }
+export interface JournalIntegrity {
+  ordersSubmitted: number; ordersLinkedToTrades: number; ordersUnlinked: number; distinctSignalIds: number; distinctEntryFillIds: number;
+  distinctExitFillIds: number; fillsSharedByTwoTrades: number; overlappingTrades: number; tradesWithExitBeforeEntry: number; notes: string[];
 }
 export interface SessionSummary { key: string; label: string; sessions: number; trades: number; winners: number; losers: number; grossPnL: number; fees: number; netPnL: number; entrySignals: number; suppressedAfterCloseOut: number; }
 export interface SessionDaySummary { day: string; trades: number; grossPnL: number; fees: number; netPnL: number; dailyLimitHitUtc: string | null; dailyLimitHitSession: string | null; entriesAfterLimit: number; entrySignalsAfterLimit: number; notes: string[]; }
@@ -53,6 +68,7 @@ export interface SessionRunResult {
   transitions: SessionTransition[]; trades: SessionTrade[]; bySession: SessionSummary[]; total: SessionSummary | null; byDay: SessionDaySummary[];
   startBalance: number; endBalance: number; maxDrawdown: number; ticksProcessed: number; signalsGenerated: number; ordersSubmitted: number;
   ordersRejectedByRisk: number; ordersUnfilledAtEnd: number; finalPosition: string; indicatorPolicy: IndicatorPolicy[]; rules: string[]; elapsedSeconds: number;
+  stop?: SessionRunStop | null; contractCheck?: string; reasonCounts?: SessionReasonCount[]; integrity?: JournalIntegrity | null;
 }
 export interface SessionRunIndexEntry { runId: string; createdUtc: string; status: string; from: string; to: string; days: number; trades: number; netPnL: number; strategyName: string; }
 

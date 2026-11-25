@@ -23,6 +23,9 @@ public sealed class RecordingPositionManager : IPositionManager
     public Action<BacktestTrade>? TradeClosed { get; set; }
 
     public IReadOnlyList<BacktestTrade> Trades => _trades;
+    /// <summary>Order-/Fill-IDs je Trade (gleicher Index wie <see cref="Trades"/>).</summary>
+    public IReadOnlyList<BacktestTradeLink> Links => _links;
+    private readonly List<BacktestTradeLink> _links = new();
 
     public Position? GetPosition(string symbol) => _inner.GetPosition(symbol);
     public IReadOnlyCollection<Position> OpenPositions => _inner.OpenPositions;
@@ -69,6 +72,8 @@ public sealed class RecordingPositionManager : IPositionManager
         state.EntryTime = fill.Timestamp;
         state.EntryPrice = fill.FillPrice;
         state.EntryQuantity = after.Quantity;
+        state.EntryOrderId = fill.OrderId;
+        state.EntryFillId = fill.FillId;
         state.BaselineGross = baselineFrom?.RealizedGrossPnL ?? 0m;
         state.BaselineNet = baselineFrom?.RealizedNetPnL ?? 0m;
         state.BaselineFees = baselineFrom?.Fees.TotalFees ?? 0m;
@@ -91,6 +96,7 @@ public sealed class RecordingPositionManager : IPositionManager
         };
         state.IsOpen = false;
         _trades.Add(trade);
+        _links.Add(new BacktestTradeLink(state.EntryOrderId, state.EntryFillId, fill.OrderId, fill.FillId));
         TradeClosed?.Invoke(trade);
     }
 
@@ -101,6 +107,8 @@ public sealed class RecordingPositionManager : IPositionManager
         public DateTimeOffset EntryTime;
         public decimal EntryPrice;
         public int EntryQuantity;
+        public Guid EntryOrderId;
+        public Guid EntryFillId;
         public decimal BaselineGross;
         public decimal BaselineNet;
         public decimal BaselineFees;
