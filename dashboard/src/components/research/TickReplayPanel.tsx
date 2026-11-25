@@ -4,7 +4,7 @@ import {
   TickReplayEngine, createStore, appendChunk, decodeChunk, countAtOrBefore, candleStatus, advanceClock,
   type TickStore, type ReplayCandle,
 } from "@/lib/tickReplay";
-import { tickReplayApi, type TickReplayMeta, type TickReplaySession } from "@/lib/tickReplayApi";
+import { tickReplayApi, sessionId, type TickReplayMeta, type TickReplaySession } from "@/lib/tickReplayApi";
 import { basisCheck, eventReached, pauseTarget, tradeEvents, tradeRef, type EventKind, type ReplayFocus, type TradeEvent } from "@/lib/tradeReplay";
 import { SignalFacts, TradeCalc } from "@/components/research/TradeJournal";
 
@@ -102,7 +102,7 @@ export function TickReplayPanel({ focus = null, onClearFocus }: { focus?: Replay
     tickReplayApi.sessions(ac.signal).then((l) => {
       setSessions(l.sessions);
       if (!l.available) setListErr(l.reason ?? "Keine Sessions verfuegbar.");
-      if (l.sessions.length) setJobId((j) => j || l.sessions[0].jobId);
+      if (l.sessions.length) setJobId((j) => j || sessionId(l.sessions[0]));
     }).catch((e) => { if (!ac.signal.aborted) setListErr(`Tick-Replay-API nicht erreichbar (${e?.message ?? e}). DevDashboard-API auf :5034 starten.`); });
     return () => ac.abort();
   }, []);
@@ -259,7 +259,7 @@ export function TickReplayPanel({ focus = null, onClearFocus }: { focus?: Replay
     }
     setFocusMsg(null);
     focusSeekRef.current = focus.key;
-    setJobId(s.jobId);
+    setJobId(sessionId(s));
   }, [focus?.key, sessions]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -364,10 +364,10 @@ export function TickReplayPanel({ focus = null, onClearFocus }: { focus?: Replay
             <label className="text-[11px] text-[var(--fg-dim)]">Session</label>
             <select value={jobId} onChange={(e) => setJobId(e.target.value)} data-testid="tick-replay-session"
               className="h-[28px] rounded-md border border-[var(--line-2)] bg-[var(--panel-3)] px-2 text-xs text-[var(--fg)]">
-              {sessions.map((s) => <option key={s.jobId} value={s.jobId}>{s.label} · {nf.format(s.rows)} Trades</option>)}
+              {sessions.map((s) => <option key={sessionId(s)} value={sessionId(s)}>{s.label} · {nf.format(s.rows)} Trades{s.selection === "conflict" ? ` · Fassung ${s.collection} (Konflikt)` : ""}{s.recorderDrops ? ` · ⚠ ${nf.format(s.recorderDrops)} Drops` : ""}</option>)}
             </select>
             {m && <span className="text-[11px] text-[var(--fg-faint)]">
-              Fenster [{fmtTime(m, m.windowStartUnits, nyHm, 0)}, {fmtTime(m, m.windowEndUnits, nyHm, 0)}) {TZ} · {nf.format(m.count)} Trades · Vol {nf.format(m.totalVolume)} (Buy {nf.format(m.buyVolume)} / Sell {nf.format(m.sellVolume)}) · Quelle trades.csv SHA256 {m.csvSha256.slice(0, 12)}… · Cache {m.cache}
+              Fenster [{fmtTime(m, m.windowStartUnits, nyHm, 0)}, {fmtTime(m, m.windowEndUnits, nyHm, 0)}) {TZ} · {nf.format(m.count)} Trades · Vol {nf.format(m.totalVolume)} (Buy {nf.format(m.buyVolume)} / Sell {nf.format(m.sellVolume)}) · Quelle {m.collection ? `${m.collection} · ` : ""}trades.csv {m.sliceSha256 ? `Tagesabschnitt ${m.sliceBytes} SHA256 ${m.sliceSha256.slice(0, 12)}…` : `SHA256 ${m.csvSha256.slice(0, 12)}…`} · Cache {m.cache}
             </span>}
           </div>
 

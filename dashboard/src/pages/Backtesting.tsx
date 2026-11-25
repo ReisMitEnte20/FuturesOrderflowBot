@@ -1,6 +1,8 @@
 // Hauptbereich „Backtesting“: Strategie wählen → einmal „Vollständigen Backtest starten“ → gespeicherter Bericht.
-// Hauptansichten: Strategie testen · Strategien vergleichen. Sekundär (eigene URLs bleiben gültig): Alle Läufe (?view=history),
-// Orderflow & Tick-Replay (?view=orderflow), Expertenansicht (?view=research).
+// Hauptansichten: Strategie testen · Strategien vergleichen · Chart & Replay (gespeicherte Trades im Chart, Handelstag
+// abspielen, Orderflow-Lauf-Dateien, Schnelltest = bisheriger Chart-Backtest). Sekundär: Alle Läufe (?view=history),
+// Expertenansicht (?view=research). Alte Links bleiben gültig: ?view=orderflow → Chart & Replay (Orderflow-Lauf-Dateien),
+// /backtest → Chart & Replay (Schnelltest), /research → Expertenansicht.
 // Simulation-only: keine Orders, keine Broker-Anbindung.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router";
@@ -13,20 +15,19 @@ import {
 import { checkCounts, groupChecks, isHoldout, paramSummary, plannedText, previewFacts, startDecision, testedPeriod, type CheckGroup } from "@/lib/backtestingStart";
 import { ReportView, StatusChip, stepLabel } from "@/components/backtesting/ReportView";
 import { LineChart } from "@/components/backtesting/charts";
-import { ResearchWorkspace } from "@/components/research/ResearchWorkspace";
-import { TickReplayPanel } from "@/components/research/TickReplayPanel";
-import type { ReplayFocus } from "@/lib/tradeReplay";
+import { ChartReplayView } from "@/components/chartreplay/ChartReplayView";
 import { Research } from "./Research";
 
-type View = "test" | "compare" | "history" | "orderflow" | "research";
+type View = "test" | "compare" | "chart" | "history" | "orderflow" | "research";
 const PRIMARY: { key: View; label: string }[] = [
   { key: "test", label: "Strategie testen" },
   { key: "compare", label: "Strategien vergleichen" },
+  { key: "chart", label: "Chart & Replay" },
 ];
 const SECONDARY: { key: View; label: string }[] = [
-  { key: "orderflow", label: "Orderflow & Tick-Replay" },
   { key: "research", label: "Expertenansicht (Kampagnen & Holdout)" },
 ];
+const CHART_KEYS = ["mode", "day", "overlay", "trade"];
 const LAST_REPORT_KEY = "backtesting:lastRunId";
 const isTerminal = (s: string) => s === "Completed" || s === "Failed" || s === "Cancelled";
 
@@ -34,8 +35,16 @@ export function Backtesting({ defaultView = "test" }: { defaultView?: View }) {
   const [params, setParams] = useSearchParams();
   const location = useLocation();
   const legacyPath = location.pathname.startsWith("/research");   // alte /research-Links: bisherige Seite vollständig
-  const view = (params.get("view") as View | null) ?? defaultView;
-  const setView = (v: View) => { const p = new URLSearchParams(params); p.set("view", v); if (v !== "test") p.delete("run"); setParams(p); };
+  const raw = (params.get("view") as View | null) ?? defaultView;
+  // Alter Direktlink ?view=orderflow: gleiche Arbeitsfläche, jetzt unter „Chart & Replay“.
+  const view: View = raw === "orderflow" ? "chart" : raw;
+  const setView = (v: View) => {
+    const p = new URLSearchParams(params); p.set("view", v);
+    if (v !== "test" && v !== "chart") p.delete("run");
+    if (v !== "chart") CHART_KEYS.forEach((k) => p.delete(k));
+    if (v === "chart" && p.get("run")) p.set("mode", "run");
+    setParams(p);
+  };
   return (
     <div className="flex flex-col h-full min-h-0">
       {/* Eine Überschrift steht bereits in der Kopfzeile der App — hier nur die Ansichten. */}
@@ -68,7 +77,7 @@ export function Backtesting({ defaultView = "test" }: { defaultView?: View }) {
         {view === "test" && <TestView />}
         {view === "compare" && <CompareView />}
         {view === "history" && <HistoryView />}
-        {view === "orderflow" && <OrderflowView />}
+        {view === "chart" && <ChartReplayView defaultMode={raw === "orderflow" ? "files" : "run"} />}
         {view === "research" && <Research hideWorkspace={!legacyPath} />}
       </div>
     </div>
@@ -354,8 +363,9 @@ function TestView() {
       {run && (
         <section id="opened-report" aria-label="Geöffneter Bericht" className="space-y-3 scroll-mt-4">
           <RunHeader run={run} request={request} summary={reports.list?.find((r) => r.runId === run.runId)} onClose={closeReport}
-            onOpenHistory={() => navigate("/backtesting?view=history")} />
-          <ReportView run={run} onOpenHoldout={() => navigate(`/backtesting?view=research&run=${encodeURIComponent(run.runId)}`)} />
+            onOpenHistory={() => navigate("/backtesting?view=history")} onOpenChart={() => navigate(`/backtesting?view=chart&mode=run&run=${encodeURIComponent(run.runId)}`)} />
+          <ReportView run={run} onOpenHoldout={() => navigate(`/backtesting?view=research&run=${encodeURIComponent(run.runId)}`)}
+            onOpenChart={(trade) => navigate(`/backtesting?view=chart&mode=run&run=${encodeURIComponent(run.runId)}${trade != null ? `&trade=${trade}` : ""}`)} />
         </section>
       )}
     </div>
@@ -591,8 +601,8 @@ const sameInstant = (a?: string | null, b?: string | null) => (!a && !b) || (!!a
 const sameParams = (a: Record<string, string> = {}, b: Record<string, string> = {}) =>
   Object.keys({ ...a, ...b }).every((k) => (a[k] ?? "") === (b[k] ?? ""));
 
-function RunHeader({ run, request, summary, onClose, onOpenHistory }: {
-  run: ReportRun; request: BacktestingStartRequest; summary?: ReportSummary; onClose: () => void; onOpenHistory: () => void;
+function RunHeader({ run, request, summary, onClose, onOpenHistory, onOpenChart }: {
+  run: ReportRun; request: BacktestingStartRequest; summary?: ReportSummary; onClose: () => void; onOpenHistory: () => void; onOpenChart: () => void;
 }) {
   const cfg = run.config?.run;
   const prov = run.report?.provenance;
@@ -610,6 +620,11 @@ function RunHeader({ run, request, summary, onClose, onOpenHistory }: {
         <StatusChip status={run.status} />
         <span className="text-[var(--fg-faint)]">gestartet {dt(run.createdUtc)} UTC{run.completedUtc ? ` · beendet ${dt(run.completedUtc)} UTC` : ""}</span>
         <span className="ml-auto flex items-center gap-3">
+          {!live && (run.report?.trades?.trades?.length ?? 0) > 0 && (
+            <button onClick={onOpenChart} data-testid="open-trades-chart" className="h-7 rounded-md bg-grad-brand px-3 text-[12px] font-semibold text-[var(--bg)]">
+              Trades im Chart ({run.report!.trades!.trades.length})
+            </button>
+          )}
           <button onClick={onOpenHistory} className="text-[11px] text-[var(--key)]">Alle Läufe →</button>
           <button onClick={onClose} className="rounded border border-[var(--line-2)] px-2 py-0.5 text-[11px] text-[var(--fg-dim)] hover:text-[var(--fg)]">Bericht schließen</button>
         </span>
@@ -793,20 +808,6 @@ function CmpTable({ title, rows, cols }: { title: string; rows: CompareResult["r
         <thead><tr className="text-left text-[var(--fg-faint)]"><th className="pr-2 font-normal">Bericht</th>{cols.map(([h]) => <th key={h} className="pr-2 font-normal">{h}</th>)}</tr></thead>
         <tbody>{rows.map((r) => <tr key={r.runId} className="border-t border-[var(--line)]"><td className="pr-2 py-1 font-sans text-[var(--fg)]">{r.label}</td>{cols.map(([h, f]) => <td key={h} className="pr-2">{f(r)}</td>)}</tr>)}</tbody>
       </table>
-    </div>
-  );
-}
-
-// =============================================================================================
-// Orderflow & Tick-Replay (bisherige Research-Arbeitsfläche, unverändert eingebunden)
-// =============================================================================================
-
-function OrderflowView() {
-  const [focus, setFocus] = useState<ReplayFocus | null>(null);
-  return (
-    <div className="p-4 space-y-4">
-      <ResearchWorkspace onOpenInReplay={setFocus} />
-      <TickReplayPanel focus={focus} onClearFocus={() => setFocus(null)} />
     </div>
   );
 }

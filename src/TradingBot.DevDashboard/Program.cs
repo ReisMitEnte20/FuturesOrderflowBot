@@ -19,16 +19,22 @@ builder.Services.AddSingleton<RithmicDashboardService>(); // Marktdaten-API /api
 // Die Klassen (read-only Simulation) bleiben samt Tests erhalten, sind aber nicht mehr Teil des ausgelieferten Hosts.
 var backtestApi = new BacktestApiService(repoRoot);
 builder.Services.AddSingleton(backtestApi); // OHLC-BACKTEST (Simulation-only, keine Execution/Broker)
-// TICK-REPLAY (read-only): echte Trades einer Collection-Session portionsweise fuer das Research-Dashboard.
-// Collection und Cache sind konfigurierbar (TickReplay:CollectionDir / TickReplay:CacheDir, z. B. per Umgebungsvariable
-// TickReplay__CollectionDir). Der Cache liegt standardmaessig unter artifacts/ (gitignored); Originaldaten werden nur gelesen.
-var tickReplayCollection = builder.Configuration["TickReplay:CollectionDir"]
-    ?? @"F:\ATAS_Data\Collections\MNQ_NewYork_0930-1200_America-New-York_2026-10-26_bis_2026-10-30";
+// TICK-REPLAY / ORDERFLOW-CHART (read-only): echte Trades je Handelstag portionsweise fuer das Research-Dashboard.
+// Standard: ALLE Collections im Datenordner des ATAS Session Collectors (TickReplay:CollectionsRoot, Standard
+// F:\ATAS_Data\ATAS_Data Collection\Collections). Wird TickReplay:CollectionDir gesetzt (z. B. per Umgebungsvariable
+// TickReplay__CollectionDir), gilt nur diese eine Collection. Der Cache liegt standardmaessig unter artifacts/ (gitignored);
+// Originaldaten werden nur gelesen.
+var tickReplayCollection = builder.Configuration["TickReplay:CollectionDir"];
+var tickReplayRoot = builder.Configuration["TickReplay:CollectionsRoot"] ?? @"F:\ATAS_Data\ATAS_Data Collection\Collections";
 var tickReplayCache = builder.Configuration["TickReplay:CacheDir"]
     ?? Path.Combine(repoRoot ?? AppContext.BaseDirectory, "artifacts", "tickreplay-cache");
-builder.Services.AddSingleton(new TickReplayService(tickReplayCollection, tickReplayCache));
-// Dieselbe Collection als Tick-Datenquelle im Backtesting (je Handelstag; manifest-geprüfter Import, nur lesend).
-backtestApi.Ticks.CollectionManifest = Path.Combine(tickReplayCollection, "collection_manifest.json");
+builder.Services.AddSingleton(string.IsNullOrWhiteSpace(tickReplayCollection)
+    ? TickReplayService.ForCollectionsRoot(tickReplayRoot, tickReplayCache)
+    : new TickReplayService(tickReplayCollection, tickReplayCache));
+// Tick-Datenquelle im Backtesting (je Handelstag; manifest-geprüfter Import, nur lesend): nur wenn eine einzelne
+// Collection ausdruecklich konfiguriert ist (TickReplay:CollectionDir).
+if (!string.IsNullOrWhiteSpace(tickReplayCollection))
+    backtestApi.Ticks.CollectionManifest = Path.Combine(tickReplayCollection, "collection_manifest.json");
 // QUANT-RESEARCH (Auswertung, Validierung, Monte Carlo, Overfitting) — rechnet ausschließlich lokal
 // auf den Ergebnissen der OHLC-Engine. Keine Broker-/Marktdaten-Calls, keine Orders.
 builder.Services.AddSingleton(new QuantApiService(backtestApi, repoRoot));

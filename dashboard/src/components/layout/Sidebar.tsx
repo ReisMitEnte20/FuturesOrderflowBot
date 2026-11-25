@@ -1,13 +1,12 @@
 import { Link, useLocation } from "react-router";
 import { cn } from "@/lib/utils";
 import { useTradingStore } from "@/stores/tradingStore";
-import { Activity, ChartCandlestick, ChartColumn, FlaskConical, Settings, Workflow, Zap, type LucideIcon } from "lucide-react";
+import { Activity, ChartColumn, FlaskConical, Settings, Workflow, Zap, type LucideIcon } from "lucide-react";
 
 const NAV: { to: string; icon: LucideIcon; label: string }[] = [
   { to: "/", icon: Activity, label: "Live" },
   { to: "/signals", icon: Zap, label: "Signals" },
   { to: "/backtesting", icon: FlaskConical, label: "Backtesting" },
-  { to: "/backtest", icon: ChartCandlestick, label: "Chart-Backtest" },
   { to: "/market", icon: ChartColumn, label: "Market" },
   { to: "/pipeline", icon: Workflow, label: "Pipeline" },
 ];
@@ -64,7 +63,7 @@ export function Sidebar() {
         <p className="eyebrow px-4 pb-2">Workspace</p>
         <div className="space-y-0.5">
           {NAV.map((item) => (
-            <NavItem key={item.to} {...item} active={location.pathname === item.to || (item.to === "/backtesting" && location.pathname === "/research")} />
+            <NavItem key={item.to} {...item} active={location.pathname === item.to || (item.to === "/backtesting" && (location.pathname === "/research" || location.pathname === "/backtest"))} />
           ))}
         </div>
       </nav>

@@ -33,6 +33,12 @@ interface Props {
   follow: boolean;
   height?: number;
   markers?: ReplayMarker[];
+  /** Optional: Delta (Buy − Sell) je Intervall und CVD – zusaetzliches Panel unter dem Volumen (gleiche Achse). */
+  delta?: { delta: (number | null)[]; cvd: (number | null)[] } | null;
+  /** Optional: Klick auf ein Intervall (z. B. Footprint dieser Kerze anzeigen). */
+  onSlotClick?: (slot: number) => void;
+  /** Optional: hervorgehobenes Intervall (Footprint-Auswahl). */
+  selectedSlot?: number | null;
 }
 
 const markerPoint = (k: ReplayMarker) => {
@@ -55,7 +61,10 @@ const statusText: Record<CandleStatus, string> = {
   "rand-unvollstaendig": "Randkerze – Intervall nur teilweise im Aufnahmefenster",
 };
 
-export function TickReplayChart({ slots, currentSlot, lastPrice, follow, height = 440, markers = [] }: Props) {
+export function TickReplayChart({ slots, currentSlot, lastPrice, follow, height = 440, markers = [], delta = null, onSlotClick, selectedSlot = null }: Props) {
+  const withDelta = !!delta;
+  const clickRef = useRef(onSlotClick);
+  clickRef.current = onSlotClick;
   const el = useRef<HTMLDivElement | null>(null);
   const chart = useRef<echarts.ECharts | null>(null);
   const zoom = useRef<{ start: number; end: number } | null>(null);
@@ -69,6 +78,14 @@ export function TickReplayChart({ slots, currentSlot, lastPrice, follow, height 
     chart.current = c;
     const onResize = () => c.resize();
     window.addEventListener("resize", onResize);
+    c.getZr().on("click", (e: any) => {
+      if (!clickRef.current) return;
+      const pt = [e.offsetX, e.offsetY];
+      if (!c.containPixel({ gridIndex: 0 }, pt)) return;
+      const v = c.convertFromPixel({ xAxisIndex: 0 }, pt) as any;
+      const i = Array.isArray(v) ? v[0] : v;
+      if (typeof i === "number" && i >= 0 && i < slotsRef.current.length) clickRef.current(Math.round(i));
+    });
     c.on("datazoom", () => {
       const dz = (c.getOption() as any).dataZoom?.[0];
       const n = slotsRef.current.length;
@@ -88,21 +105,26 @@ export function TickReplayChart({ slots, currentSlot, lastPrice, follow, height 
     const axisLabel = { color: "#6b8399", fontSize: 10, fontFamily: "var(--mono)" };
     const grid = { left: 64, right: 72 };
     zoom.current = null;
+    const axes = withDelta ? [0, 1, 2] : [0, 1];
+    const xa = (gridIndex: number, show: boolean) => ({ type: "category", data: labels, gridIndex, boundaryGap: true, axisLabel: show ? axisLabel : { show: false }, axisLine: { lineStyle: { color: "#2a2a2a" } } });
     c.setOption({
       animation: false,
       backgroundColor: "transparent",
-      grid: [{ ...grid, top: 16, height: "62%" }, { ...grid, top: "74%", height: "16%" }],
-      xAxis: [
-        { type: "category", data: labels, gridIndex: 0, boundaryGap: true, axisLabel: { show: false }, axisLine: { lineStyle: { color: "#2a2a2a" } } },
-        { type: "category", data: labels, gridIndex: 1, boundaryGap: true, axisLabel, axisLine: { lineStyle: { color: "#2a2a2a" } } },
-      ],
+      grid: withDelta
+        ? [{ ...grid, top: 16, height: "50%" }, { ...grid, top: "60%", height: "12%" }, { ...grid, top: "76%", height: "14%" }]
+        : [{ ...grid, top: 16, height: "62%" }, { ...grid, top: "74%", height: "16%" }],
+      xAxis: withDelta ? [xa(0, false), xa(1, false), xa(2, true)] : [xa(0, false), xa(1, true)],
       yAxis: [
         { scale: true, gridIndex: 0, position: "right", axisLabel, splitLine: { lineStyle: { color: "#1c1c1c" } } },
         { scale: true, gridIndex: 1, position: "right", splitNumber: 2, axisLabel: { ...axisLabel, fontSize: 9 }, splitLine: { show: false } },
+        ...(withDelta ? [
+          { scale: true, gridIndex: 2, position: "right", splitNumber: 2, axisLabel: { ...axisLabel, fontSize: 9 }, splitLine: { show: false }, name: "Δ", nameTextStyle: { color: "#6b8399", fontSize: 9 } },
+          { scale: true, gridIndex: 2, position: "left", splitNumber: 2, axisLabel: { ...axisLabel, fontSize: 9, color: "#22b8f0" }, splitLine: { show: false }, name: "CVD", nameTextStyle: { color: "#22b8f0", fontSize: 9 } },
+        ] : []),
       ],
       dataZoom: [
-        { type: "inside", xAxisIndex: [0, 1] },
-        { type: "slider", xAxisIndex: [0, 1], height: 14, bottom: 2, borderColor: "#2a2a2a", textStyle: { color: "#6b8399" } },
+        { type: "inside", xAxisIndex: axes },
+        { type: "slider", xAxisIndex: axes, height: 14, bottom: 2, borderColor: "#2a2a2a", textStyle: { color: "#6b8399" } },
       ],
       tooltip: {
         trigger: "axis", axisPointer: { type: "cross" }, backgroundColor: "#161513", borderColor: "#2a2a2a",
@@ -117,9 +139,15 @@ export function TickReplayChart({ slots, currentSlot, lastPrice, follow, height 
             + `<br/>Vol ${k.volume} (Buy ${k.buyVolume} / Sell ${k.sellVolume}) · ${k.trades} Trades`;
         },
       },
-      series: [{ type: "candlestick", xAxisIndex: 0, yAxisIndex: 0, data: [] }, { type: "bar", xAxisIndex: 1, yAxisIndex: 1, data: [] }],
+      series: [
+        { type: "candlestick", xAxisIndex: 0, yAxisIndex: 0, data: [] }, { type: "bar", xAxisIndex: 1, yAxisIndex: 1, data: [] },
+        ...(withDelta ? [
+          { type: "bar", name: "Delta", xAxisIndex: 2, yAxisIndex: 2, data: [] },
+          { type: "line", name: "CVD", xAxisIndex: 2, yAxisIndex: 3, data: [], symbol: "none", lineStyle: { color: "#22b8f0", width: 1.2 }, connectNulls: false },
+        ] : []),
+      ],
     }, { notMerge: true });
-  }, [labelsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [labelsKey, withDelta]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Daten: gebuendelt (hoechstens einmal je Frame vom Aufrufer) – nur Serien, Zoom bleibt.
   useEffect(() => {
@@ -158,8 +186,16 @@ export function TickReplayChart({ slots, currentSlot, lastPrice, follow, height 
           },
           // Immer vollstaendig ersetzen (auch leer): Wechsel des Trades oder Zuruecksprung hinterlaesst keine alten Marker.
           markPoint: { silent: true, animation: false, data: markers.map(markerPoint) },
+          markArea: selectedSlot == null || !slots[selectedSlot] ? { data: [] } : {
+            silent: true, itemStyle: { color: "rgba(34,184,240,0.10)", borderColor: "rgba(34,184,240,0.6)", borderWidth: 1 },
+            data: [[{ xAxis: selectedSlot }, { xAxis: selectedSlot }]],
+          },
         },
         { data: vols },
+        ...(delta ? [
+          { data: delta.delta.map((d) => (d == null ? "-" : { value: d, itemStyle: { color: d >= 0 ? UP : DOWN, opacity: 0.75 } })) },
+          { data: delta.cvd.map((v) => (v == null ? "-" : v)) },
+        ] : []),
       ],
     }, { lazyUpdate: true });
 

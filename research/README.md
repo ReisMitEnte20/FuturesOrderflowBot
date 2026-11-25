@@ -48,11 +48,17 @@ Aufnahmen, Collections, Caches und Pakete werden **nie** committet. Der Datenord
 - `Collections\<Instrument>_<Session>_<Fenster>_<Von>_bis_<Bis>\` – `trades.csv`, `collection_manifest.json`, `coverage_report.txt`, `run_protocol.txt`.
 - `Logs\`
 
-Auf dem Entwicklungsrechner liegt die geprüfte Woche unter
-`F:\ATAS_Data\Collections\MNQ_NewYork_0930-1200_America-New-York_2026-10-26_bis_2026-10-30` (4.746.875 Trades).
-Sie wird von `TradingBot.OrderflowRun --collection <manifest> --day yyyy-MM-dd` (Tagesläufe, siehe dessen README)
-und vom Tick-Replay des Dashboards (`/api/tickreplay`, Konfiguration `TickReplay:CollectionDir`, Cache unter
-`artifacts/tickreplay-cache/`, gitignored) gelesen; die Originaldaten werden dabei nur gelesen.
+Auf dem Entwicklungsrechner ist der aktive Datenordner des Collectors `F:\ATAS_Data\ATAS_Data Collection`
+(Übersicht: `F:\ATAS_Data\HIER_STARTEN.txt`). Die frühere Prüfwoche
+`F:\ATAS_Data\Collections\MNQ_NewYork_0930-1200_America-New-York_2026-10-26_bis_2026-10-30` existiert dort nicht mehr.
+Collections werden von `TradingBot.OrderflowRun --collection <manifest> --day yyyy-MM-dd` (Tagesläufe, siehe dessen README)
+und vom Tick-Replay/Orderflow-Chart des Dashboards (`/api/tickreplay`) gelesen. Der Chart liest standardmäßig ALLE
+Collections unter `TickReplay:CollectionsRoot` (Standard `F:\ATAS_Data\ATAS_Data Collection\Collections`; gleicher
+Handelstag in mehreren Collections → Fassung ohne Recorder-Drops laut `summary.json`; mehrere drop-freie, verschiedene
+Aufnahmen → offener Konflikt, Fassung wird im Dashboard gewählt); gelesen wird nur der Byte-Abschnitt des Tages laut Manifest,
+der Cache-Kopf hält Abschnitt + SHA-256 als persistenten Tagesindex; `TickReplay:CollectionDir` beschränkt ihn auf eine Collection
+und bietet diese auch im Backtesting an. Cache unter `artifacts/tickreplay-cache/` (gitignored); die Originaldaten werden
+dabei nur gelesen.
 
 Lauf-spezifische Konfigurationen (konkrete Fenster/Pfade) und Einmal-Prüfskripte bleiben lokal; als Vorlage dient
 `atas-replay-probe/collect_config.example.json`.

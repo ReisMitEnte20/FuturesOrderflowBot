@@ -100,7 +100,7 @@ const Grid = ({ children, cols = 4 }: { children: ReactNode; cols?: number }) =>
 
 // ---------------------------------------------------------------------------------------------
 
-export function ReportView({ run, onOpenHoldout }: { run: ReportRun; onOpenHoldout: () => void }) {
+export function ReportView({ run, onOpenHoldout, onOpenChart }: { run: ReportRun; onOpenHoldout: () => void; onOpenChart?: (trade?: number) => void }) {
   const rep = run.report;
   const step = (k: string) => run.steps.find((s) => s.key === k);
   if (!rep) return <p className="text-xs text-[var(--fg-faint)]">Für diesen Lauf ist (noch) kein Bericht gespeichert.</p>;
@@ -129,7 +129,7 @@ export function ReportView({ run, onOpenHoldout }: { run: ReportRun; onOpenHoldo
       <StabilitySection rep={rep} step={step("stability")} />
       <ConcentrationSection rep={rep} step={step("concentration")} />
       <ControlSection rep={rep} step={step("controls")} />
-      <TradeSection rep={rep} step={step("trades")} />
+      <TradeSection rep={rep} step={step("trades")} onOpenChart={onOpenChart} />
       <HoldoutSection run={run} step={step("holdout")} onOpen={onOpenHoldout} />
     </div>
   );
@@ -739,7 +739,7 @@ function ControlSection({ rep, step }: { rep: BacktestReport; step?: ResearchSte
 }
 
 // ---- 12 ----
-function TradeSection({ rep, step }: { rep: BacktestReport; step?: ResearchStepState }) {
+function TradeSection({ rep, step, onOpenChart }: { rep: BacktestReport; step?: ResearchStepState; onOpenChart?: (trade?: number) => void }) {
   const t = rep.trades;
   const [focus, setFocus] = useState<number | null>(null);
   const [filter, setFilter] = useState<"all" | "win" | "loss" | "amb">("all");
@@ -748,6 +748,12 @@ function TradeSection({ rep, step }: { rep: BacktestReport; step?: ResearchStepS
   return (
     <Section id="trades" step={step} title={`12 Einzeltrade-Prüfung — Journal, Replay, MAE/MFE-${(t?.trades ?? []).some((r) => r.excursionMeasured) ? "Messung aus Ticks" : "Schätzung"}`} basis={t?.basis}>
       {t && <>
+        {onOpenChart && t.trades.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 rounded-md border border-[var(--cyan)] bg-[rgba(34,184,240,0.06)] px-2 py-1.5">
+            <button onClick={() => onOpenChart()} data-testid="report-trades-chart" className="h-7 rounded-md bg-grad-brand px-3 text-[12px] font-semibold text-[var(--bg)]">Trades im Chart</button>
+            <span className="text-[11px] text-[var(--fg-dim)]">Alle {t.trades.length} gespeicherten Trades dieses Laufs mit Ein- und Ausstieg im Chart der Laufquelle – ohne neue Auswahl, ohne neuen Lauf.</span>
+          </div>
+        )}
         {measured
           ? <p className="text-[11px] text-[var(--key)]">MAE/MFE GEMESSEN aus allen Trade-Ticks zwischen Ein- und Ausstieg.</p>
           : <p className="text-[11px] text-[var(--gold)]">MAE/MFE sind eine SCHÄTZUNG aus {rep.provenance.timeframeMinutes}-Minuten-Kerzen, nicht tickgenau.</p>}

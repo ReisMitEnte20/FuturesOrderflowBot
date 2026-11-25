@@ -1,10 +1,9 @@
 import { Suspense, lazy, type ComponentType } from "react";
-import { createBrowserRouter } from "react-router";
+import { createBrowserRouter, Navigate } from "react-router";
 import { Layout } from "@/components/layout/Layout";
 
 const TradingDesk = lazy(() => import("@/pages/TradingDesk").then((m) => ({ default: m.TradingDesk })));
 const Signals = lazy(() => import("@/pages/Signals").then((m) => ({ default: m.Signals })));
-const Backtest = lazy(() => import("@/pages/Backtest").then((m) => ({ default: m.Backtest })));
 const Backtesting = lazy(() => import("@/pages/Backtesting").then((m) => ({ default: m.Backtesting })));
 // Bisherige /research-Links bleiben gültig: dieselbe Seite im Bereich „Backtesting“ (Expertenansicht inkl. Orderflow/Replay).
 const ResearchLegacy = lazy(() => import("@/pages/Backtesting").then((m) => ({ default: () => <m.Backtesting defaultView="research" /> })));
@@ -34,7 +33,8 @@ export const router = createBrowserRouter([
     children: [
       { path: "/", element: wrap(TradingDesk) },
       { path: "/signals", element: wrap(Signals) },
-      { path: "/backtest", element: wrap(Backtest) },
+      // Bisheriger Hauptmenüpunkt „Chart-Backtest“: jetzt unter Backtesting → Chart & Replay (Schnelltest auf Kerzen).
+      { path: "/backtest", element: <Navigate to="/backtesting?view=chart&mode=quick" replace /> },
       { path: "/backtesting", element: wrap(Backtesting) },
       { path: "/research", element: wrap(ResearchLegacy) },
       { path: "/market", element: wrap(MarketData) },
