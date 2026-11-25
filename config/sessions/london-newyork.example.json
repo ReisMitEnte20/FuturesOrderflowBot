@@ -1,0 +1,9 @@
+{
+  "note": "Sessionplan fuer den gemeinsamen Modus 'London + New York' (Backtesting + Chart & Replay). Lokale Boersenzeiten; die UTC-Fenster und damit die Pause werden je Tag sommerzeitrichtig berechnet (kein fester Abstand). closeOutMinutesBeforeEnd: vorab festgelegte Session-Close-Regel - ab Sessionende minus N Minuten keine neuen Einstiege, eine offene Position wird ueber das vorhandene Fill-/Kostenmodell glattgestellt. Lokale Abweichungen in london-newyork.local.json (nicht committen).",
+  "name": "London + New York",
+  "closeOutMinutesBeforeEnd": 5,
+  "sessions": [
+    { "key": "London", "label": "London", "timeZone": "Europe/London", "start": "08:00", "end": "11:00" },
+    { "key": "NewYork", "label": "New York", "timeZone": "America/New_York", "start": "09:30", "end": "12:00" }
+  ]
+}

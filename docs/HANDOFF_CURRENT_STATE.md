@@ -2,6 +2,29 @@
 
 > Stand: **2026-09-27**. Ersetzt den veralteten Stand (`ab032ea`, 347 Tests). Historische Phasen siehe unten.
 
+## London + New York (2026-11-25) — uncommittet, Branch `feature/london-newyork-combined` (von `main` 666783d6)
+
+Gemeinsamer Modus für Backtesting und Chart & Replay: ein Start, eine Strategieinstanz, ein Konto. Der Lauf geht über die bestehende
+Tick-Engine durch London und New York und dann durch den Datumsbereich. Die Pause wird ohne Wartezeit übersprungen.
+Details, Regeln und Grenzen: [LONDON_NEW_YORK.md](LONDON_NEW_YORK.md).
+
+- **Neu:**
+  - `Application/Sessions/TradingSessionSchedule.cs`: Sommerzeit-Plan und `StateAt` für Paper später.
+  - `Application/Sessions/SessionGateStrategy.cs`: Reset, Close-Out, Übertrag-Vorfall.
+  - `DevDashboard/Services/Sessions/SessionPlanService.cs` und `SessionRunService.cs`.
+  - `config/sessions/london-newyork.example.json`.
+  - Frontend `SessionsBacktest.tsx`, `SessionsReplay.tsx`, `useSessionsReplay.ts`, `lib/sessionReplay.ts`, `lib/sessionsApi.ts`.
+  - Tests: `tests/.../Sessions/*` (16) und `dashboard/tests/sessionReplay.test.mjs` (6).
+- **Geändert:**
+  - Importer akzeptiert London.
+  - `TickReplayService`: mehrere Datenordner, Sessions laut Plan, Kontrakt im Cache-Kopf `TRPL-3`. Alte Caches werden einmalig neu aufgebaut.
+  - Bar-Aggregator `ISessionAware`.
+  - DayReplay mit Sessionwahl und Zeitzone je Session.
+- **Echte Abnahme:**
+  - 17.11. (1,88 Mio. Ticks): Sprung 10:59:59.612 → 14:30:00.000 (3 h 30 min), Konto 9.878,86 vor = nach, 0 Trades im Sprung.
+  - 17.–18.11. am Stück: 3 Übergänge ohne PnL.
+  - Tageslimit 100 USD: London erreicht es um 09:47 → New York 0 Trades.
+
 ## Mehrstrategie-Vergleich + Holdout-Härtung (2026-09-30) — uncommittet, Branch `feature/unified-research`, wartet auf Commit-Freigabe
 
 Aufbauend auf dem Unified-Research-Umbau; **kein Commit/Push/Merge**, Rithmic deaktiviert.

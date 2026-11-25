@@ -15,18 +15,31 @@ import { deltaCvd, footprint, overlayEvents, overlayReached, type OverlayTrade }
 import type { WorkspaceData, WsRunIndexEntry } from "@/lib/workspace";
 import { useTickReplay, UNITS_PER_SEC } from "./useTickReplay";
 
-const TZ = "America/New_York";
+const NY_TZ = "America/New_York";
 const SPEEDS = [1, 10, 100, 500];
-const nyFmt = new Intl.DateTimeFormat("de-DE", { timeZone: TZ, hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" });
-const nyHm = new Intl.DateTimeFormat("de-DE", { timeZone: TZ, hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
-const tzFmt = new Intl.DateTimeFormat("en-US", { timeZone: TZ, timeZoneName: "short" });
-const tzShort = (ms: number) => tzFmt.formatToParts(ms).find((p) => p.type === "timeZoneName")?.value ?? "";
+// Formatierer je Börsen-Zeitzone der Session (New York bzw. London), einmal erzeugt.
+const fmtCache = new Map<string, { full: Intl.DateTimeFormat; hm: Intl.DateTimeFormat; tz: Intl.DateTimeFormat }>();
+export function tzFormats(tz: string) {
+  let f = fmtCache.get(tz);
+  if (!f) {
+    f = {
+      full: new Intl.DateTimeFormat("de-DE", { timeZone: tz, hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }),
+      hm: new Intl.DateTimeFormat("de-DE", { timeZone: tz, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }),
+      // Kürzel wie an der Börse üblich: London GMT/BST (en-GB), New York EST/EDT (en-US).
+      tz: new Intl.DateTimeFormat(tz.startsWith("Europe/") ? "en-GB" : "en-US", { timeZone: tz, timeZoneName: "short" }),
+    };
+    fmtCache.set(tz, f);
+  }
+  return f;
+}
+export const tzShortOf = (tz: string, ms: number) => tzFormats(tz).tz.formatToParts(ms).find((p) => p.type === "timeZoneName")?.value ?? "";
+const tzOf = (m: TickReplayMeta) => m.timezone || NY_TZ;
 const nf = new Intl.NumberFormat("de-DE");
 const offMs = (m: TickReplayMeta, off: number) => m.anchorUnixMs + off / 10_000;
 function fmtTime(m: TickReplayMeta, off: number, digits = 3): string {
   const whole = Math.floor(off / UNITS_PER_SEC);
   const frac = String(Math.floor(off - whole * UNITS_PER_SEC)).padStart(7, "0");
-  const s = nyFmt.format(m.anchorUnixMs + whole * 1000);
+  const s = tzFormats(tzOf(m)).full.format(m.anchorUnixMs + whole * 1000);
   return digits > 0 ? `${s}.${frac.slice(0, digits)}` : s;
 }
 const secOfDay = (s: string) => { const [h, mi, se] = s.split(":").map(Number); return h * 3600 + mi * 60 + (se || 0); };
@@ -58,8 +71,12 @@ export function DayReplay({ day, onDay, runKey, onRunKey }: {
     return () => ac.abort();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const days = useMemo(() => [...new Set(sessions.map((s) => s.day))], [sessions]);
-  const forDay = sessions.filter((s) => s.day === day);
+  // London und New York desselben Tages sind KEINE Fassungen voneinander: erst Session wählen, dann Tag.
+  const [sessKey, setSessKey] = useState<string>(() => readLs("chartreplay:session") ?? "NewYork");
+  const sessKeys = useMemo(() => [...new Set(sessions.map((s) => s.session ?? "NewYork"))], [sessions]);
+  const ofSess = useMemo(() => sessions.filter((s) => (s.session ?? "NewYork") === sessKey), [sessions, sessKey]);
+  const days = useMemo(() => [...new Set(ofSess.map((s) => s.day))], [ofSess]);
+  const forDay = ofSess.filter((s) => s.day === day);
   const conflict = forDay.length > 1 || forDay.some((s) => s.selection === "conflict");
   const chosen = conflict ? forDay.find((s) => sessionId(s) === (srcPick[forDay[0].jobId] ?? readLs(SRC_KEY(forDay[0].jobId)))) ?? null : forDay[0] ?? null;
   const id = chosen ? sessionId(chosen) : null;
@@ -75,7 +92,8 @@ export function DayReplay({ day, onDay, runKey, onRunKey }: {
     const out: { bucket: number; label: string; range: string }[] = [];
     for (let b = b0; b <= b1; b++) {
       const s = offMs(m, b * m.bucketUnits), e = offMs(m, (b + 1) * m.bucketUnits);
-      out.push({ bucket: b, label: nyHm.format(s), range: `${nyHm.format(s)}–${nyHm.format(e)} ${tzShort(s)}` });
+      const hm = tzFormats(tzOf(m)).hm;
+      out.push({ bucket: b, label: hm.format(s), range: `${hm.format(s)}–${hm.format(e)} ${tzShortOf(tzOf(m), s)}` });
     }
     return out;
   }, [m]);
@@ -121,7 +139,7 @@ export function DayReplay({ day, onDay, runKey, onRunKey }: {
   const ready = !!(m && st && eng);
   const gotoNy = () => {
     if (!m || !/^\d{1,2}:\d{2}(:\d{2})?$/.test(gotoText.trim())) return;
-    const startSec = secOfDay(nyFmt.format(offMs(m, m.windowStartUnits)));
+    const startSec = secOfDay(tzFormats(tzOf(m)).full.format(offMs(m, m.windowStartUnits)));
     r.seekTime(m.windowStartUnits + (secOfDay(gotoText.trim()) - startSec) * UNITS_PER_SEC);
   };
   const lastIdx = eng && eng.p > 0 ? eng.p - 1 : -1;
@@ -136,19 +154,25 @@ export function DayReplay({ day, onDay, runKey, onRunKey }: {
     <div className="space-y-3" data-testid="day-replay" data-replay-state={stateAttr} data-overview-state={overviewAttr}>
       <section className="rounded-lg border border-[var(--line)] bg-[var(--panel)] p-3 space-y-2">
         <div className="flex flex-wrap items-center gap-2">
+          {sessKeys.length > 1 && (
+            <select value={sessKey} data-testid="day-session" onChange={(e) => { setSessKey(e.target.value); writeLs("chartreplay:session", e.target.value); }}
+              className="h-[28px] rounded-md border border-[var(--line-2)] bg-[var(--bg-2)] px-2 text-xs text-[var(--fg)]">
+              {sessKeys.map((k) => <option key={k} value={k}>{k === "NewYork" ? "New York" : k}</option>)}
+            </select>
+          )}
           <span className="text-[11px] text-[var(--fg-faint)]">Handelstag</span>
           <button className={btn} disabled={dayIdx <= 0} onClick={() => onDay(days[dayIdx - 1])}>◀</button>
           <input type="date" value={day ?? ""} min={days[0]} max={days[days.length - 1]} onChange={(e) => e.target.value && onDay(e.target.value)} data-testid="day-date"
             className="h-[28px] rounded-md border border-[var(--line-2)] bg-[var(--bg-2)] px-2 text-xs text-[var(--fg)]" />
           <button className={btn} disabled={dayIdx < 0 || dayIdx >= days.length - 1} onClick={() => onDay(days[dayIdx + 1])}>▶</button>
           <select value={day ?? ""} onChange={(e) => onDay(e.target.value)} className="h-[28px] max-w-[320px] rounded-md border border-[var(--line-2)] bg-[var(--bg-2)] px-2 text-xs text-[var(--fg)]">
-            {days.map((d) => { const s = sessions.find((x) => x.day === d)!; const c = sessions.filter((x) => x.day === d).length > 1;
+            {days.map((d) => { const s = ofSess.find((x) => x.day === d)!; const c = ofSess.filter((x) => x.day === d).length > 1;
               return <option key={d} value={d}>{s.label} · {nf.format(s.rows)} Trades{c ? " · ⚠ Konflikt" : ""}{s.recorderDrops ? " · ⚠ Drops" : ""}</option>; })}
           </select>
           <span className="text-[10px] text-[var(--fg-faint)]">{days.length} Handelstage aus dem Collector-Datenordner</span>
         </div>
         {listErr && <p className="text-xs text-[var(--red)]">{listErr}</p>}
-        {day && !forDay.length && sessions.length > 0 && <p className="text-xs text-[var(--gold)]">Für {day} gibt es keinen übernommenen Handelstag (New York 09:30–12:00) in den Collections.</p>}
+        {day && !forDay.length && sessions.length > 0 && <p className="text-xs text-[var(--gold)]">Für {day} gibt es keine übernommene {sessKey === "London" ? "London" : "New-York"}-Session in den Collections.</p>}
         {conflict && (
           <div className="rounded border border-[var(--gold)] p-2 text-[11px] space-y-1" data-testid="source-conflict">
             <div className="text-[var(--gold)]">⚠ {forDay[0].selectionNote ?? "Mehrere Fassungen dieses Tages."}</div>
@@ -201,7 +225,7 @@ export function DayReplay({ day, onDay, runKey, onRunKey }: {
               {SPEEDS.map((s) => <button key={s} className={r.speed === s ? btnOn : btn} onClick={() => r.setSpeed(s)} data-testid={`dr-speed-${s}`}>{s}×</button>)}
               <span className="mx-1 h-4 w-px bg-[var(--line-2)]" />
               {[-300, -60, 60, 300].map((d) => <button key={d} className={btn} onClick={() => r.seekTime(clock + d * UNITS_PER_SEC)} data-testid={`dr-jump-${d}`}>{d < 0 ? "−" : "+"}{Math.abs(d) / 60} min</button>)}
-              <input value={gotoText} onChange={(e) => setGotoText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && gotoNy()} placeholder="hh:mm:ss ET" data-testid="dr-goto"
+              <input value={gotoText} onChange={(e) => setGotoText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && gotoNy()} placeholder={`hh:mm:ss ${m ? tzShortOf(tzOf(m), offMs(m, clock)) : ""}`} data-testid="dr-goto"
                 className="h-[28px] w-[96px] rounded-md border border-[var(--line-2)] bg-[var(--panel-3)] px-2 text-xs text-[var(--fg)]" />
               <button className={btn} onClick={gotoNy} data-testid="dr-goto-btn">Gehe zu</button>
               <label className="ml-1 flex items-center gap-1 text-[11px] text-[var(--fg-dim)]"><input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} /> folgen</label>
@@ -212,7 +236,7 @@ export function DayReplay({ day, onDay, runKey, onRunKey }: {
           <div className="grid gap-2 text-[11px] md:grid-cols-3">
             <div className="rounded-md border border-[var(--line)] bg-[var(--panel-3)] p-2" data-testid="dr-clock">
               <div className="text-[var(--fg-faint)]">{isOverview ? "Tagesübersicht (alle Ticks des Tages)" : "Marktuhr (Replay)"}</div>
-              <div className="font-mono text-sm text-[var(--fg)]">{isOverview ? `${fmtTime(m, m.windowStartUnits, 0)}–${fmtTime(m, m.windowEndUnits, 0)}` : fmtTime(m, clock)} {tzShort(offMs(m, clock))}</div>
+              <div className="font-mono text-sm text-[var(--fg)]">{isOverview ? `${fmtTime(m, m.windowStartUnits, 0)}–${fmtTime(m, m.windowEndUnits, 0)}` : fmtTime(m, clock)} {tzShortOf(tzOf(m), offMs(m, clock))}</div>
               <div className="text-[var(--fg-dim)]">{m.day} · Position {nf.format(isOverview ? st.total : eng.p)} / {nf.format(st.total)} Ticks{st.loaded < st.total ? ` · geladen ${nf.format(st.loaded)}` : ""}</div>
               {r.playing && r.waiting && <div className="text-[var(--gold)]">wartet auf Nachladen – kein Tick wird übersprungen</div>}
               {r.pending != null && <div className="text-[var(--gold)]">Sprung vorgemerkt – wird angewandt, sobald alle Ticks bis dahin geladen sind</div>}
@@ -244,7 +268,7 @@ export function DayReplay({ day, onDay, runKey, onRunKey }: {
             <FootprintLadder levels={fp} title={fpIndex != null && slots[fpIndex] ? slots[fpIndex].range : ""} partial={!isOverview && fpIndex === currentSlot && !atEnd} />
           </div>
           <p className="text-[10px] leading-relaxed text-[var(--fg-faint)]">
-            Kerzen an echten 5-Minuten-Grenzen ({TZ}), Intervalle [Start, Ende). Volumen, Delta (Buy − Sell) und CVD (ab Sessionstart) aus denselben Ticks.
+            Kerzen an echten 5-Minuten-Grenzen ({tzOf(m)}), Intervalle [Start, Ende). Volumen, Delta (Buy − Sell) und CVD (ab Sessionstart) aus denselben Ticks.
             Footprint: Bid = Verkäufer-Aggressor, Ask = Käufer-Aggressor; Klick auf eine Kerze zeigt ihren Footprint. DOM, BBO und Smart Tape werden nicht angeboten –
             diese Streams sind in den Collections nicht angebunden (nur Trades mit Aggressor). {m.timePrecision}
           </p>
@@ -256,7 +280,7 @@ export function DayReplay({ day, onDay, runKey, onRunKey }: {
   );
 }
 
-function FootprintLadder({ levels, title, partial }: { levels: ReturnType<typeof footprint>; title: string; partial: boolean }) {
+export function FootprintLadder({ levels, title, partial }: { levels: ReturnType<typeof footprint>; title: string; partial: boolean }) {
   const max = levels.reduce((a, l) => Math.max(a, l.bid, l.ask), 1);
   const bid = levels.reduce((a, l) => a + l.bid, 0), ask = levels.reduce((a, l) => a + l.ask, 0);
   return (

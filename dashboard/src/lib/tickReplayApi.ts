@@ -19,6 +19,8 @@ export interface TickReplaySession {
   windowStartUtc: string; windowEndUtc: string; rows: number; totalVolume: number;
   collection?: string; id?: string; recorderDrops?: number | null;
   selection?: "single" | "resolved" | "conflict"; selectionNote?: string | null; candidates?: TickReplayCandidate[] | null;
+  /** Session laut Sessionplan (z. B. "London", "NewYork"); ältere Backends: fehlt = New York. */
+  session?: string; sessionLabel?: string;
 }
 export interface TickReplaySessionList {
   available: boolean; reason: string | null; collectionDir: string; manifestPath: string; sessions: TickReplaySession[];
@@ -36,6 +38,7 @@ export interface TickReplayMeta {
   timePrecision: string;
   id?: string; collection?: string; sliceSha256?: string; sliceBytes?: string;
   recorderDrops?: number | null; selection?: string; selectionNote?: string | null;
+  session?: string; contract?: string; recordingId?: string;
 }
 
 async function fail(r: Response, what: string): Promise<never> {

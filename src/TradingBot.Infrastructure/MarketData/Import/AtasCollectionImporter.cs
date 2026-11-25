@@ -126,9 +126,15 @@ public sealed class AtasCollectionImporter
         using var doc = JsonDocument.Parse(manifestStream);
         var root = doc.RootElement;
         Require(root.GetProperty("schemaVersion").GetString() == "atas-collection-trades-1", "Collection schema");
-        Require(root.GetProperty("session").GetString() == "NewYork", "Session");
+        var session = root.GetProperty("session").GetString();
         var timezone = root.GetProperty("timezone").GetString();
-        Require(timezone is "Eastern Standard Time" or "America/New_York", "Timezone");
+        // Unterstuetzte Sessions mit ihrer Boersen-Zeitzone (Manifest schreibt Windows- oder IANA-ID).
+        Require(session switch
+        {
+            "NewYork" => timezone is "Eastern Standard Time" or "America/New_York",
+            "London" => timezone is "GMT Standard Time" or "Europe/London",
+            _ => false
+        }, "Session/Timezone");
         Require(root.GetProperty("jobs").TryGetProperty(jobId, out var job), "Job not in manifest: " + jobId);
         Require(job.GetProperty("status").GetString() == "committed", "Job not committed");
         Require(job.GetProperty("coverageStatus").GetString() == "complete", "Incomplete coverage");
@@ -171,6 +177,8 @@ public sealed class AtasCollectionImporter
         var ticks = new List<MarketTick>();
         decimal buy = 0, sell = 0;
         string? previous = null;
+        bool hasContract = columns.ContainsKey("contract_or_series");
+        string? contract = null;
         while (!parser.EndOfData)
         {
             var fields = parser.ReadFields()!;
@@ -178,6 +186,13 @@ public sealed class AtasCollectionImporter
             string Get(string name) => fields[columns[name]];
             Require(Get("job_id") == jobId, "Foreign job inside job slice");
             Require(Get("instrument") == "MNQ", "Instrument must be MNQ");
+            if (hasContract)
+            {
+                // Kontrakt/Serie muss innerhalb eines Jobs einheitlich sein (kein stiller Roll innerhalb der Session).
+                string c = Get("contract_or_series");
+                Require(contract is null || c == contract, "Contract/series changes inside job slice");
+                contract = c;
+            }
             Require(Get("recording_id") == recordingId && Get("run_id") == runId, "Recording/run identity mismatch");
             string rawTime = Get("t_market_utc");
             var timestamp = ParseNanoseconds(rawTime);
@@ -208,6 +223,7 @@ public sealed class AtasCollectionImporter
             ["window.fromUtc"] = start, ["window.toUtc"] = end, ["window.interval"] = "[start, end)",
             ["import.rows"] = ticks.Count.ToString(CultureInfo.InvariantCulture),
             ["import.reconciliation"] = "job rows and buy/sell/total volumes matched; every row belongs to this job; no deduplication",
+            ["collection.session"] = session!, ["instrument"] = "MNQ", ["contract"] = contract ?? "(keine Spalte contract_or_series)",
         };
         return new SliceResult(new ImportedMarketDataSet
         {

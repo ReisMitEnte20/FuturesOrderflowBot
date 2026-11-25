@@ -343,6 +343,17 @@ public sealed class BacktestApiService
         }
     }
 
+    /// <summary>Instrument- und Gebührenprofil aus config/ (für Läufe ohne Kerzen-Datenquelle, z. B. „London + New York“).</summary>
+    public async Task<(InstrumentProfile Instrument, FeeProfile Fee, bool InstrumentIsExample, bool FeeIsExample)> ResolveProfilesAsync(
+        BacktestRunRequest req, CancellationToken ct = default)
+    {
+        var instrument = (await _instruments.GetAllAsync(ct)).FirstOrDefault(i =>
+                             string.Equals(i.Symbol, req.Symbol, StringComparison.OrdinalIgnoreCase))
+                         ?? throw new InvalidOperationException($"Kein InstrumentProfile für '{req.Symbol}' in config/instruments.");
+        var fee = await ResolveFeeAsync(req, ct);
+        return (instrument, fee, OnlyExampleProfiles(_instrumentsDir), req.FeePerSideOverride is null && OnlyExampleProfiles(_feesDir));
+    }
+
     private async Task<FeeProfile> ResolveFeeAsync(BacktestRunRequest req, CancellationToken ct)
     {
         var all = await _fees.GetAllAsync(ct);

@@ -2,7 +2,9 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
+using TradingBot.Application.Sessions;
 using TradingBot.Domain.Enums;
+using TradingBot.Domain.Models;
 using TradingBot.Infrastructure.MarketData.Import;
 
 namespace TradingBot.DevDashboard.Services;
@@ -17,7 +19,14 @@ public sealed record TickReplayCandidate(
 public sealed record TickReplaySession(
     string JobId, string Day, string Label, string Timezone, string WindowStartUtc, string WindowEndUtc,
     long Rows, decimal TotalVolume, string Collection = "", string Id = "", long? RecorderDrops = null,
-    string Selection = "single", string? SelectionNote = null, IReadOnlyList<TickReplayCandidate>? Candidates = null);
+    string Selection = "single", string? SelectionNote = null, IReadOnlyList<TickReplayCandidate>? Candidates = null,
+    string Session = "NewYork", string SessionLabel = "New York");
+
+/// <summary>Gepruefte Sicht auf einen aufgeloesten Collection-Job (fuer den Sessionplan „London + New York“).</summary>
+public sealed record TickReplayJobInfo(
+    string Id, string JobId, string Session, DateOnly Day, DateTimeOffset StartUtc, DateTimeOffset EndUtc, long Rows, decimal TotalVolume,
+    string Collection, string CollectionsRoot, string RecordingId, string RunId, long? RecorderDrops, bool? SummaryClean, long? ManifestTickDrops,
+    string Selection, string? SelectionNote, bool Usable);
 
 /// <summary>Sessions der konfigurierten Collection(s) (oder Grund, warum keine verfuegbar sind). Im Ordner-Modus ist
 /// <c>CollectionDir</c> der Collections-Ordner und <c>ManifestPath</c> leer (je Session steht die Collection im Eintrag).
@@ -35,7 +44,8 @@ public sealed record TickReplaySessionMeta(
     long Count, decimal TotalVolume, decimal BuyVolume, decimal SellVolume,
     int RowBytes, string CsvPath, string CsvSha256, string ManifestPath, string Cache, double PrepareSeconds,
     string TimePrecision, string Id = "", string Collection = "", string SliceSha256 = "", string SliceBytes = "",
-    long? RecorderDrops = null, string Selection = "single", string? SelectionNote = null);
+    long? RecorderDrops = null, string Selection = "single", string? SelectionNote = null,
+    string Session = "NewYork", string Contract = "", string RecordingId = "");
 
 /// <summary>
 /// Read-only Tick-Replay-Quelle fuer das React-Research-Dashboard. Je Session wird EINMALIG ein kompakter Binaer-Cache
@@ -53,12 +63,19 @@ public sealed class TickReplayService
     /// <summary>Zeilenformat im Cache und im Abschnitt: Float64 Zeit, Float64 Preis, Int32 Volumen, Int8 Seite.</summary>
     public const int RowBytes = 21;
     public const int MaxChunkRows = 250_000;
-    private const string Magic = "TRPL-2";
+    private const string Magic = "TRPL-3";
     private const string ManifestName = "collection_manifest.json";
-    private static readonly TimeZoneInfo NewYork = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
     private static readonly CultureInfo German = CultureInfo.GetCultureInfo("de-DE");
 
+    /// <summary>Standard ohne Sessionplan: wie bisher nur New York 09:30–12:00 America/New_York.</summary>
+    public static readonly IReadOnlyList<SessionDefinition> NewYorkOnly = new[]
+    {
+        new SessionDefinition("NewYork", "New York", "America/New_York", new TimeOnly(9, 30), new TimeOnly(12, 0))
+    };
+
     private readonly string _collectionDir;
+    private readonly IReadOnlyList<string> _roots;
+    private readonly IReadOnlyList<SessionDefinition> _sessions;
     private readonly bool _isRoot;
     private readonly string _cacheDir;
     private readonly ConcurrentDictionary<string, Lazy<Task<TickReplaySessionMeta>>> _builds = new();
@@ -67,21 +84,35 @@ public sealed class TickReplayService
     private readonly Dictionary<string, (long Length, long WriteTicks, List<Job> Jobs)> _manifestCache = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Genau eine Collection (Ordner mit collection_manifest.json + trades.csv).</summary>
-    public TickReplayService(string collectionDir, string cacheDir) : this(collectionDir, cacheDir, isRoot: false) { }
+    public TickReplayService(string collectionDir, string cacheDir, IReadOnlyList<SessionDefinition>? sessions = null)
+        : this(new[] { collectionDir }, cacheDir, isRoot: false, sessions) { }
 
-    private TickReplayService(string dir, string cacheDir, bool isRoot)
+    private TickReplayService(IReadOnlyList<string> dirs, string cacheDir, bool isRoot, IReadOnlyList<SessionDefinition>? sessions)
     {
-        _collectionDir = dir;
+        _collectionDir = dirs[0];
+        _roots = dirs;
         _cacheDir = cacheDir;
         _isRoot = isRoot;
+        _sessions = sessions ?? NewYorkOnly;
     }
 
     /// <summary>Alle Collections direkt unter <paramref name="collectionsRoot"/> (z. B. "ATAS_Data Collection\Collections").
     /// Ordner ohne Manifest oder mit unlesbarem Manifest werden uebersprungen. Kommt derselbe Handelstag in mehreren
     /// Collections vor, entscheidet der Drop-Status der Aufnahme (siehe <see cref="Resolve"/>); bleibt mehr als eine
     /// drop-freie, verschiedene Aufnahme uebrig, wird der Tag als Konflikt mit allen Fassungen gemeldet.</summary>
-    public static TickReplayService ForCollectionsRoot(string collectionsRoot, string cacheDir) => new(collectionsRoot, cacheDir, isRoot: true);
+    public static TickReplayService ForCollectionsRoot(string collectionsRoot, string cacheDir) => new(new[] { collectionsRoot }, cacheDir, isRoot: true, null);
 
+    /// <summary>Mehrere Collections-Ordner (z. B. London und New York in getrennten Datenordnern), Sessions laut Plan.
+    /// Die Ordner werden nur gelesen; keine CSV wird kopiert oder zusammengefuehrt.</summary>
+    public static TickReplayService ForCollectionsRoots(IReadOnlyList<string> collectionsRoots, string cacheDir, IReadOnlyList<SessionDefinition> sessions)
+    {
+        if (collectionsRoots.Count == 0) throw new ArgumentException("Mindestens ein Collections-Ordner.", nameof(collectionsRoots));
+        return new(collectionsRoots, cacheDir, isRoot: true, sessions);
+    }
+
+    /// <summary>Konfigurierte Collections-Ordner (Ordner-Modus) bzw. die eine Collection.</summary>
+    public IReadOnlyList<string> Roots => _roots;
+    public IReadOnlyList<SessionDefinition> SessionDefinitions => _sessions;
     /// <summary>Manifest im Einzel-Modus; im Ordner-Modus leer.</summary>
     public string ManifestPath => _isRoot ? "" : Path.Combine(_collectionDir, ManifestName);
     private static string ManifestOf(Job job) => Path.Combine(job.CollectionDir, ManifestName);
@@ -92,20 +123,60 @@ public sealed class TickReplayService
     /// <summary>Alle vom Importer unterstuetzten Sessions (NewYork 09:30–12:00 America/New_York, committed, complete).</summary>
     public TickReplaySessionList ListSessions()
     {
-        if (_isRoot && !Directory.Exists(_collectionDir))
-            return new(false, "Collections-Ordner nicht gefunden: " + _collectionDir, _collectionDir, ManifestPath, Array.Empty<TickReplaySession>());
+        if (_isRoot && !_roots.Any(Directory.Exists))
+            return new(false, "Collections-Ordner nicht gefunden: " + string.Join(" | ", _roots), _collectionDir, ManifestPath, Array.Empty<TickReplaySession>());
         if (!_isRoot && !File.Exists(ManifestPath))
             return new(false, "Collection-Manifest nicht gefunden: " + ManifestPath, _collectionDir, ManifestPath, Array.Empty<TickReplaySession>());
         var list = new List<TickReplaySession>();
         foreach (var job in ReadJobs()) list.Add(new(job.JobId, job.Day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), job.Label,
-            "America/New_York", job.StartIso, job.EndIso, job.Rows, job.TotalVolume, CollectionName(job.CollectionDir), job.Id,
-            job.RecorderDrops, job.Selection, job.SelectionNote, job.Candidates));
+            job.Def.TimeZoneId, job.StartIso, job.EndIso, job.Rows, job.TotalVolume, CollectionName(job.CollectionDir), job.Id,
+            job.RecorderDrops, job.Selection, job.SelectionNote, job.Candidates, job.Def.Key, job.Def.Label));
         list.Sort((a, b) => a.WindowStartUtc != b.WindowStartUtc ? string.CompareOrdinal(a.WindowStartUtc, b.WindowStartUtc) : string.CompareOrdinal(a.Collection, b.Collection));
         var conflicts = list.Where(s => s.Selection == "conflict").Select(s => s.Day).Distinct().ToList();
+        string what = string.Join(" / ", _sessions.Select(d => $"{d.Key} {d.Start:HH\\:mm}–{d.End:HH\\:mm}"));
         return new(list.Count > 0, list.Count > 0 ? null
-                : _isRoot ? "Keine vollstaendigen NewYork-09:30–12:00-Sessions in den Collections unter " + _collectionDir + "."
-                : "Keine vollstaendigen NewYork-09:30–12:00-Sessions im Manifest.",
+                : _isRoot ? $"Keine vollstaendigen Sessions ({what}) in den Collections unter {string.Join(" | ", _roots)}."
+                : $"Keine vollstaendigen Sessions ({what}) im Manifest.",
             _collectionDir, ManifestPath, list, conflicts);
+    }
+
+    /// <summary>Aufgeloeste Jobs (nach Quellenwahl) mit Drop-/Abschluss-Status – Grundlage des Sessionplans.</summary>
+    public IReadOnlyList<TickReplayJobInfo> ResolvedJobs()
+    {
+        var res = new List<TickReplayJobInfo>();
+        foreach (var j in ReadJobs())
+            res.Add(new TickReplayJobInfo(j.Id, j.JobId, j.Def.Key, j.Day, FromUnixNs(j.StartNs), FromUnixNs(j.EndNs), j.Rows, j.TotalVolume,
+                CollectionName(j.CollectionDir), Path.GetDirectoryName(j.CollectionDir.TrimEnd('\\', '/')) ?? "", j.RecordingId, j.RunId,
+                j.RecorderDrops, j.SummaryClean, j.ManifestTickDrops, j.Selection, j.SelectionNote, j.Usable));
+        return res;
+    }
+
+    /// <summary>Alle Trades einer Session als MarketTicks aus dem geprueften Cache (bei Bedarf einmalig aufgebaut).
+    /// Zeiten auf 100 ns (Engine-Aufloesung), Preise exakt aus dem Cache, Aggressor gemessen.</summary>
+    public async Task<(TickReplaySessionMeta Meta, List<MarketTick> Ticks)> LoadMarketTicksAsync(string id, CancellationToken ct)
+    {
+        var meta = await PrepareAsync(id, ct);
+        var job = FindJob(id);
+        var ticks = new List<MarketTick>((int)meta.Count);
+        long anchor = DateTime.UnixEpoch.Ticks + meta.AnchorUnixMs * TimeSpan.TicksPerMillisecond;
+        using var fs = new FileStream(CacheFile(job), FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 1 << 16);
+        int headerLen = ReadHeaderLength(fs);
+        fs.Position = 4 + headerLen;
+        using var br = new BinaryReader(fs);
+        for (long i = 0; i < meta.Count; i++)
+        {
+            if ((i & 0xFFFF) == 0) ct.ThrowIfCancellationRequested();
+            long off = (long)br.ReadDouble();
+            decimal price = (decimal)br.ReadDouble();
+            int vol = br.ReadInt32();
+            sbyte side = br.ReadSByte();
+            ticks.Add(new MarketTick
+            {
+                Symbol = "MNQ", Timestamp = new DateTimeOffset(anchor + off, TimeSpan.Zero), Price = price, Volume = vol,
+                Aggressor = side > 0 ? AggressorSide.Buy : side < 0 ? AggressorSide.Sell : throw new InvalidDataException("InsufficientData: Aggressor fehlt")
+            });
+        }
+        return (meta, ticks);
     }
 
     /// <summary>Stellt sicher, dass der Cache der Session gueltig ist (sonst einmaliger Aufbau ueber den Importer).</summary>
@@ -153,9 +224,10 @@ public sealed class TickReplayService
     private sealed record Job(string Id, string JobId, DateOnly Day, string Label, string StartIso, string EndIso,
         long StartNs, long EndNs, long Rows, decimal TotalVolume, string CollectionDir,
         string RecordingId, string RunId, long SliceStart, long SliceEnd, long? RecorderDrops, bool? SummaryClean,
+        SessionDefinition Def, long? ManifestTickDrops,
         string Selection = "single", string? SelectionNote = null, IReadOnlyList<TickReplayCandidate>? Candidates = null)
     {
-        public bool Usable => RecorderDrops == 0 && SummaryClean == true;
+        public bool Usable => RecorderDrops == 0 && SummaryClean == true && ManifestTickDrops is null or 0;
         public string Key => $"{RecordingId}|{RunId}|{Rows}|{TotalVolume.ToString(CultureInfo.InvariantCulture)}|{SliceStart}|{SliceEnd}";
     }
 
@@ -180,8 +252,8 @@ public sealed class TickReplayService
         }
         else
         {
-            if (!Directory.Exists(_collectionDir)) return raw;
-            foreach (var dir in Directory.EnumerateDirectories(_collectionDir).OrderBy(d => Path.GetFileName(d), StringComparer.Ordinal))
+            foreach (var dir in _roots.Where(Directory.Exists)
+                         .SelectMany(r => Directory.EnumerateDirectories(r).OrderBy(d => Path.GetFileName(d), StringComparer.Ordinal)))
             {
                 if (!File.Exists(Path.Combine(dir, ManifestName))) continue;
                 try { raw.AddRange(ReadManifestCached(dir)); }
@@ -239,19 +311,21 @@ public sealed class TickReplayService
         lock (_manifestLock)
             if (_manifestCache.TryGetValue(path, out var hit) && hit.Length == info.Length && hit.WriteTicks == info.LastWriteTimeUtc.Ticks)
                 return hit.Jobs;
-        var jobs = ReadManifest(collectionDir);
+        var jobs = ReadManifest(collectionDir, _sessions);
         lock (_manifestLock) _manifestCache[path] = (info.Length, info.LastWriteTimeUtc.Ticks, jobs);
         return jobs;
     }
 
-    private static List<Job> ReadManifest(string collectionDir)
+    private static List<Job> ReadManifest(string collectionDir, IReadOnlyList<SessionDefinition> sessions)
     {
         using var fs = new FileStream(Path.Combine(collectionDir, ManifestName), FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         using var doc = JsonDocument.Parse(fs);
         var root = doc.RootElement;
         var jobs = new List<Job>();
-        if (root.GetProperty("schemaVersion").GetString() != "atas-collection-trades-1" || root.GetProperty("session").GetString() != "NewYork")
+        var def = sessions.FirstOrDefault(d => d.Key == root.GetProperty("session").GetString());
+        if (root.GetProperty("schemaVersion").GetString() != "atas-collection-trades-1" || def is null)
             return jobs;
+        var tz = def.TimeZone;
         foreach (var j in root.GetProperty("jobs").EnumerateObject())
         {
             var v = j.Value;
@@ -261,13 +335,15 @@ public sealed class TickReplayService
             string startIso = w.GetProperty("start").GetString()!, endIso = w.GetProperty("end").GetString()!;
             long startNs = w.TryGetProperty("startNs", out var sn) ? sn.GetInt64() : ParseNs(startIso);
             long endNs = w.TryGetProperty("endNs", out var en) ? en.GetInt64() : ParseNs(endIso);
-            var startLocal = TimeZoneInfo.ConvertTimeFromUtc(FromUnixNs(startNs).UtcDateTime, NewYork);
-            var endLocal = TimeZoneInfo.ConvertTimeFromUtc(FromUnixNs(endNs).UtcDateTime, NewYork);
-            // Nur Fenster, die der bestehende Importer unterstuetzt (09:30–12:00 America/New_York desselben Tages).
-            if (startLocal.TimeOfDay != new TimeSpan(9, 30, 0) || endLocal.TimeOfDay != new TimeSpan(12, 0, 0) || startLocal.Date != endLocal.Date) continue;
+            var startLocal = TimeZoneInfo.ConvertTimeFromUtc(FromUnixNs(startNs).UtcDateTime, tz);
+            var endLocal = TimeZoneInfo.ConvertTimeFromUtc(FromUnixNs(endNs).UtcDateTime, tz);
+            // Nur Fenster laut Sessionplan (z. B. 09:30–12:00 America/New_York, 08:00–11:00 Europe/London) desselben lokalen Tages.
+            if (TimeOnly.FromTimeSpan(startLocal.TimeOfDay) != def.Start || TimeOnly.FromTimeSpan(endLocal.TimeOfDay) != def.End || startLocal.Date != endLocal.Date) continue;
             var day = DateOnly.FromDateTime(startLocal);
             var trades = v.GetProperty("trades");
-            string label = day.ToString("ddd dd.MM.yyyy", German) + " · New York 09:30–12:00 (" + (NewYork.IsDaylightSavingTime(startLocal) ? "EDT" : "EST") + ")";
+            string label = day.ToString("ddd dd.MM.yyyy", German) + $" · {def.Label} {def.Start:HH\\:mm}–{def.End:HH\\:mm} (" + TzAbbrev(def, startLocal) + ")";
+            long? manifestDrops = v.TryGetProperty("reconciliation", out var rc0) && rc0.TryGetProperty("tick_drops", out var td)
+                && td.TryGetProperty("total", out var tdt) && tdt.ValueKind == JsonValueKind.Number ? tdt.GetInt64() : null;
             long sliceStart = v.TryGetProperty("byteOffsetBefore", out var ob) && ob.ValueKind == JsonValueKind.Number ? ob.GetInt64() : -1;
             long sliceEnd = v.TryGetProperty("byteOffsetAfter", out var oa) && oa.ValueKind == JsonValueKind.Number ? oa.GetInt64() : -1;
             if (sliceStart < 0 || sliceEnd <= sliceStart) { sliceStart = -1; sliceEnd = -1; }
@@ -277,9 +353,20 @@ public sealed class TickReplayService
             jobs.Add(new Job(j.Name, j.Name, day, label, startIso, endIso, startNs, endNs,
                 trades.GetProperty("rows").GetInt64(), trades.GetProperty("totalVolume").GetDecimal(), collectionDir,
                 v.TryGetProperty("recordingId", out var ri) ? ri.GetString() ?? "" : "", v.TryGetProperty("runId", out var ru) ? ru.GetString() ?? "" : "",
-                sliceStart, sliceEnd, ReadRecorderDrops(recordingDir), clean));
+                sliceStart, sliceEnd, ReadRecorderDrops(recordingDir), clean, def, manifestDrops));
         }
         return jobs;
+    }
+
+    private static string TzAbbrev(SessionDefinition def, DateTime local)
+    {
+        bool dst = def.TimeZone.IsDaylightSavingTime(local);
+        return def.TimeZoneId switch
+        {
+            "America/New_York" => dst ? "EDT" : "EST",
+            "Europe/London" => dst ? "BST" : "GMT",
+            _ => dst ? "Sommerzeit" : "Normalzeit"
+        };
     }
 
     /// <summary>Recorder-Drops laut summary.json der Rohaufnahme (nie komprimiert); null = nicht feststellbar.</summary>
@@ -302,13 +389,14 @@ public sealed class TickReplayService
         var sw = Stopwatch.StartNew();
         string manifestPath = ManifestOf(job);
         IReadOnlyList<TradingBot.Domain.Models.MarketTick> ticks;
-        string csvPath, csvSha = "", sliceSha = "";
+        string csvPath, csvSha = "", sliceSha = "", contract = "";
         if (job.SliceStart >= 0)
         {
             var slice = new AtasCollectionImporter().ImportJobSlice(manifestPath, job.JobId);
             if (slice.SliceStart != job.SliceStart || slice.SliceEnd != job.SliceEnd || slice.RecordingId != job.RecordingId)
                 throw new InvalidDataException("Manifest hat sich waehrend des Imports geaendert.");
             ticks = slice.Data.Ticks; csvPath = slice.CsvPath; sliceSha = slice.SliceSha256;
+            contract = slice.Evidence.GetValueOrDefault("contract") ?? "";
         }
         else
         {
@@ -321,14 +409,14 @@ public sealed class TickReplayService
         if (ticks.Count != job.Rows) throw new InvalidDataException("Zeilenzahl weicht vom Manifest ab.");
 
         long windowStartTicks = FromUnixNs(job.StartNs).UtcTicks, windowEndTicks = FromUnixNs(job.EndNs).UtcTicks;
-        long anchorTicks = windowStartTicks - (windowStartTicks % BucketUnits); // 5-Minuten-Grenze (UTC = NY-Raster)
+        long anchorTicks = windowStartTicks - (windowStartTicks % BucketUnits); // 5-Minuten-Grenze (UTC-Raster, gilt fuer New York und London)
         decimal buy = 0, sell = 0;
         string cache = CacheFile(job);
         Directory.CreateDirectory(Path.GetDirectoryName(cache)!);
         string tmp = cache + ".tmp-" + Guid.NewGuid().ToString("N");
         var csvInfo = new FileInfo(csvPath);
         var meta = new MetaHeader(job.JobId, Path.GetFullPath(csvPath), job.SliceStart, job.SliceEnd, sliceSha, csvInfo.Length, csvInfo.LastWriteTimeUtc.Ticks,
-            job.Key, csvSha, anchorTicks, windowStartTicks, windowEndTicks, ticks.Count, 0, 0, 0);
+            job.Key, csvSha, anchorTicks, windowStartTicks, windowEndTicks, ticks.Count, 0, 0, 0, contract);
         using (var fs = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
         using (var bw = new BinaryWriter(fs))
         {
@@ -416,7 +504,7 @@ public sealed class TickReplayService
     }
 
     private TickReplaySessionMeta ToMeta(Job job, MetaHeader h, string cache, double seconds) => new(
-        job.JobId, job.Day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), job.Label, "America/New_York",
+        job.JobId, job.Day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), job.Label, job.Def.TimeZoneId,
         job.StartIso, job.EndIso, new DateTime(h.AnchorTicks, DateTimeKind.Utc).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture),
         (h.AnchorTicks - DateTime.UnixEpoch.Ticks) / TimeSpan.TicksPerMillisecond,
         h.WindowStartTicks - h.AnchorTicks, h.WindowEndTicks - h.AnchorTicks, UnitsPerMs, BucketUnits,
@@ -424,13 +512,13 @@ public sealed class TickReplayService
         cache, Math.Round(seconds, 2),
         "Quelle in Nanosekunden; Replay-Zeit auf 100 ns abgerundet (kann keine 5-Min-Grenze ueberschreiten); Originalreihenfolge erhalten.",
         job.Id, CollectionName(job.CollectionDir), h.SliceSha256, h.SliceStart >= 0 ? $"[{h.SliceStart}, {h.SliceEnd})" : "",
-        job.RecorderDrops, job.Selection, job.SelectionNote);
+        job.RecorderDrops, job.Selection, job.SelectionNote, job.Def.Key, h.Contract, job.RecordingId);
 
     // --- Cache-Header ---------------------------------------------------------------------------------------------
 
     private sealed record MetaHeader(string JobId, string CsvPath, long SliceStart, long SliceEnd, string SliceSha256,
         long CsvLength, long CsvWriteTicks, string JobKey, string CsvSha256, long AnchorTicks, long WindowStartTicks, long WindowEndTicks,
-        long Count, decimal TotalVolume, decimal BuyVolume, decimal SellVolume);
+        long Count, decimal TotalVolume, decimal BuyVolume, decimal SellVolume, string Contract = "");
 
     private static byte[] SerializeHeader(MetaHeader h)
     {
@@ -440,6 +528,7 @@ public sealed class TickReplayService
             bw.Write(Magic); bw.Write(h.JobId); bw.Write(h.CsvPath); bw.Write(h.SliceStart); bw.Write(h.SliceEnd); bw.Write(h.SliceSha256);
             bw.Write(h.CsvLength); bw.Write(h.CsvWriteTicks); bw.Write(h.JobKey); bw.Write(h.CsvSha256); bw.Write(h.AnchorTicks);
             bw.Write(h.WindowStartTicks); bw.Write(h.WindowEndTicks); bw.Write(h.Count); bw.Write(h.TotalVolume); bw.Write(h.BuyVolume); bw.Write(h.SellVolume);
+            bw.Write(h.Contract);
         }
         return ms.ToArray();
     }
@@ -450,7 +539,7 @@ public sealed class TickReplayService
         if (br.ReadString() != Magic) throw new InvalidDataException("Unbekanntes Cache-Format.");
         return new MetaHeader(br.ReadString(), br.ReadString(), br.ReadInt64(), br.ReadInt64(), br.ReadString(),
             br.ReadInt64(), br.ReadInt64(), br.ReadString(), br.ReadString(), br.ReadInt64(),
-            br.ReadInt64(), br.ReadInt64(), br.ReadInt64(), br.ReadDecimal(), br.ReadDecimal(), br.ReadDecimal());
+            br.ReadInt64(), br.ReadInt64(), br.ReadInt64(), br.ReadDecimal(), br.ReadDecimal(), br.ReadDecimal(), br.ReadString());
     }
 
     private static int ReadHeaderLength(Stream fs)
