@@ -56,8 +56,20 @@ namespace OrderFlowTools
         [Display(Name = "Footprint je Bar aufzeichnen")]
         public bool RecordFootprint { get; set; } = true;
 
-        [Display(Name = "Queue-Kapazitaet (Events)")]
-        public int QueueCapacity { get; set; } = 200_000;
+        // Queue-Kapazitaet FEST (kein Einstellwert mehr): Der Collector entfernt den Indikator nach jedem Tag und haengt
+        // ihn neu an; ein im ATAS-Dialog erhoehter Wert ging dabei verloren (Standard 200.000 lief bei 100x voll).
+        // Das Property bleibt nur, damit alte ATAS-Vorlagen mit 'QueueCapacity' weiter laden: der gelesene Wert wird
+        // ignoriert und lediglich zur Nachpruefbarkeit in summary.json vermerkt (queueCapacityIgnoredSetting).
+        public const int FixedQueueCapacity = 800_000;
+
+        [Browsable(false)]
+        public int QueueCapacity
+        {
+            get => FixedQueueCapacity;
+            set { if (value != FixedQueueCapacity) _ignoredQueueCapacitySetting = value; }
+        }
+        private int _ignoredQueueCapacitySetting;   // 0 = kein abweichender Wert aus Vorlage/Dialog
+        private int _queueCapacityUsed;              // tatsaechlich an die Queue uebergebene Kapazitaet
 
         // ---- Writer-Infrastruktur (entkoppelt Callbacks von Disk-I/O) ----
         private sealed record Line(string Stream, string Json, int Bytes);
@@ -112,7 +124,8 @@ namespace OrderFlowTools
                 _dir = Path.Combine(root, $"{sym}_{_startWall:yyyyMMdd_HHmmss}Z");
                 Directory.CreateDirectory(_dir);
 
-                _queue = new BlockingCollection<Line>(Math.Max(1000, QueueCapacity));
+                _queueCapacityUsed = FixedQueueCapacity;   // bewusst NICHT das Property (Vorlagenwert bleibt wirkungslos)
+                _queue = new BlockingCollection<Line>(_queueCapacityUsed);
                 _running = true;
                 _writer = new Thread(WriterLoop) { IsBackground = true, Name = "OFRecorderWriter" };
                 _writer.Start();
@@ -369,6 +382,7 @@ namespace OrderFlowTools
                 ("instrument", SafeInstrument()),
                 ("tickSize", tick),
                 ("startWallUtc", Iso(_startWall)),
+                ("queueCapacity", _queueCapacityUsed),
                 ("note", "tMarket=ATAS-Replay-Marktzeit; tRecv=lokale Empfangs-Wanduhr (UTC). Lokale Seq != Anbieter-Vollstaendigkeit."),
                 ("streams", "ticks.ndjson,cumtrades.ndjson,bbo.ndjson,dom.ndjson,bars.ndjson,ticks.csv"));
             Enqueue("meta.json", meta);
@@ -417,7 +431,9 @@ namespace OrderFlowTools
             Kv(sb, "totalBytes", totalBytes); sb.Append(',');
             Kv(sb, "eventsPerSec", (decimal)(dur > 0 ? totalEvents / dur : 0)); sb.Append(',');
             Kv(sb, "bytesPerSec", (decimal)(dur > 0 ? totalBytes / dur : 0)); sb.Append(',');
-            Kv(sb, "queueHighWater", Interlocked.Read(ref _queueHighWater)); sb.Append(',');
+            Kv(sb, "queueCapacity", _queueCapacityUsed); sb.Append(',');          // tatsaechlich verwendete Kapazitaet
+            Kv(sb, "queueHighWater", Interlocked.Read(ref _queueHighWater)); sb.Append(',');   // hoechster beobachteter Fuellstand
+            if (_ignoredQueueCapacitySetting != 0) { Kv(sb, "queueCapacityIgnoredSetting", _ignoredQueueCapacitySetting); sb.Append(','); }
             sb.Append("\"perStream\":{");
             bool first = true;
             foreach (var s in _count.Keys.Concat(_drops.Keys).Distinct())

@@ -2998,7 +2998,12 @@ internal static partial class Program
             W($"[collect] append rc={code} {outp.Trim()}{(err.Trim() == "" ? "" : "  stderr=" + err.Trim())}");
             string result = ExtractJsonField(outp, "result");
             if (code != 0 || (result != "committed" && result != "skipped" && result != "empty"))
-            { stopReason = $"Anhaengen fuer {j.jobId} fehlgeschlagen (result='{result}', rc={code})"; break; }
+            {
+                // Bei 'check' liefert die Bruecke den konkreten Grund (z.B. Recorder-Drops mit beiden Tick-Datei-Zahlen).
+                string note = ExtractJsonField(outp, "note");
+                stopReason = $"Anhaengen fuer {j.jobId} fehlgeschlagen (result='{result}', rc={code}){(note == "" ? "" : ": " + note)}";
+                break;
+            }
             done++;
         }
 

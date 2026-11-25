@@ -18,10 +18,23 @@ from __future__ import annotations
 import argparse, json, os, sys
 from collections import defaultdict
 
+# Archivierte Aufnahmen (<name>.zst) transparent lesen: Leseweg aus research/data-bridge/atas_archive.py.
+_BRIDGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data-bridge")
+try:
+    sys.path.insert(0, os.path.normpath(_BRIDGE)); import atas_archive as _ar  # noqa: E402
+except Exception:  # pragma: no cover - ohne Bridge nur Rohdateien
+    _ar = None
+
+def _exists(path):
+    return _ar.exists(path) if _ar else os.path.exists(path)
+
+def _open_text(path):
+    return _ar.open_text(path) if _ar else open(path, "r", encoding="utf-8")
+
 def _read_ndjson(path):
-    if not os.path.exists(path): return []
+    if not _exists(path): return []
     out = []
-    with open(path, "r", encoding="utf-8") as f:
+    with _open_text(path) as f:
         for line in f:
             line = line.strip()
             if line:

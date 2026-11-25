@@ -259,12 +259,12 @@ public sealed class CollectorRunner
         return p.ExitCode;
     }
 
-    private static DayResult Classify(DayPlan day, int rc, bool sawSkip, string appendJson, double runtimeSec)
+    internal static DayResult Classify(DayPlan day, int rc, bool sawSkip, string appendJson, double runtimeSec)
     {
         if (sawSkip)
             return new DayResult(day.Date, DayOutcome.Reused, 0, 0, 0, 0, runtimeSec, "bereits committed – wiederverwendet (kein Doppel-Anhaengen)");
 
-        string result = "";
+        string result = "", note = "";
         long rows = 0, vol = 0, buy = 0, sell = 0;
         if (appendJson != "")
         {
@@ -273,6 +273,8 @@ public sealed class CollectorRunner
                 using var doc = JsonDocument.Parse(appendJson);
                 var r = doc.RootElement;
                 result = r.TryGetProperty("result", out var vr) ? (vr.GetString() ?? "") : "";
+                // Grund der Bruecke bei 'check' (z.B. Recorder-Drops mit beiden Tick-Datei-Zahlen) sichtbar machen.
+                note = r.TryGetProperty("note", out var vn) && vn.ValueKind == JsonValueKind.String ? (vn.GetString() ?? "") : "";
                 if (r.TryGetProperty("trades", out var t) && t.ValueKind == JsonValueKind.Object)
                 {
                     rows = t.TryGetProperty("rows", out var vrr) ? vrr.GetInt64() : 0;
@@ -285,7 +287,7 @@ public sealed class CollectorRunner
         }
 
         if (rc != 0)
-            return new DayResult(day.Date, DayOutcome.Failed, rows, vol, buy, sell, runtimeSec, $"Probe rc={rc}, result='{result}'");
+            return new DayResult(day.Date, DayOutcome.Failed, rows, vol, buy, sell, runtimeSec, $"Probe rc={rc}, result='{result}'" + (note == "" ? "" : " - " + note));
         if (result == "committed" && rows > 0)
             return new DayResult(day.Date, DayOutcome.Ok, rows, vol, buy, sell, runtimeSec, "committed");
         if (result is "empty" || (result == "committed" && rows == 0))

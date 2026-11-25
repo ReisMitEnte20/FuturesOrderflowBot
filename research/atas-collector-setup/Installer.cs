@@ -109,9 +109,28 @@ public sealed class Installer
         env.LoadState()?.programDir is { Length: > 0 } p ? p
         : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", ProductName);
 
-    public static string DefaultDataDir(SetupEnv env) =>
-        env.LoadState()?.dataDir is { Length: > 0 } d ? d
-        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "ATAS Collector Daten");
+    /// <summary>Vorschlag fuer den Datenordner. Vorrang hat der zuletzt IN DER OBERFLAECHE gewaehlte Ordner der bisherigen
+    /// Installation (collector-data.json), denn install.json kennt nur den Stand der letzten Installation - ein spaeter in
+    /// der Oberflaeche gewaehlter Ordner (z. B. F:) wuerde sonst beim Update auf den alten Ordner zurueckgestellt.</summary>
+    public static string DefaultDataDir(SetupEnv env)
+    {
+        var st = env.LoadState();
+        if (st?.programDir is { Length: > 0 } prog)
+        {
+            try
+            {
+                var cfg = Path.Combine(prog, "collector-data.json");
+                if (File.Exists(cfg))
+                {
+                    using var doc = JsonDocument.Parse(File.ReadAllText(cfg));
+                    if (doc.RootElement.TryGetProperty("dataDir", out var dd) && dd.GetString() is { Length: > 0 } gui) return gui;
+                }
+            }
+            catch { /* unlesbar -> Installationsstand */ }
+        }
+        return st?.dataDir is { Length: > 0 } d ? d
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "ATAS Collector Daten");
+    }
 
     private void Step(string s) => _log("\r\n== " + s);
     private void Info(string s) => _log("   " + s);
@@ -252,7 +271,7 @@ public sealed class Installer
         try
         {
             long free = new DriveInfo(Path.GetPathRoot(_o.DataDir)!).AvailableFreeSpace;
-            Info($"Freier Speicher im Datenlaufwerk: {free / (1024.0 * 1024 * 1024):0.0} GB (Richtwert 150-200 MB je Aufnahmetag).");
+            Info($"Freier Speicher im Datenlaufwerk: {free / (1024.0 * 1024 * 1024):0.0} GB (Richtwert MNQ New York: ca. 1,5 GB roh je Aufnahmetag, archiviert ca. 0,12 GB).");
         }
         catch { }
         return true;

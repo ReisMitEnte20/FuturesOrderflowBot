@@ -13,7 +13,7 @@
 # .NET-10-Laufzeit inkl. Windows Desktop. Nichts davon wird auf dem Zielrechner benoetigt.
 param(
     [Parameter(Mandatory = $true)] [string]$PythonDir,
-    [string]$Version = '1.4.0',
+    [string]$Version = '1.5.0',
     [string]$OutDir = '',
     [switch]$AllowDirty
 )
@@ -60,7 +60,7 @@ foreach ($p in @(
 Copy-Item -LiteralPath (Join-Path $stage 'Setup.exe') -Destination (Join-Path $app 'Uninstall.exe')
 
 # ---- 2) Bridge ----
-foreach ($f in 'atas_collect.py', 'atas_bridge.py') { Copy-Item -LiteralPath (Join-Path $research "data-bridge\$f") -Destination (Join-Path $app "bridge\$f") }
+foreach ($f in 'atas_collect.py', 'atas_bridge.py', 'atas_archive.py') { Copy-Item -LiteralPath (Join-Path $research "data-bridge\$f") -Destination (Join-Path $app "bridge\$f") }
 
 # ---- 3) Private Python-Laufzeit (unveraendert, ohne __pycache__) ----
 if (-not (Test-Path (Join-Path $PythonDir 'python.exe'))) { throw "python.exe nicht gefunden in -PythonDir '$PythonDir'" }
@@ -116,6 +116,7 @@ $(Line 'payload\app\AtasReplayProbe.exe')
 $(Line 'payload\app\Uninstall.exe')
 $(Line 'payload\app\bridge\atas_collect.py')
 $(Line 'payload\app\bridge\atas_bridge.py')
+$(Line 'payload\app\bridge\atas_archive.py')
 $(Line 'payload\recorder\OrderFlowReplayRecorder.dll')
 payload\app\python\  ($pyCount Dateien)        Baum-Pruefsumme $pyTree
                                              Python $pyInfo
@@ -125,12 +126,13 @@ Herkunft
 --------
 - Setup.exe, AtasSessionCollector.exe ($Version), AtasReplayProbe.exe ($Version): mit 'dotnet publish' aus dem oben genannten
   Commit gebaut (self-contained .NET 8, eine Datei je Programm). Die Programme tragen den Commit als Produktversion.
-- bridge\*.py: unveraenderte Kopien aus research\data-bridge\ dieses Commits.
+- bridge\*.py: unveraenderte Kopien aus research\data-bridge\ dieses Commits (atas_collect, atas_bridge, atas_archive).
 - Recorder-DLL: Variante 'proto-2c-sharedroot', deterministisch gebaut aus
   research\atas-recorder\proto-2c-sharedroot\OrderFlowReplayRecorder.cs + research\recorder-core\SharedDataRoot.cs
   (research\atas-recorder\build.ps1 -Variant proto2c). Sie ist NICHT die bisher ausgelieferte DLL 'proto-2-bufferfix':
   Gegenueber deren Quellsicherung ist nur die Bestimmung des Ausgabeordners geaendert (gemeinsame Konfiguration statt
-  festem Pfad F:\ATAS_Data\Recordings) und meta.json um den verwendeten Ordner ergaenzt.
+  festem Pfad F:\ATAS_Data\Recordings) und meta.json um den verwendeten Ordner ergaenzt. Ab 1.4.1 ist die Queue-Kapazitaet
+  fest 800.000 Events (keine Einstellung mehr) und steht als queueCapacity in meta.json/summary.json.
 - Python-Laufzeit: unveraendert aus dem Paket 'ATAS-Session-Collector-v1.2.5-vmtest2' uebernommen (CPython 3.13.9 mit
   pyarrow 26.0.0, isoliert ueber python313._pth), ohne __pycache__.
 

@@ -39,6 +39,7 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 import atas_bridge as b   # Wiederverwendung der geprueften reinen Helfer (keine Duplizierung)
+import atas_archive as ar  # Leseweg roh/.zst (Hashes beziehen sich auf die Original-Bytes)
 
 COLLECTION_SCHEMA = "atas-collection-trades-1"
 REWIND_TOLERANCE_NS = 1_000_000_000        # Marktzeit faellt um mehr als 1 s zurueck -> neuer Durchlauf
@@ -70,8 +71,8 @@ class JobConflictError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 def _iter_trades_ns(ticks_path: Path):
-    """Streamt (file_idx, obj) der ticks.ndjson; price als Decimal (exakte Quellziffern)."""
-    with open(ticks_path, "r", encoding="utf-8") as f:
+    """Streamt (file_idx, obj) der ticks.ndjson (roh oder .zst); price als Decimal (exakte Quellziffern)."""
+    with ar.open_text(ticks_path) as f:
         for i, line in enumerate(f):
             line = line.strip()
             if not line:
@@ -100,13 +101,13 @@ def read_window_trades(recording_dir, start, end):
         raise ValueError("start muss < end sein (halb-offen [start,end))")
 
     ticks_path = recording_dir / "ticks.ndjson"
-    if not ticks_path.exists():
+    if not ar.exists(ticks_path):
         raise FileNotFoundError(f"ticks.ndjson fehlt in {recording_dir}")
     meta_path = recording_dir / "meta.json"
     summary_path = recording_dir / "summary.json"
     ticks_csv = recording_dir / "ticks.csv"
 
-    pre = {n: b.sha256_file(recording_dir / n) for n in _INPUT_NAMES if (recording_dir / n).exists()}
+    pre = {n: b.sha256_file(recording_dir / n) for n in _INPUT_NAMES if ar.exists(recording_dir / n)}
 
     meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
     summary = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.exists() else {}
@@ -189,7 +190,7 @@ def read_window_trades(recording_dir, start, end):
 
     csv_rows = b.csv_data_rows(ticks_csv)
 
-    post = {n: b.sha256_file(recording_dir / n) for n in _INPUT_NAMES if (recording_dir / n).exists()}
+    post = {n: b.sha256_file(recording_dir / n) for n in _INPUT_NAMES if ar.exists(recording_dir / n)}
     if post != pre:
         changed = sorted(k for k in set(pre) | set(post) if pre.get(k) != post.get(k))
         raise b.SourceChangedError(
@@ -200,6 +201,14 @@ def read_window_trades(recording_dir, start, end):
     if rewind is not None:
         loop.update(rewind)
     summ_clean = summary.get("clean")
+    # Recorder-Drops (Queue-Overflow) je Tick-Datei. 'clean' belegt nur den sauberen Abschluss des Writers, NICHT
+    # die Vollstaendigkeit; und fehlen in ticks.csv und ticks.ndjson gleich viele Trades, stimmen die Zeilenzahlen
+    # trotzdem ueberein (Befund 17.07.2026: 21.230 / 21.228 Drops bei passenden Zaehlern).
+    tick_drops = {"ticks.csv": _stream_drops(summary, "ticks.csv"),
+                  "ticks.ndjson": _stream_drops(summary, "ticks.ndjson"),
+                  "total": _int_or_none(summary.get("totalDrops")),
+                  "queueCapacity": _int_or_none(summary.get("queueCapacity")),
+                  "queueHighWater": _int_or_none(summary.get("queueHighWater"))}
     stats = {
         "rows": n_window, "tradesTotalInFile": n_total,
         "restTicksBefore": n_before, "restTicksAfter": n_after,
@@ -214,6 +223,7 @@ def read_window_trades(recording_dir, start, end):
             "csv_eq_trades": (csv_rows == n_total) if csv_rows >= 0 else None,
             "summary_eq_ndjson_lines": (summ_ticks == n_lines) if summ_ticks is not None else None,
             "summary_clean": summ_clean,
+            "tick_drops": tick_drops,
         },
     }
     # Status wie Bruecke: Diskrepanzen sichtbar machen, nicht glaetten.
@@ -222,6 +232,8 @@ def read_window_trades(recording_dir, start, end):
         reasons.append("bad_json_lines")
     if summ_clean is not True:
         reasons.append("summary_not_clean_or_missing")
+    if (tick_drops["ticks.csv"] or 0) > 0 or (tick_drops["ticks.ndjson"] or 0) > 0:
+        reasons.append("recorder_tick_drops")
     if stats["reconciliation"]["csv_eq_trades"] is False:
         reasons.append("csv_trade_count_discrepancy")
     if stats["reconciliation"]["summary_eq_ndjson_lines"] is False:
@@ -241,6 +253,40 @@ def read_window_trades(recording_dir, start, end):
                    "startNs": start_ns, "endNs": end_ns, "interval": "[start, end)"},
     }
     return rows, stats, info
+
+
+def _int_or_none(v):
+    return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+
+def _stream_drops(summary, stream):
+    """Drops eines Streams laut summary.json; None, wenn die Summary dazu nichts sagt (aeltere/fehlende Summary)."""
+    return _int_or_none(((summary.get("perStream") or {}).get(stream) or {}).get("drops"))
+
+
+_REASON_TEXT = {
+    "bad_json_lines": "unlesbare Zeilen in ticks.ndjson",
+    "summary_not_clean_or_missing": "summary.json fehlt oder meldet keinen sauberen Abschluss",
+    "csv_trade_count_discrepancy": "ticks.csv und ticks.ndjson enthalten unterschiedlich viele Trades",
+    "summary_ndjson_line_discrepancy": "Zeilenzahl ticks.ndjson passt nicht zur summary.json",
+    "market_time_rewind_before_window_end": "Replay sprang vor dem Fensterende zurueck",
+}
+
+
+def _reasons_text(stats):
+    """Lesbarer Grund fuer einen 'check'-Status; bei Recorder-Drops mit beiden Zahlen der Tick-Dateien."""
+    out = []
+    for r in stats["statusReasons"]:
+        if r == "recorder_tick_drops":
+            d = stats["reconciliation"]["tick_drops"]
+            out.append("Recorder-Drops in den Tick-Dateien (ticks.csv: {0}, ticks.ndjson: {1}; gesamt {2}; "
+                       "Queue-Kapazitaet {3}, hoechster Fuellstand {4}) - gleiche Zeilenzahlen belegen dann "
+                       "KEINE Vollstaendigkeit".format(d["ticks.csv"], d["ticks.ndjson"], d["total"],
+                                                       d["queueCapacity"] if d["queueCapacity"] is not None else "unbekannt",
+                                                       d["queueHighWater"]))
+        else:
+            out.append(_REASON_TEXT.get(r, r))
+    return "; ".join(out) if out else "Diskrepanz"
 
 
 def _rows_to_bytes(session, year, job_id, run_id, recording_id, rows):
@@ -380,7 +426,9 @@ def append_job(collection_dir, recording_dir, job_id, start, end,
     if stats["status"] == "check" and not allow_check_status:
         return {"result": "check", "jobId": job_id, "rowsAppended": 0,
                 "statusReasons": stats["statusReasons"], "recovered": rec,
-                "note": "Abschnitt NICHT uebernommen (Diskrepanz). Mit allow_check_status erzwingbar."}
+                "tickDrops": stats["reconciliation"]["tick_drops"],
+                "note": "Abschnitt NICHT uebernommen: " + _reasons_text(stats)
+                        + ". Mit allow_check_status erzwingbar."}
 
     # 3) Atomar anhaengen + committen.
     csvp = _csv_path(collection_dir)

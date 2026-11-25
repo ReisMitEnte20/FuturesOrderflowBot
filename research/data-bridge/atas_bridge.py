@@ -34,6 +34,12 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+# Archiv-Leseweg: ticks.ndjson ODER ticks.ndjson.zst transparent (Hashes = Original-Bytes).
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+import atas_archive as ar  # noqa: E402
+
 SCHEMA_VERSION = "atas-bridge-trades-1"
 
 
@@ -50,11 +56,8 @@ class TargetExistsError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 def sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
+    """SHA-256 der Original-Bytes; liest bei archivierten Aufnahmen <name>.zst (entpackt) transparent."""
+    return ar.sha256_file(path)
 
 
 _ISO_RE = re.compile(
@@ -137,8 +140,8 @@ def off_grid_count(prices, tick: float) -> int:
 
 
 def iter_ndjson(path: Path):
-    """Streamt eine NDJSON-Datei zeilenweise (keine Vollmaterialisierung)."""
-    with open(path, "r", encoding="utf-8") as f:
+    """Streamt eine NDJSON-Datei zeilenweise (keine Vollmaterialisierung); roh oder .zst."""
+    with ar.open_text(path) as f:
         for i, line in enumerate(f):
             line = line.strip()
             if not line:
@@ -157,10 +160,10 @@ def aggressor_from(direction) -> str:
 
 def csv_data_rows(path: Path) -> int:
     """Datenzeilen (ohne Header) in ticks.csv; -1 wenn fehlt."""
-    if not path.exists():
+    if not ar.exists(path):
         return -1
     n = 0
-    with open(path, "r", encoding="utf-8") as f:
+    with ar.open_text(path) as f:
         for _ in f:
             n += 1
     return max(0, n - 1)
@@ -191,7 +194,7 @@ _INPUT_NAMES = ("ticks.ndjson", "ticks.csv", "meta.json", "summary.json",
 
 def _hash_inputs(recording_dir: Path) -> dict:
     return {name: sha256_file(recording_dir / name)
-            for name in _INPUT_NAMES if (recording_dir / name).exists()}
+            for name in _INPUT_NAMES if ar.exists(recording_dir / name)}
 
 
 def _build_table(cols):
@@ -218,7 +221,7 @@ def convert(recording_dir, window_start, window_end, out_dir, run_label=None,
     summary_path = recording_dir / "summary.json"
     ticks_path = recording_dir / "ticks.ndjson"
     ticks_csv = recording_dir / "ticks.csv"
-    if not ticks_path.exists():
+    if not ar.exists(ticks_path):
         raise FileNotFoundError(f"ticks.ndjson fehlt in {recording_dir}")
 
     # Finding 5.4: bestehendes Ziel standardmäßig ablehnen (kein ungefragtes Überschreiben).
@@ -313,6 +316,10 @@ def convert(recording_dir, window_start, window_end, out_dir, run_label=None,
     summ_clean = summary.get("clean")  # None bei alter Summary ohne Statusfeld
     csv_eq = (csv_rows == n_trades_total) if csv_rows >= 0 else None
     summ_eq = (summ_ticks == n_lines_total) if summ_ticks is not None else None
+    # Recorder-Drops je Tick-Datei: 'clean' belegt nur den Writer-Abschluss; gleich viele fehlende Trades in beiden
+    # Dateien ergeben trotzdem gleiche Zaehler -> eigener Grund, unabhaengig von den Zeilenzahlen.
+    tick_drops_csv = ((summary.get("perStream") or {}).get("ticks.csv") or {}).get("drops")
+    tick_drops_ndjson = ((summary.get("perStream") or {}).get("ticks.ndjson") or {}).get("drops")
     reconcile = {
         "ndjson_lines_total": n_lines_total,
         "ndjson_trade_events_total": n_trades_total,
@@ -321,6 +328,9 @@ def convert(recording_dir, window_start, window_end, out_dir, run_label=None,
         "csv_eq_trades": csv_eq,
         "summary_eq_ndjson_lines": summ_eq,
         "summary_clean": summ_clean,
+        "ticks_csv_drops": tick_drops_csv,
+        "ticks_ndjson_drops": tick_drops_ndjson,
+        "summary_total_drops": summary.get("totalDrops"),
         "note": "Diskrepanzen werden sichtbar gemacht, nicht geglaettet. summary.clean==true erst mit neuem Recorder (A3); "
                 "fehlt das Feld, ist der saubere Abschluss NICHT belegt. summary zaehlt NDJSON-Zeilen, ticks.csv zaehlt Trades.",
     }
@@ -333,6 +343,8 @@ def convert(recording_dir, window_start, window_end, out_dir, run_label=None,
         reasons.append("off_grid_prices")
     if summ_clean is not True:
         reasons.append("summary_not_clean_or_missing")  # None (alt/fehlt) ODER False (fehlgeschlagen)
+    if (tick_drops_csv or 0) > 0 or (tick_drops_ndjson or 0) > 0:
+        reasons.append("recorder_tick_drops")
     if csv_eq is False:
         reasons.append("csv_trade_count_discrepancy")
     if summ_eq is False:
@@ -397,7 +409,7 @@ def convert(recording_dir, window_start, window_end, out_dir, run_label=None,
         "otherStreams": {
             # sha256 aus DEMSELBEN Snapshot (pre_hashes), nicht separat nachgehasht (Finding 5 Recheck).
             name: {
-                "present": (recording_dir / name).exists(),
+                "present": ar.exists(recording_dir / name),
                 "sha256": pre_hashes.get(name),
                 "summaryEvents": ((summary.get("perStream") or {}).get(name) or {}).get("events"),
                 "qualified": False,

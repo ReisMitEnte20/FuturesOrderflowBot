@@ -7,7 +7,7 @@ namespace AtasSessionCollector;
 
 internal static class Program
 {
-    public const string AppVersion = "1.4.0";
+    public const string AppVersion = "1.5.0";
 
     [STAThread]
     private static int Main(string[] args)
@@ -118,6 +118,38 @@ internal static class SelfTest
         string fn = SessionCalendar.CollectionFolderName("MNQ", ny, new DateOnly(2026, 10, 26), new DateOnly(2026, 10, 28));
         Expect(fn == "MNQ_NewYork_0930-1200_America-New-York_2026-10-26_bis_2026-10-28",
             "Ordnername", fn);
+
+        // --- Tagesergebnis: 'check' der Bruecke zeigt Grund + beide Tick-Drop-Zahlen (Regression 17.07.2026) ---
+        {
+            var day = SessionCalendar.PlanDay(new DateOnly(2026, 7, 17), ny);
+            string json = "{\"result\": \"check\", \"jobId\": \"j\", \"rowsAppended\": 0, \"statusReasons\": [\"recorder_tick_drops\"], "
+                        + "\"note\": \"Abschnitt NICHT uebernommen: Recorder-Drops in den Tick-Dateien (ticks.csv: 21230, ticks.ndjson: 21228; gesamt 243149)\"}";
+            var r = CollectorRunner.Classify(day, 8, false, json, 1.0);
+            Expect(r.Outcome == DayOutcome.Failed && r.Detail.Contains("result='check'") && r.Detail.Contains("ticks.csv: 21230") && r.Detail.Contains("ticks.ndjson: 21228"),
+                "Tick-Drops: Tag NICHT ok, Grund mit beiden Drop-Zahlen sichtbar", r.Detail);
+        }
+
+        // --- Archivierung: Vormerken nur der in DIESEM Lauf committeten Tage; Fehlerbericht; Analyse-Text ---
+        {
+            string man = "{\"jobs\":{" +
+                "\"a\":{\"status\":\"committed\",\"recordingId\":\"MNQ_ALT\",\"appendedAtUtc\":\"2026-11-20T10:00:00+00:00\"}," +
+                "\"b\":{\"status\":\"committed\",\"recordingId\":\"MNQ_NEU\",\"appendedAtUtc\":\"2026-11-24T18:05:00.123456+00:00\"}," +
+                "\"c\":{\"status\":\"open\",\"recordingId\":\"MNQ_OFFEN\",\"appendedAtUtc\":\"2026-11-24T18:06:00+00:00\"}}}";
+            var ids = ArchiveRunner.RecordingsCommittedSince(man, new DateTime(2026, 11, 24, 18, 0, 0, DateTimeKind.Utc));
+            Expect(ids.Count == 1 && ids[0] == "MNQ_NEU", "Archivierung: nur in diesem Lauf committete Aufnahmen vorgemerkt", string.Join(",", ids));
+            using var cdoc = System.Text.Json.JsonDocument.Parse("{\"event\":\"result\",\"status\":\"out_of_space\",\"freedBytes\":1000000000,\"recordings\":[" +
+                "{\"recording\":\"MNQ_A\",\"files\":[{\"file\":\"dom.ndjson\",\"result\":\"archived\",\"origSize\":4000000000,\"zstSize\":300000000}]}," +
+                "{\"recording\":\"MNQ_B\",\"error\":\"voll\",\"files\":[{\"file\":\"bbo.ndjson\",\"result\":\"verify_failed\",\"reason\":\"Entpacktes Archiv weicht ab\"}]}]}");
+            var ct = ArchiveRunner.DescribeCompress(cdoc.RootElement);
+            Expect(ct.Contains("Platzmangel") && ct.Contains("1 von 2") && ct.Contains("MNQ_B bbo.ndjson: verify_failed") && ct.Contains("Original bleibt erhalten"),
+                "Archivierung: Bericht nennt Platzmangel, Fehler und erhaltene Originale", ct.Replace("\n", " | "));
+            using var adoc = System.Text.Json.JsonDocument.Parse("{\"recordingsBytes\":226000000000,\"disk\":{\"used\":835000000000,\"free\":125000000000,\"total\":960000000000}," +
+                "\"byKind\":{\"DOM\":{\"rawBytes\":68000000000,\"archivedBytes\":0}},\"eligible\":[{\"recording\":\"R1\",\"bytes\":1400000000,\"rawBytes\":1400000000,\"date\":\"2026-01-02\"}]," +
+                "\"archived\":[],\"unclear\":[],\"skipped\":[{\"recording\":\"R2\",\"bytes\":2000000000,\"date\":\"2026-02-04\",\"reason\":\"Recorder-Drops gemeldet (totalDrops=120820)\"}]}");
+            var at = ArchiveRunner.DescribeAnalysis(adoc.RootElement);
+            Expect(at.Contains("226,00 GB") && at.Contains("Geeignet zum Komprimieren: 1") && at.Contains("Recorder-Drops gemeldet") && at.Contains("R2"),
+                "Archivierung: Analyse zeigt Belegung, geeignete und uebersprungene Aufnahmen mit Grund", "");
+        }
 
         Line("");
         Line(_fail == 0 ? "ERGEBNIS: ALLE BESTANDEN" : $"ERGEBNIS: {_fail} FEHLGESCHLAGEN");

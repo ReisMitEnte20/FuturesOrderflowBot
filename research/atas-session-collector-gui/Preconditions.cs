@@ -72,7 +72,7 @@ public static class Preconditions
                 CreateNoWindow = true,
             };
             psi.ArgumentList.Add("-c");
-            psi.ArgumentList.Add($"import sys; sys.path.insert(0, r'{dir}'); import atas_bridge, atas_collect; print('IMPORTS_OK')");
+            psi.ArgumentList.Add($"import sys; sys.path.insert(0, r'{dir}'); import atas_bridge, atas_collect, atas_archive; print('IMPORTS_OK')");
             using var p = Process.Start(psi)!;
             string o = p.StandardOutput.ReadToEnd();
             string e = p.StandardError.ReadToEnd();
@@ -200,12 +200,14 @@ public sealed class ToolPaths
     public string ProbeExe { get; }
     public string Python { get; }
     public string CollectorScript { get; }
+    public string ArchiveScript { get; }
 
     public ToolPaths()
     {
         AppDir = AppContext.BaseDirectory;
         ProbeExe = Path.Combine(AppDir, "AtasReplayProbe.exe");
         CollectorScript = Path.Combine(AppDir, "bridge", "atas_collect.py");
+        ArchiveScript = Path.Combine(AppDir, "bridge", "atas_archive.py");
         // Private, mitgelieferte Python-Laufzeit bevorzugen (kein globales Python / kein PATH noetig);
         // sonst ATAS_PYTHON, sonst "python" aus dem PATH.
         var bundled = Path.Combine(AppDir, "python", "python.exe");

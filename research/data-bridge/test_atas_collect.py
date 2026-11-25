@@ -34,7 +34,7 @@ def _line(seq, tmarket, price, vol, direction="Buy", dtype="Trade",
 
 
 def _make_recording(d: Path, lines, *, run_id="RID-1", instrument="MNQ", clean=True,
-                    summary_events=None, csv_rows=None):
+                    summary_events=None, csv_rows=None, drops=None, queue=None):
     d.mkdir(parents=True, exist_ok=True)
     (d / "ticks.ndjson").write_text("\n".join(lines) + "\n", encoding="utf-8")
     # ticks.csv Datenzeilenzahl steuerbar (Default = Anzahl Trade-Zeilen)
@@ -47,9 +47,15 @@ def _make_recording(d: Path, lines, *, run_id="RID-1", instrument="MNQ", clean=T
         "recorder": "test", "runId": run_id, "instrument": instrument, "tickSize": 0.25,
         "startWallUtc": "2026-10-29T23:20:00Z"}), encoding="utf-8")
     ev = summary_events if summary_events is not None else len([l for l in lines if "bad json" not in l])
-    (d / "summary.json").write_text(json.dumps({
-        "schemaVersion": "ofrec-summary-2", "clean": clean, "totalDrops": 0,
-        "perStream": {"ticks.ndjson": {"events": ev, "drops": 0}}}), encoding="utf-8")
+    summ = {"schemaVersion": "ofrec-summary-2", "clean": clean, "totalDrops": 0,
+            "perStream": {"ticks.ndjson": {"events": ev, "drops": 0}}}
+    if drops:   # {stream: drops} wie vom Recorder bei Queue-Overflow gemeldet
+        for s, n in drops.items():
+            summ["perStream"].setdefault(s, {"events": 0})["drops"] = n
+        summ["totalDrops"] = sum(drops.values())
+    if queue:
+        summ.update(queue)
+    (d / "summary.json").write_text(json.dumps(summ), encoding="utf-8")
     return d
 
 
@@ -226,6 +232,43 @@ def test_check_status_not_appended_without_override(tmp_path):
     assert res2["result"] == "committed" and res2["rowsAppended"] == 3
 
 
+def test_recorder_tick_drops_block_append_even_with_matching_counts(tmp_path, capsys):
+    """Regression 17.07.2026: Queue lief bei 100x voll (200.000), summary.clean=true, ticks.csv und ticks.ndjson
+    verloren fast gleich viele Trades -> die Zaehler passten, die Aufnahme wurde trotzdem 'complete' uebernommen.
+    Drops in einer Tick-Datei muessen den Abschnitt immer stoppen, mit Grund und beiden Drop-Zahlen."""
+    coll = tmp_path / "NewYork_2026"
+    r = _make_recording(tmp_path / "rec", _job_lines(100.0, 3, 0), run_id="A", clean=True,
+                        drops={"ticks.csv": 21230, "ticks.ndjson": 21228, "dom.ndjson": 200691},
+                        queue={"queueCapacity": 200000, "queueHighWater": 200000})
+    rows, stats, _ = c.read_window_trades(r, START, END)
+    rec = stats["reconciliation"]
+    # genau die Lage vom 17.07.: alle Zaehler stimmen ...
+    assert rec["csv_eq_trades"] is True and rec["summary_eq_ndjson_lines"] is True and rec["summary_clean"] is True
+    # ... und trotzdem kein 'complete'
+    assert stats["status"] == "check" and stats["statusReasons"] == ["recorder_tick_drops"]
+    assert rec["tick_drops"] == {"ticks.csv": 21230, "ticks.ndjson": 21228, "total": 21230 + 21228 + 200691,
+                                 "queueCapacity": 200000, "queueHighWater": 200000}
+
+    res = c.append_job(coll, r, "job-0717", START, END, session="NewYork", year=2026)
+    assert res["result"] == "check" and res["rowsAppended"] == 0
+    assert res["tickDrops"]["ticks.csv"] == 21230 and res["tickDrops"]["ticks.ndjson"] == 21228
+    assert "ticks.csv: 21230" in res["note"] and "ticks.ndjson: 21228" in res["note"]
+    assert "job-0717" not in c.load_manifest(coll)["jobs"]          # nichts als 'committed' vermerkt
+    assert not (coll / "trades.csv").exists()                     # nichts angehaengt
+
+    # CLI (so ruft der Collector die Bruecke auf): rc=2 + Grund im JSON -> Collector stoppt dieses Fenster
+    rc = c.main(["append", "--collection", str(coll), "--recording", str(r), "--job-id", "job-0717",
+                 "--start", START, "--end", END, "--session", "NewYork", "--year", "2026"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 2 and out["result"] == "check" and "recorder_tick_drops" in out["statusReasons"]
+
+    # Nur Drops in DOM (nicht in den Tick-Dateien) stoppen den Trade-Abschnitt nicht.
+    r2 = _make_recording(tmp_path / "rec2", _job_lines(100.0, 3, 0), run_id="B",
+                         drops={"dom.ndjson": 5}, queue={"queueCapacity": 800000, "queueHighWater": 800000})
+    res2 = c.append_job(tmp_path / "other", r2, "job-x", START, END, session="NewYork", year=2026)
+    assert res2["result"] == "committed" and res2["status"] == "complete"
+
+
 def test_compare_identical_content_is_lossless(tmp_path):
     """Gleiche Trades, nur aufnahmeabhaengige Metadaten (run_id, t_recv) verschieden -> lossless."""
     lines_a = [_line(1, "2026-10-26T08:00:01Z", 100.25, 1, "Buy", trecv="2026-10-29T23:00:00.0Z"),
@@ -288,7 +331,7 @@ def test_selfcheck_runs_with_isolated_interpreter(tmp_path):
     here = os.path.dirname(os.path.abspath(__file__))
     dst = tmp_path / "Ordner mit Leerzeichen" / "bridge"
     dst.mkdir(parents=True)
-    for f in ("atas_collect.py", "atas_bridge.py"):
+    for f in ("atas_collect.py", "atas_bridge.py", "atas_archive.py"):
         shutil.copy(os.path.join(here, f), dst / f)
     r = subprocess.run([_sys.executable, "-I", str(dst / "atas_collect.py"), "selfcheck"],
                        cwd=str(tmp_path), capture_output=True, text=True, timeout=120)

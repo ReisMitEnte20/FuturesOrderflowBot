@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -40,6 +41,16 @@ public sealed class MainForm : Form
     private readonly ProgressBar _progress = new() { Dock = DockStyle.Top, Height = 18, Style = ProgressBarStyle.Continuous };
     private readonly TextBox _details = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill, Font = new Font(FontFamily.GenericMonospace, 8f), WordWrap = false };
 
+    // Speicher / Archivierung (laeuft nie parallel zu einem Sammellauf)
+    private readonly Button _arAnalyze = new() { Text = "Speicher analysieren", Width = 150, Height = 30 };
+    private readonly Button _arCompress = new() { Text = "Vorhandene Aufnahmen komprimieren", Width = 230, Height = 30 };
+    private readonly Button _arRestore = new() { Text = "Aufnahme wiederherstellen …", Width = 190, Height = 30 };
+    private readonly Button _arStop = new() { Text = "Archivierung abbrechen", Width = 160, Height = 30, Enabled = false };
+    private readonly CheckBox _arAuto = new() { Text = "Neue Aufnahmen automatisch nach dem Sammellauf komprimieren", AutoSize = true, Margin = new Padding(12, 8, 3, 3) };
+    private readonly CollectorOptions _options = CollectorOptions.Load();
+    private ArchiveRunner? _archive;
+    private bool _archiveBusy;
+
     private readonly Dictionary<DateOnly, ListViewItem> _rows = new();
     private CollectorRunner? _runner;
     private CancellationTokenSource? _cts;
@@ -48,7 +59,7 @@ public sealed class MainForm : Form
     public MainForm()
     {
         Text = $"ATAS-Session-Collector v{Program.AppVersion}";
-        Width = 1020; Height = 740; StartPosition = FormStartPosition.CenterScreen; MinimumSize = new Size(900, 600);
+        Width = 1080; Height = 820; StartPosition = FormStartPosition.CenterScreen; MinimumSize = new Size(900, 640);
 
         foreach (var s in SessionCalendar.Sessions) _session.Items.Add(s.DisplayName);
         _session.Items.Add("Benutzerdefiniert (Uhrzeit + Zeitzone)");
@@ -81,6 +92,12 @@ public sealed class MainForm : Form
         _openDir.Click += (_, _) => OpenDir();
         _copyRec.Click += (_, _) => CopyRecorderPath();
         _hardstop.Click += (_, _) => HardStop();
+        _arAuto.Checked = _options.autoArchiveAfterRun;
+        _arAuto.CheckedChanged += (_, _) => { _options.autoArchiveAfterRun = _arAuto.Checked; try { _options.Save(); } catch (Exception ex) { AppendDetail("Option nicht gespeichert: " + ex.Message); } };
+        _arAnalyze.Click += async (_, _) => await ArchiveAnalyze();
+        _arCompress.Click += async (_, _) => await ArchiveCompress(null, ask: true);
+        _arRestore.Click += async (_, _) => await ArchiveRestore();
+        _arStop.Click += (_, _) => { _archive?.RequestStop(); _arStop.Enabled = false; _stepLabel.Text = "Archivierung: Abbruch angefordert - aktuelle Datei wird verworfen, Original bleibt."; };
 
         RefreshPreview();
     }
@@ -174,6 +191,13 @@ public sealed class MainForm : Form
         var runBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 48, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(8, 6, 8, 6) };
         runBar.Controls.AddRange(new Control[] { _start, _resume, _stop, _openDir, _copyRec, _hardstop });
 
+        var archiveBar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 66, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(8, 2, 8, 2), WrapContents = true };
+        archiveBar.Controls.Add(new Label { Text = "Speicher / Archivierung:", AutoSize = true, Margin = new Padding(3, 9, 6, 3), Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold) });
+        archiveBar.Controls.AddRange(new Control[] { _arAnalyze, _arCompress, _arRestore, _arStop });
+        archiveBar.SetFlowBreak(_arStop, true);                 // Option in eigener Zeile (Text vollstaendig sichtbar)
+        _arAuto.Margin = new Padding(158, 2, 3, 3);
+        archiveBar.Controls.Add(_arAuto);
+
         _grid.Columns.Add("Datum", 90);
         _grid.Columns.Add("Status", 150);
         _grid.Columns.Add("Lokal (Session)", 150);
@@ -197,6 +221,7 @@ public sealed class MainForm : Form
         split.Panel2.Controls.Add(_stepLabel);
 
         Controls.Add(split);
+        Controls.Add(archiveBar);
         Controls.Add(runBar);
         Controls.Add(inputs);
     }
@@ -293,6 +318,8 @@ public sealed class MainForm : Form
     // ---------------- Lauf ----------------
     private async Task StartRun(bool resume)
     {
+        if (_archiveBusy) { MessageBox.Show(this, "Die Archivierung laeuft noch. Bitte warten oder 'Archivierung abbrechen'.", "Archivierung aktiv", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+        var runStartUtc = DateTime.UtcNow;
         var (from, to) = Range();
         var s = TryCurrentSession(out var sessErr);
         if (s == null) { MessageBox.Show(this, "Benutzerdefinierter Zeitraum ungueltig: " + sessErr, "Zeitraum", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
@@ -381,6 +408,155 @@ public sealed class MainForm : Form
             return;
         }
         if (summary != null) ShowSummary(summary);
+        // Erst NACH dem Sammellauf (Probe beendet, kein Replay mehr): in diesem Lauf importierte Tage archivieren.
+        // Ein Archivierungsfehler aendert am Import nichts (die Collection wird nicht angefasst).
+        if (summary != null && _arAuto.Checked) await AutoArchiveAfterRun(summary, runStartUtc);
+    }
+
+    // ---------------- Speicher / Archivierung ----------------
+    private bool ArchiveReady(out string dataDir)
+    {
+        dataDir = _output.Text;
+        if (_archiveBusy) return false;
+        if (!_start.Enabled) { MessageBox.Show(this, "Waehrend eines Sammellaufs wird nicht archiviert (Replay-Leistung). Bitte nach dem Lauf erneut.", "Sammellauf aktiv"); return false; }
+        if (!AppPaths.Validate(dataDir, out var why)) { MessageBox.Show(this, "Datenordner nicht verfuegbar: " + why); return false; }
+        _archive = new ArchiveRunner(_tools, dataDir);
+        if (!_archive.ScriptPresent) { MessageBox.Show(this, "bridge\\atas_archive.py fehlt in der Installation: " + _tools.ArchiveScript); return false; }
+        return true;
+    }
+
+    private void SetArchiveBusy(bool busy)
+    {
+        _archiveBusy = busy;
+        _start.Enabled = _resume.Enabled = !busy;          // kein Sammellauf waehrend der Archivierung
+        _arAnalyze.Enabled = _arCompress.Enabled = _arRestore.Enabled = !busy;
+        _arStop.Enabled = busy;
+        _arAuto.Enabled = true;
+    }
+
+    private void WireArchiveEvents(ArchiveRunner ar, int totalRecordings)
+    {
+        int recIdx = 0;
+        ar.Log += line => BeginInvoke(() => AppendDetail("  [archiv] " + line));
+        ar.Event += ev => BeginInvoke(() =>
+        {
+            string kind = ev.TryGetProperty("event", out var k) ? k.GetString() ?? "" : "";
+            if (kind == "recording")
+            {
+                recIdx++;
+                _progress.Maximum = Math.Max(1, totalRecordings);
+                _progress.Value = Math.Min(_progress.Maximum, Math.Max(0, recIdx - 1));
+                _stepLabel.Text = $"Archivierung {recIdx}/{Math.Max(totalRecordings, recIdx)}: {ev.GetProperty("recording").GetString()} ({(ev.TryGetProperty("date", out var d) ? d.GetString() : "")})";
+            }
+            else if (kind == "file")
+            {
+                string res = ev.GetProperty("result").GetString() ?? "";
+                long o = ev.TryGetProperty("origSize", out var os) && os.ValueKind == JsonValueKind.Number ? os.GetInt64() : 0;
+                long z = ev.TryGetProperty("zstSize", out var zs) && zs.ValueKind == JsonValueKind.Number ? zs.GetInt64() : 0;
+                AppendDetail($"  {ev.GetProperty("recording").GetString()}  {ev.GetProperty("file").GetString(),-18} {res,-16} {ArchiveRunner.Gb(o)} -> {ArchiveRunner.Gb(z)}" +
+                             (ev.TryGetProperty("reason", out var why) ? "  " + why.GetString() : ""));
+            }
+            else if (kind == "block")
+            {
+                long done = ev.GetProperty("done").GetInt64(), total = Math.Max(1, ev.GetProperty("total").GetInt64());
+                _stepLabel.Text = $"Archivierung {recIdx}/{Math.Max(totalRecordings, recIdx)}: {ev.GetProperty("file").GetString()} {100 * done / total} %";
+            }
+        });
+    }
+
+    private async Task<JsonElement?> RunAnalyze(string dataDir)
+    {
+        _stepLabel.Text = "Speicher wird analysiert … (nur lesend)";
+        var (code, res) = await _archive!.AnalyzeAsync(dataDir);
+        if (res == null || code != 0) { AppendDetail($"Analyse fehlgeschlagen (rc={code})."); return null; }
+        return res;
+    }
+
+    private async Task ArchiveAnalyze()
+    {
+        if (!ArchiveReady(out var dataDir)) return;
+        SetArchiveBusy(true);
+        try
+        {
+            var res = await RunAnalyze(dataDir);
+            if (res == null) return;
+            var text = ArchiveRunner.DescribeAnalysis(res.Value);
+            AppendDetail("\n=== SPEICHER-ANALYSE " + DateTime.Now.ToString("HH:mm:ss") + " ===\n" + text);
+            _stepLabel.Text = "Speicher analysiert (Details unten).";
+            MessageBox.Show(this, ArchiveRunner.DescribeAnalysis(res.Value, withSkippedList: false), "Speicher analysieren", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        finally { SetArchiveBusy(false); }
+    }
+
+    private async Task ArchiveCompress(IReadOnlyCollection<string>? only, bool ask)
+    {
+        if (!ArchiveReady(out var dataDir)) return;
+        SetArchiveBusy(true);
+        try
+        {
+            int total;
+            if (ask)
+            {
+                var pre = await RunAnalyze(dataDir);
+                if (pre == null) return;
+                total = pre.Value.GetProperty("eligible").GetArrayLength();
+                AppendDetail("\n=== VORSCHAU ARCHIVIERUNG ===\n" + ArchiveRunner.DescribeAnalysis(pre.Value));
+                if (total == 0) { MessageBox.Show(this, "Keine weiteren Aufnahmen zum Komprimieren.\n\n" + ArchiveRunner.DescribeAnalysis(pre.Value, false), "Nichts zu tun"); return; }
+                var ok = MessageBox.Show(this,
+                    ArchiveRunner.DescribeAnalysis(pre.Value, false) +
+                    "\nJede Datei wird verlustfrei komprimiert (zstd), vollstaendig zurueckgelesen und per SHA-256 verglichen; erst dann wird das " +
+                    "Rohoriginal entfernt. Collections bleiben unveraendert. Abbruch jederzeit moeglich, Fortsetzen mit demselben Knopf.\n\nJetzt komprimieren?",
+                    "Vorhandene Aufnahmen komprimieren", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (ok != DialogResult.Yes) return;
+            }
+            else total = only?.Count ?? 0;
+            WireArchiveEvents(_archive!, total);
+            AppendDetail($"\n=== ARCHIVIERUNG START {DateTime.Now:HH:mm:ss} ===");
+            var (code, res) = await _archive!.CompressAsync(dataDir, only);
+            string text = res != null ? ArchiveRunner.DescribeCompress(res.Value) : $"Archivierung ohne Ergebnis beendet (rc={code}).";
+            AppendDetail(text);
+            _progress.Value = _progress.Maximum;
+            _stepLabel.Text = text.Split('\n')[0];
+            if (ask) MessageBox.Show(this, text, "Archivierung", MessageBoxButtons.OK, code == 0 ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+        }
+        finally { SetArchiveBusy(false); }
+    }
+
+    private async Task AutoArchiveAfterRun(RunSummary s, DateTime runStartUtc)
+    {
+        try
+        {
+            var mp = Path.Combine(s.CollectionDir, "collection_manifest.json");
+            if (!File.Exists(mp)) return;
+            var ids = ArchiveRunner.RecordingsCommittedSince(File.ReadAllText(mp), runStartUtc);
+            AppendDetail($"\n[Archivierung] {ids.Count} in diesem Lauf importierte Aufnahme(n) vorgemerkt.");
+            if (ids.Count == 0) return;
+            await ArchiveCompress(ids, ask: false);
+        }
+        catch (Exception ex) { AppendDetail("[Archivierung] nicht ausgefuehrt: " + ex.Message + " (Importierte Tage bleiben unveraendert.)"); }
+    }
+
+    private async Task ArchiveRestore()
+    {
+        if (!ArchiveReady(out var dataDir)) return;
+        using var dlg = new FolderBrowserDialog { Description = "Archivierte Aufnahme (Ordner unter Recordings) waehlen", UseDescriptionForTitle = true, SelectedPath = AppPaths.Recordings(dataDir) };
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        var dir = dlg.SelectedPath;
+        if (!Directory.EnumerateFiles(dir, "*.zst").Any()) { MessageBox.Show(this, "In diesem Ordner liegen keine .zst-Archive.", "Nichts wiederherzustellen"); return; }
+        if (MessageBox.Show(this, $"Aufnahme {Path.GetFileName(dir)} bytegenau wiederherstellen?\n\nJede Datei wird entpackt und per SHA-256 gegen den archivierten Pruefwert verglichen; erst dann wird das Archiv entfernt. " +
+                              "Die Aufnahme wird danach nicht mehr automatisch komprimiert.", "Aufnahme wiederherstellen", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+        SetArchiveBusy(true);
+        try
+        {
+            WireArchiveEvents(_archive!, 1);
+            var (code, res) = await _archive!.RestoreAsync(dir);
+            string text = res == null ? $"Wiederherstellung ohne Ergebnis (rc={code})."
+                : (res.Value.TryGetProperty("ok", out var ok) && ok.GetBoolean() ? "Wiederherstellung erfolgreich: alle Dateien bytegenau (SHA-256) zurueckgewandelt."
+                   : "Wiederherstellung NICHT vollstaendig - Archive bleiben erhalten:\n" + res.Value.ToString());
+            AppendDetail(text);
+            MessageBox.Show(this, text, "Aufnahme wiederherstellen");
+        }
+        finally { SetArchiveBusy(false); }
     }
 
     private void StopRun()
@@ -436,6 +612,7 @@ public sealed class MainForm : Form
         _stop.Enabled = running;
         if (!running) _stop.Text = "Kontrolliert stoppen";
         _openDir.Enabled = true;
+        _arAnalyze.Enabled = _arCompress.Enabled = _arRestore.Enabled = !running && !_archiveBusy;   // nie parallel zum Replay
     }
 
     private void SetRowStatus(DateOnly d, string status, Color color)
@@ -491,6 +668,16 @@ public sealed class MainForm : Form
                 "Lauf aktiv", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
             if (r != DialogResult.Yes) { e.Cancel = true; return; }
             _runner?.RequestStop();
+        }
+        if (_archiveBusy)
+        {
+            var r = MessageBox.Show(this,
+                "Die Archivierung laeuft. Beim Schliessen wird sie abgebrochen: die gerade bearbeitete Datei bleibt als Original erhalten, " +
+                "ein halbes Archiv wird beim naechsten Lauf verworfen. Fortsetzen spaeter mit 'Vorhandene Aufnahmen komprimieren'.\n\nJetzt schliessen?",
+                "Archivierung aktiv", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+            if (r != DialogResult.Yes) { e.Cancel = true; return; }
+            _archive?.RequestStop();
+            _archive?.KillCurrentTree();
         }
         base.OnFormClosing(e);
     }

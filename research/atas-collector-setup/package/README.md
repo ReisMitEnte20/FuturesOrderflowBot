@@ -1,4 +1,4 @@
-# ATAS Session Collector 1.4.0 – All-in-one-Paket (Vorabversion)
+# ATAS Session Collector 1.5.0 – All-in-one-Paket (Vorabversion)
 
 Zeichnet ATAS-Replay-Trades lokal auf (Research/Simulation-only: keine Orders, keine Broker-Anbindung, keine
 Kontoänderungen). Das Paket enthält alles außer ATAS selbst.
@@ -31,6 +31,38 @@ Recorder hinzufügen → Zeitraum laden → Ladebereich prüfen → abspielen �
 sofort stoppen → Recorder entfernen → Writer-Abschluss prüfen → Daten prüfen und an die gemeinsame CSV anhängen →
 nächster Tag. Ein nicht vollständig abgeschlossener Tag stoppt den Lauf; abgeschlossene Tage bleiben erhalten,
 „Fortsetzen“ überspringt sie.
+
+## Was in 1.5.0 geändert ist (Speicher / Archivierung)
+
+Neue Leiste **„Speicher / Archivierung“** unten im Fenster:
+
+- **Speicher analysieren** (nur lesend): belegte GB je Datenart (Trades, DOM, BBO, kumulierte Trades), freier Platz,
+  geeignete Aufnahmen und übersprungene Aufnahmen mit Grund.
+- **Vorhandene Aufnahmen komprimieren**: Vorschau, dann verlustfreie Zstandard-Kompression (Stufe 3) Datei für Datei im
+  Aufnahmeordner. Jede Datei wird vollständig zurückgelesen und per SHA-256 mit dem Original verglichen; erst danach wird
+  das Rohoriginal entfernt. Abbruch jederzeit („Archivierung abbrechen“), Fortsetzen mit demselben Knopf.
+  Automatisch bearbeitet werden nur abgeschlossene, importierte Aufnahmen mit `clean=true`, `totalDrops=0` und passender
+  `runId`. Tage mit Drops, nicht importierte, offene oder unklare Aufnahmen bleiben unberührt und werden aufgelistet.
+- **Neue Aufnahmen automatisch nach dem Sammellauf komprimieren** (Option, wird gespeichert): Die in einem Lauf
+  importierten Tage werden vorgemerkt und erst **nach** dem Lauf komprimiert – nie während eines Replays. Ein
+  Archivierungsfehler ändert nichts am Import (der Tag bleibt übernommen).
+- **Aufnahme wiederherstellen**: bytegenaue Rückwandlung eines Ordners für ältere Werkzeuge (Prüfung per SHA-256).
+
+Bridge und Prüfskripte lesen `ticks.ndjson` und `ticks.ndjson.zst` gleichermaßen; Hashes beziehen sich weiter auf die
+Original-Bytes, „Fortsetzen“ erkennt archivierte Tage. `trades.csv`, `collection_manifest.json`, `meta.json` und
+`summary.json` werden nie komprimiert oder verändert. Je Aufnahmeordner hält `archive.json` Größe und SHA-256 jedes
+Originals. `.zst` ist Standard-Zstandard (z. B. `zstd -d` entpackt bytegenau).
+
+## Was in 1.4.1 geändert ist (Recorder-Puffer fest, Drops stoppen den Tag)
+
+- **Recorder-Puffer fest 800.000 Events.** Der Collector entfernt den Recorder nach jedem Tag und hängt ihn neu an; ein
+  im ATAS-Dialog erhöhter Wert ging dabei verloren (Standard 200.000 lief bei 100× voll). Die Kapazität ist keine
+  Einstellung mehr; ein alter Wert aus einer ATAS-Vorlage wird ignoriert und als `queueCapacityIgnoredSetting` vermerkt.
+- **Nachprüfbar:** Jede neue `summary.json` (und `meta.json`) enthält `queueCapacity` = tatsächlich verwendete Kapazität;
+  `queueHighWater` bleibt der höchste beobachtete Füllstand.
+- **Drops stoppen den Tag:** Meldet `summary.json` Drops in `ticks.csv` oder `ticks.ndjson`, wird der Tag nicht übernommen –
+  auch wenn die Zeilenzahlen übereinstimmen. Der Collector zeigt den Grund mit beiden Drop-Zahlen. Bestehende Collections
+  und ältere Aufnahmen werden nicht umgeschrieben.
 
 ## Was in 1.4.0 geändert ist (Datum ohne Umweg, Papierkorb direkt)
 

@@ -106,6 +106,25 @@ $psi.WorkingDirectory = $env:SystemRoot; $psi.EnvironmentVariables['PATH'] = "$e
 $p = [Diagnostics.Process]::Start($psi); $o = $p.StandardOutput.ReadToEnd(); $e = $p.StandardError.ReadToEnd(); $p.WaitForExit()
 Check 'Installierte Bridge findet atas_bridge (frueher: ModuleNotFoundError)' (($p.ExitCode -eq 0) -and ($o -match '"result": "ok"')) ($e.Trim().Split("`n")[-1])
 
+# 1.5.0: Archivierung aus der Installation: Analyse (nur lesend) und Roundtrip einer Testdatei mit der privaten Laufzeit.
+$arDir = Join-Path $data 'Recordings\ARCHIV_TEST'
+New-Item -ItemType Directory -Force -Path $arDir | Out-Null
+$arBytes = [Text.Encoding]::UTF8.GetBytes((1..20000 | ForEach-Object { '{"seq":' + $_ + ',"price":21000.25,"volume":1}' }) -join "`n")
+[IO.File]::WriteAllBytes((Join-Path $arDir 'dom.ndjson'), $arBytes)
+function RunInstalledPy([string[]]$pyArgs) {
+    $ps2 = New-Object Diagnostics.ProcessStartInfo
+    $ps2.FileName = $py; $ps2.Arguments = (($pyArgs) | ForEach-Object { '"' + $_ + '"' }) -join ' '
+    $ps2.UseShellExecute = $false; $ps2.RedirectStandardOutput = $true; $ps2.RedirectStandardError = $true
+    $ps2.WorkingDirectory = $env:SystemRoot; $ps2.EnvironmentVariables['PATH'] = "$env:SystemRoot\System32"
+    $pp = [Diagnostics.Process]::Start($ps2); $oo = $pp.StandardOutput.ReadToEnd(); $ee = $pp.StandardError.ReadToEnd(); $pp.WaitForExit()
+    return @($pp.ExitCode, $oo, $ee)
+}
+$ra = RunInstalledPy @('-I', (Join-Path $prog 'bridge\atas_archive.py'), 'analyze', '--data-dir', $data)
+Check 'Installierte Archivierung: Analyse laeuft (nur lesend)' (($ra[0] -eq 0) -and ($ra[1] -match '"recordingsBytes"')) ($ra[2].Trim())
+$rt = RunInstalledPy @('-I', '-c', "import sys; sys.path.insert(0, r'$(Join-Path $prog 'bridge')'); import atas_archive as a; r = a.archive_file(r'$arDir', 'dom.ndjson', reserve=0); d = a.open_binary(r'$arDir\dom.ndjson').read(); print(r['result'], d == open(r'$arDir\dom.ndjson.zst','rb').read() or len(d))")
+Check 'Installierte Archivierung: Testdatei archiviert und bytegenau lesbar' (($rt[0] -eq 0) -and ($rt[1] -match "archived $($arBytes.Length)")) ($rt[1].Trim() + ' ' + $rt[2].Trim())
+Remove-Item -LiteralPath $arDir -Recurse -Force
+
 # ---- 5) Erneutes Ausfuehren: keine Doppelinstallation, Daten und Einstellungen bleiben ----
 $keep = Join-Path $data 'Collections\Bestehende Collection\trades.csv'
 New-Item -ItemType Directory -Force -Path (Split-Path $keep -Parent) | Out-Null
@@ -136,6 +155,18 @@ $gui2 = (Get-Content -LiteralPath (Join-Path $prog 'collector-data.json') -Raw |
 Check 'Datenordnerwechsel erfolgreich (rc=0)' ($rc -eq 0) "rc=$rc"
 Check 'Recorder-Konfiguration und Oberflaeche folgen dem neuen Datenordner' (($shared2 -ieq (Join-Path $data2 'Recordings')) -and ($gui2 -ieq $data2)) "$shared2 | $gui2"
 Check 'Alter Datenordner unangetastet' ((Test-Path -LiteralPath $keep) -and (Test-Path -LiteralPath $keepRec))
+
+# ---- 6b) 1.5.0: Update ohne /datadir uebernimmt den zuletzt IN DER OBERFLAECHE gewaehlten Datenordner ----
+$data3 = Join-Path $WorkDir 'In der Oberflaeche gewaehlt'
+New-Item -ItemType Directory -Force -Path $data3 | Out-Null
+[IO.File]::WriteAllText((Join-Path $prog 'collector-data.json'), (@{ dataDir = $data3 } | ConvertTo-Json))
+$log = Join-Path $WorkDir 't6b.log'
+$rc = Setup $setup @('/silent', '/testroot', $user) $log
+$shared3 = ([IO.File]::ReadAllText((Join-Path $user 'Roaming\AtasSessionCollector\recorder-output-root.txt'))).Trim()
+$gui3 = (Get-Content -LiteralPath (Join-Path $prog 'collector-data.json') -Raw | ConvertFrom-Json).dataDir
+Check 'Update behaelt den in der Oberflaeche gewaehlten Datenordner (nicht den alten Installationsstand)' (($rc -eq 0) -and ($gui3 -ieq $data3) -and ($shared3 -ieq (Join-Path $data3 'Recordings'))) "rc=$rc $gui3 | $shared3"
+# zurueck auf data2 fuer die folgenden Schritte
+$rc = Setup $setup @('/silent', '/testroot', $user, '/datadir', $data2) (Join-Path $WorkDir 't6c.log')
 
 # ---- 7) Nicht vorhandenes Laufwerk als Datenordner -> Abbruch ----
 $missing = $null
