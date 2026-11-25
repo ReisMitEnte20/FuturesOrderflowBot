@@ -6,7 +6,9 @@ import type { CandleStatus, ReplayCandle } from "@/lib/tickReplay";
 // abgeschlossene Kerzen, die laufende Kerze (goldener Rand) und die Preislinie des letzten Trades. Kuenftige
 // Intervalle bleiben leer. KEINE Animation zwischen Zustaenden (animation: false) – jede Aktualisierung ist exakt.
 
-const UP = "#3cf0a0", DOWN = "#f0566a", RUN = "#e8c069", LINE = "#7fc4b4";
+// Farben aus den Marken-Tokens (dashboard/src/index.css): key, red, gold, cyan.
+const UP = "#3cf0a0", DOWN = "#f0566a", RUN = "#f0c35a", LINE = "#22b8f0";
+const AXIS = "#1d3654", SPLIT = "#14273f", FAINT = "#6b8399", MONO = "JetBrains Mono, ui-monospace, monospace";
 
 export interface ReplaySlot {
   /** Beschriftung des Intervallstarts in der Session-Zeitzone, z. B. "09:35". */
@@ -51,7 +53,7 @@ const markerPoint = (k: ReplayMarker) => {
   return {
     name: k.kind, coord: [k.slot, k.price], value: k.label, symbol: style.symbol, symbolSize: style.symbolSize,
     symbolRotate: (style as any).rotate ?? 0, itemStyle: { color: style.color, borderColor: "#0a0a0a", borderWidth: 1 },
-    label: { show: true, position: style.labelPos, formatter: k.label, color: style.color, fontSize: 10, fontFamily: "var(--mono)" },
+    label: { show: true, position: style.labelPos, formatter: k.label, color: style.color, fontSize: 10, fontFamily: MONO },
   };
 };
 
@@ -102,11 +104,11 @@ export function TickReplayChart({ slots, currentSlot, lastPrice, follow, height 
     const c = chart.current;
     if (!c) return;
     const labels = slots.map((s) => s.label);
-    const axisLabel = { color: "#6b8399", fontSize: 10, fontFamily: "var(--mono)" };
+    const axisLabel = { color: FAINT, fontSize: 10, fontFamily: MONO };
     const grid = { left: 64, right: 72 };
     zoom.current = null;
     const axes = withDelta ? [0, 1, 2] : [0, 1];
-    const xa = (gridIndex: number, show: boolean) => ({ type: "category", data: labels, gridIndex, boundaryGap: true, axisLabel: show ? axisLabel : { show: false }, axisLine: { lineStyle: { color: "#2a2a2a" } } });
+    const xa = (gridIndex: number, show: boolean) => ({ type: "category", data: labels, gridIndex, boundaryGap: true, axisLabel: show ? axisLabel : { show: false }, axisLine: { lineStyle: { color: AXIS } } });
     c.setOption({
       animation: false,
       backgroundColor: "transparent",
@@ -115,20 +117,20 @@ export function TickReplayChart({ slots, currentSlot, lastPrice, follow, height 
         : [{ ...grid, top: 16, height: "62%" }, { ...grid, top: "74%", height: "16%" }],
       xAxis: withDelta ? [xa(0, false), xa(1, false), xa(2, true)] : [xa(0, false), xa(1, true)],
       yAxis: [
-        { scale: true, gridIndex: 0, position: "right", axisLabel, splitLine: { lineStyle: { color: "#1c1c1c" } } },
+        { scale: true, gridIndex: 0, position: "right", axisLabel, splitLine: { lineStyle: { color: SPLIT } } },
         { scale: true, gridIndex: 1, position: "right", splitNumber: 2, axisLabel: { ...axisLabel, fontSize: 9 }, splitLine: { show: false } },
         ...(withDelta ? [
-          { scale: true, gridIndex: 2, position: "right", splitNumber: 2, axisLabel: { ...axisLabel, fontSize: 9 }, splitLine: { show: false }, name: "Δ", nameTextStyle: { color: "#6b8399", fontSize: 9 } },
-          { scale: true, gridIndex: 2, position: "left", splitNumber: 2, axisLabel: { ...axisLabel, fontSize: 9, color: "#22b8f0" }, splitLine: { show: false }, name: "CVD", nameTextStyle: { color: "#22b8f0", fontSize: 9 } },
+          { scale: true, gridIndex: 2, position: "right", splitNumber: 2, axisLabel: { ...axisLabel, fontSize: 9 }, splitLine: { show: false }, name: "Δ", nameTextStyle: { color: FAINT, fontSize: 9 } },
+          { scale: true, gridIndex: 2, position: "left", splitNumber: 2, axisLabel: { ...axisLabel, fontSize: 9, color: LINE }, splitLine: { show: false }, name: "CVD", nameTextStyle: { color: LINE, fontSize: 9 } },
         ] : []),
       ],
       dataZoom: [
         { type: "inside", xAxisIndex: axes },
-        { type: "slider", xAxisIndex: axes, height: 14, bottom: 2, borderColor: "#2a2a2a", textStyle: { color: "#6b8399" } },
+        { type: "slider", xAxisIndex: axes, height: 14, bottom: 2, borderColor: AXIS, textStyle: { color: FAINT }, fillerColor: "rgba(34,184,240,0.12)", handleStyle: { color: "#22b8f0", borderColor: "#22b8f0" }, dataBackground: { lineStyle: { color: AXIS }, areaStyle: { color: SPLIT } } },
       ],
       tooltip: {
-        trigger: "axis", axisPointer: { type: "cross" }, backgroundColor: "#161513", borderColor: "#2a2a2a",
-        textStyle: { color: "#ddd", fontSize: 11, fontFamily: "var(--mono)" },
+        trigger: "axis", axisPointer: { type: "cross", lineStyle: { color: "#2a4868" }, crossStyle: { color: "#2a4868" }, label: { backgroundColor: AXIS } }, backgroundColor: "#0a1a30", borderColor: AXIS,
+        textStyle: { color: "#eefcf6", fontSize: 11, fontFamily: MONO },
         formatter: (params: any) => {
           const i = Array.isArray(params) ? params[0]?.dataIndex : params?.dataIndex;
           const s = slotsRef.current[i];
@@ -143,7 +145,7 @@ export function TickReplayChart({ slots, currentSlot, lastPrice, follow, height 
         { type: "candlestick", xAxisIndex: 0, yAxisIndex: 0, data: [] }, { type: "bar", xAxisIndex: 1, yAxisIndex: 1, data: [] },
         ...(withDelta ? [
           { type: "bar", name: "Delta", xAxisIndex: 2, yAxisIndex: 2, data: [] },
-          { type: "line", name: "CVD", xAxisIndex: 2, yAxisIndex: 3, data: [], symbol: "none", lineStyle: { color: "#22b8f0", width: 1.2 }, connectNulls: false },
+          { type: "line", name: "CVD", xAxisIndex: 2, yAxisIndex: 3, data: [], symbol: "none", lineStyle: { color: LINE, width: 1.2 }, connectNulls: false },
         ] : []),
       ],
     }, { notMerge: true });
@@ -181,7 +183,7 @@ export function TickReplayChart({ slots, currentSlot, lastPrice, follow, height 
           markLine: lastPrice == null ? { data: [] } : {
             symbol: "none", silent: true, animation: false,
             lineStyle: { color: LINE, type: "dashed", width: 1 },
-            label: { position: "end", color: "#0a0a0a", backgroundColor: LINE, padding: [2, 4], formatter: () => String(lastPrice) },
+            label: { position: "end", color: "#020d1e", backgroundColor: LINE, padding: [2, 4], formatter: () => String(lastPrice) },
             data: [{ yAxis: lastPrice }],
           },
           // Immer vollstaendig ersetzen (auch leer): Wechsel des Trades oder Zuruecksprung hinterlaesst keine alten Marker.
