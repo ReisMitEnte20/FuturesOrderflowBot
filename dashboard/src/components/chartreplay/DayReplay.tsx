@@ -5,7 +5,10 @@
 //  - „Replay“: nur, was bis zur Marktuhr bekannt war (laufende Kerze baut sich Tick für Tick auf, Fills erst ab Erreichen).
 // Ohne gewählten Lauf nur Markt. Mit Lauf: dessen GESPEICHERTE Fills – Play rechnet keine Strategie neu.
 // DOM/BBO/Smart Tape werden nicht angeboten: in der Collection nicht angebunden (nur Trades mit Aggressor).
+// Herkunft der Aufnahme (Datenqualitäts-Audit) steht im Chart: generierte Tickfolge wird nie als „echte Börsentrades“ beschriftet.
 import { useEffect, useMemo, useState } from "react";
+import { RecordingProvenanceBanner, useRecordingProvenance, eventLabel } from "@/components/marktdaten/RecordingProvenanceBanner";
+import { ProvChip } from "@/components/marktdaten/Provenance";
 import { cn } from "@/lib/utils";
 import { TickReplayChart, type ReplayMarker, type ReplaySlot } from "@/components/research/TickReplayChart";
 import { candleStatus, type ReplayCandle } from "@/lib/tickReplay";
@@ -50,8 +53,10 @@ const writeLs = (k: string, v: string) => { try { localStorage.setItem(k, v); } 
 /** Auswählbarer Lauf für die Überlagerung. */
 interface RunOption { key: string; label: string; kind: "report" | "file"; id: string; }
 
-export function DayReplay({ day, onDay, runKey, onRunKey }: {
+export function DayReplay({ day, onDay, runKey, onRunKey, marketOnly }: {
   day: string | null; onDay: (d: string) => void; runKey: string | null; onRunKey: (k: string | null) => void;
+  /** Marktdaten → Aufzeichnung: nur Markt, keine Strategie-/Lauf-Überlagerung. */
+  marketOnly?: boolean;
 }) {
   const [sessions, setSessions] = useState<TickReplaySession[]>([]);
   const [listErr, setListErr] = useState<string | null>(null);
@@ -82,6 +87,9 @@ export function DayReplay({ day, onDay, runKey, onRunKey }: {
   const id = chosen ? sessionId(chosen) : null;
   const r = useTickReplay(id);
   const { meta: m, store: st, eng, overview: ov, clock, load } = r;
+  const recId = m?.recordingId || chosen?.candidates?.find((c) => c.id === sessionId(chosen))?.recordingId || null;
+  const { p: prov } = useRecordingProvenance(recId);
+  const evl = eventLabel(prov);
   const dayIdx = day ? days.indexOf(day) : -1;
   useEffect(() => setFpSlot(null), [id, view]);
 
@@ -167,7 +175,7 @@ export function DayReplay({ day, onDay, runKey, onRunKey }: {
           <button className={btn} disabled={dayIdx < 0 || dayIdx >= days.length - 1} onClick={() => onDay(days[dayIdx + 1])}>▶</button>
           <select value={day ?? ""} onChange={(e) => onDay(e.target.value)} className="h-[28px] max-w-[320px] rounded-md border border-[var(--line-2)] bg-[var(--bg-2)] px-2 text-xs text-[var(--fg)]">
             {days.map((d) => { const s = ofSess.find((x) => x.day === d)!; const c = ofSess.filter((x) => x.day === d).length > 1;
-              return <option key={d} value={d}>{s.label} · {nf.format(s.rows)} Trades{c ? " · ⚠ Konflikt" : ""}{s.recorderDrops ? " · ⚠ Drops" : ""}</option>; })}
+              return <option key={d} value={d}>{s.label} · {nf.format(s.rows)} Ereignisse{c ? " · ⚠ Konflikt" : ""}{s.recorderDrops ? " · ⚠ Drops" : ""}</option>; })}
           </select>
           <span className="text-[10px] text-[var(--fg-faint)]">{days.length} Handelstage aus dem Collector-Datenordner</span>
         </div>
@@ -182,7 +190,7 @@ export function DayReplay({ day, onDay, runKey, onRunKey }: {
                 <label key={sessionId(s)} className="flex items-center gap-2">
                   <input type="radio" name="src" checked={chosen === s} onChange={() => { setSrcPick((p) => ({ ...p, [s.jobId]: sessionId(s) })); writeLs(SRC_KEY(s.jobId), sessionId(s)); }} />
                   <span className="text-[var(--fg)]">{s.collection}</span>
-                  <span className="text-[var(--fg-dim)]">Aufnahme {c?.recordingId ?? "?"} · {nf.format(s.rows)} Trades · Recorder-Drops {c?.recorderDrops ?? "unbekannt"}</span>
+                  <span className="text-[var(--fg-dim)]">Aufnahme {c?.recordingId ?? "?"} · {nf.format(s.rows)} Ereignisse · Recorder-Drops {c?.recorderDrops ?? "unbekannt"}</span>
                 </label>
               );
             })}
@@ -193,8 +201,9 @@ export function DayReplay({ day, onDay, runKey, onRunKey }: {
         {chosen && (chosen.recorderDrops ?? 0) > 0 && <p className="text-[11px] text-[var(--red)]">⚠ Diese Aufnahme meldet {nf.format(chosen.recorderDrops!)} Recorder-Drops – Ticks können fehlen.</p>}
         {chosen && chosen.recorderDrops == null && <p className="text-[11px] text-[var(--gold)]">Drop-Status dieser Aufnahme nicht feststellbar.</p>}
         {m && <p className="text-[10px] text-[var(--fg-faint)]">
-          Quelle {m.collection} · Tagesabschnitt {m.sliceBytes || "(Volldatei)"} {m.sliceSha256 ? `SHA256 ${m.sliceSha256.slice(0, 12)}…` : ""} · {nf.format(m.count)} Trades · Vol {nf.format(m.totalVolume)} (Buy {nf.format(m.buyVolume)} / Sell {nf.format(m.sellVolume)}) · Cache {m.cache}{m.prepareSeconds ? ` (${m.prepareSeconds} s)` : ""}
+          Quelle {m.collection} · Tagesabschnitt {m.sliceBytes || "(Volldatei)"} {m.sliceSha256 ? `SHA256 ${m.sliceSha256.slice(0, 12)}…` : ""} · {nf.format(m.count)} {evl} · Vol {nf.format(m.totalVolume)} (Buy {nf.format(m.buyVolume)} / Sell {nf.format(m.sellVolume)}) · Cache {m.cache}{m.prepareSeconds ? ` (${m.prepareSeconds} s)` : ""}
         </p>}
+        {(m || chosen) && <RecordingProvenanceBanner recordingId={recId} />}
         {(load.phase === "prepare" || load.phase === "load") && (
           <div className="space-y-1" data-testid="day-loading">
             <div className="text-[11px] text-[var(--fg-dim)]">{load.phase === "prepare" ? "Server bereitet den Tag vor (beim ersten Mal: nur dieser Tagesabschnitt wird geprüft und zwischengespeichert) …" : `Lade Ticks: ${nf.format(load.loaded)} / ${nf.format(load.total)}`}</div>
@@ -237,7 +246,7 @@ export function DayReplay({ day, onDay, runKey, onRunKey }: {
             <div className="rounded-md border border-[var(--line)] bg-[var(--panel-3)] p-2" data-testid="dr-clock">
               <div className="text-[var(--fg-faint)]">{isOverview ? "Tagesübersicht (alle Ticks des Tages)" : "Marktuhr (Replay)"}</div>
               <div className="font-mono text-sm text-[var(--fg)]">{isOverview ? `${fmtTime(m, m.windowStartUnits, 0)}–${fmtTime(m, m.windowEndUnits, 0)}` : fmtTime(m, clock)} {tzShortOf(tzOf(m), offMs(m, clock))}</div>
-              <div className="text-[var(--fg-dim)]">{m.day} · Position {nf.format(isOverview ? st.total : eng.p)} / {nf.format(st.total)} Ticks{st.loaded < st.total ? ` · geladen ${nf.format(st.loaded)}` : ""}</div>
+              <div className="text-[var(--fg-dim)]">{m.day} · Position {nf.format(isOverview ? st.total : eng.p)} / {nf.format(st.total)} {evl}{st.loaded < st.total ? ` · geladen ${nf.format(st.loaded)}` : ""}</div>
               {r.playing && r.waiting && <div className="text-[var(--gold)]">wartet auf Nachladen – kein Tick wird übersprungen</div>}
               {r.pending != null && <div className="text-[var(--gold)]">Sprung vorgemerkt – wird angewandt, sobald alle Ticks bis dahin geladen sind</div>}
               {!isOverview && atEnd && <div className="text-[var(--fg-dim)]" data-testid="dr-end">Sessionende erreicht – pausiert (kein Loop)</div>}
@@ -247,16 +256,16 @@ export function DayReplay({ day, onDay, runKey, onRunKey }: {
               {(() => {
                 const c = fpCandle; const s = fpIndex != null ? slots[fpIndex] : null;
                 return <>
-                  <div className="text-[var(--fg-faint)]">Kerze {s?.range ?? ""} {s?.status ? `· ${s.status}` : ""}</div>
+                  <div className="flex items-center gap-1 text-[var(--fg-faint)]">Kerze {s?.range ?? ""} {s?.status ? `· ${s.status}` : ""} <ProvChip cls="computed" title="Von uns aus den Replay-Ereignissen dieser Aufnahme berechnet" /></div>
                   {c ? <div className="font-mono text-[var(--fg)]">
                     <div>O {c.open} · H {c.high} · L {c.low} · C <span style={{ color: c.close >= c.open ? "#3cf0a0" : "#f0566a" }}>{c.close}</span></div>
-                    <div className="text-[var(--fg-dim)]">Vol {nf.format(c.volume)} · Buy {nf.format(c.buyVolume)} / Sell {nf.format(c.sellVolume)} · Δ {nf.format(c.buyVolume - c.sellVolume)} · {nf.format(c.trades)} Ticks</div>
+                    <div className="text-[var(--fg-dim)]">Vol {nf.format(c.volume)} · Buy {nf.format(c.buyVolume)} / Sell {nf.format(c.sellVolume)} · Δ {nf.format(c.buyVolume - c.sellVolume)} · {nf.format(c.trades)} {evl}</div>
                   </div> : <div className="text-[var(--fg-dim)]">noch kein Tick</div>}
                 </>;
               })()}
             </div>
             <div className="rounded-md border border-[var(--line)] bg-[var(--panel-3)] p-2">
-              <div className="text-[var(--fg-faint)]">Letzter Tick</div>
+              <div className="text-[var(--fg-faint)]">{evl === "Trades" ? "Letzter Trade" : "Letztes Replay-Ereignis"}</div>
               {!isOverview && lastIdx >= 0 ? <div className="font-mono text-[var(--fg)]">#{nf.format(lastIdx + 1)} · {st.price[lastIdx]} · {st.vol[lastIdx]} Kontr. · <span style={{ color: st.side[lastIdx] > 0 ? "#3cf0a0" : "#f0566a" }}>{st.side[lastIdx] > 0 ? "Buy" : st.side[lastIdx] < 0 ? "Sell" : "?"}</span>
                 <div className="text-[var(--fg-dim)]">{fmtTime(m, st.t[lastIdx], 7)}</div></div> : <div className="text-[var(--fg-dim)]">–</div>}
             </div>
@@ -269,13 +278,13 @@ export function DayReplay({ day, onDay, runKey, onRunKey }: {
           </div>
           <p className="text-[10px] leading-relaxed text-[var(--fg-faint)]">
             Kerzen an echten 5-Minuten-Grenzen ({tzOf(m)}), Intervalle [Start, Ende). Volumen, Delta (Buy − Sell) und CVD (ab Sessionstart) aus denselben Ticks.
-            Footprint: Bid = Verkäufer-Aggressor, Ask = Käufer-Aggressor; Klick auf eine Kerze zeigt ihren Footprint. DOM, BBO und Smart Tape werden nicht angeboten –
-            diese Streams sind in den Collections nicht angebunden (nur Trades mit Aggressor). {m.timePrecision}
+            Footprint: Bid = Verkäufer-Aggressor, Ask = Käufer-Aggressor; Klick auf eine Kerze zeigt ihren Footprint. Bid/Ask-Quotes, DOM und Smart Tape werden hier
+            nicht angezeigt: In diesen Aufnahmen sind sie laut Audit im ATAS-Replay generiert (eine Preisstufe je Seite) – keine historischen Quotes, keine Markttiefe. {m.timePrecision}
           </p>
         </section>
       )}
 
-      {ready && m && <OverlayPanel overlay={overlay} runKey={runKey} onRunKey={onRunKey} events={events} reached={reachedEv} meta={m} overview={isOverview} />}
+      {ready && m && !marketOnly && <OverlayPanel overlay={overlay} runKey={runKey} onRunKey={onRunKey} events={events} reached={reachedEv} meta={m} overview={isOverview} />}
     </div>
   );
 }
