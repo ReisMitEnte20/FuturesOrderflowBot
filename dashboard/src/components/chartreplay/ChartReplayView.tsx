@@ -3,6 +3,7 @@
 // Arbeitsfläche, bisheriger Chart-Backtest) – kein zweiter Simulator, keine neue Backtest-Engine.
 // URL: ?view=chart&mode=run&run=<id>[&trade=<n>] · ?view=chart&mode=day&day=YYYY-MM-DD[&overlay=<key>]
 //      ?view=chart&mode=files (Orderflow-Lauf-Dateien) · ?view=chart&mode=quick (bisheriger „Chart-Backtest“)
+//      ?view=chart&mode=sessions&srun=<id>[&day=YYYY-MM-DD][&trade=<n>] (London + New York, Pause übersprungen)
 import { useState } from "react";
 import { useSearchParams } from "react-router";
 import { cn } from "@/lib/utils";
@@ -12,11 +13,13 @@ import { TickReplayPanel } from "@/components/research/TickReplayPanel";
 import { Backtest } from "@/pages/Backtest";
 import { SavedRunChart } from "./SavedRunChart";
 import { DayReplay } from "./DayReplay";
+import { SessionsReplay } from "./SessionsReplay";
 
-export type ChartMode = "run" | "day" | "files" | "quick";
+export type ChartMode = "run" | "day" | "sessions" | "files" | "quick";
 const MODES: { key: ChartMode; label: string; hint: string }[] = [
   { key: "run", label: "Trades im Chart", hint: "gespeicherter Lauf" },
   { key: "day", label: "Handelstag abspielen", hint: "Tick für Tick" },
+  { key: "sessions", label: "London + New York", hint: "beide Sessions, Pause übersprungen" },
   { key: "files", label: "Orderflow-Lauf-Dateien", hint: "Footprint-Arbeitsfläche" },
   { key: "quick", label: "Schnelltest auf Kerzen", hint: "bisheriger Chart-Backtest" },
 ];
@@ -51,6 +54,9 @@ export function ChartReplayView({ defaultMode = "run" }: { defaultMode?: ChartMo
       )}
       {mode === "day" && (
         <DayReplay day={params.get("day")} onDay={(d) => update({ day: d }, !params.get("day"))} runKey={params.get("overlay")} onRunKey={(k) => update({ overlay: k })} />
+      )}
+      {mode === "sessions" && (
+        <SessionsReplay runId={params.get("srun")} day={params.get("day")} trade={trade != null ? Number(trade) : null} onParams={(kv) => update(kv)} />
       )}
       {mode === "files" && <FilesMode />}
       {mode === "quick" && (

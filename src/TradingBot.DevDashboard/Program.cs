@@ -1,5 +1,6 @@
 using TradingBot.DevDashboard.Services;
 using TradingBot.DevDashboard.Services.Quant;
+using TradingBot.DevDashboard.Services.Sessions;
 using TradingBot.Quant.Research;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -28,9 +29,22 @@ var tickReplayCollection = builder.Configuration["TickReplay:CollectionDir"];
 var tickReplayRoot = builder.Configuration["TickReplay:CollectionsRoot"] ?? @"F:\ATAS_Data\ATAS_Data Collection\Collections";
 var tickReplayCache = builder.Configuration["TickReplay:CacheDir"]
     ?? Path.Combine(repoRoot ?? AppContext.BaseDirectory, "artifacts", "tickreplay-cache");
-builder.Services.AddSingleton(string.IsNullOrWhiteSpace(tickReplayCollection)
-    ? TickReplayService.ForCollectionsRoot(tickReplayRoot, tickReplayCache)
-    : new TickReplayService(tickReplayCollection, tickReplayCache));
+// London liegt in einem EIGENEN Datenordner (TickReplay:LondonCollectionsRoot); beide Ordner werden nur gelesen, keine CSV wird
+// kopiert. Welche Sessions angeboten werden, steht im Sessionplan config/sessions/london-newyork*.json.
+var tickReplayLondonRoot = builder.Configuration["TickReplay:LondonCollectionsRoot"] ?? @"F:\ATAS_Data\ATAS_Data Collection(London)\Collections";
+TradingBot.DevDashboard.Services.Sessions.SessionScheduleFile? sessionSchedule = null;
+try { if (repoRoot is not null) sessionSchedule = SessionScheduleFile.Load(repoRoot).File; } catch (Exception) { /* ohne Plan: nur New York wie bisher */ }
+var tickReplay = string.IsNullOrWhiteSpace(tickReplayCollection)
+    ? sessionSchedule is null
+        ? TickReplayService.ForCollectionsRoot(tickReplayRoot, tickReplayCache)
+        : TickReplayService.ForCollectionsRoots(new[] { tickReplayRoot, tickReplayLondonRoot }, tickReplayCache, sessionSchedule.Definitions())
+    : new TickReplayService(tickReplayCollection, tickReplayCache);
+builder.Services.AddSingleton(tickReplay);
+// LONDON + NEW YORK (gemeinsamer Lauf, eine Strategie, ein Konto) – Plan und Lauf ueber die bestehende Tick-Engine; Laeufe
+// liegen lokal unter artifacts/sessions-runs (gitignored).
+builder.Services.AddSingleton(new SessionPlanService(tickReplay, repoRoot ?? AppContext.BaseDirectory));
+builder.Services.AddSingleton(sp => new SessionRunService(sp.GetRequiredService<SessionPlanService>(), backtestApi,
+    Path.Combine(repoRoot ?? AppContext.BaseDirectory, "artifacts", "sessions-runs")));
 // Tick-Datenquelle im Backtesting (je Handelstag; manifest-geprüfter Import, nur lesend): nur wenn eine einzelne
 // Collection ausdruecklich konfiguriert ist (TickReplay:CollectionDir).
 if (!string.IsNullOrWhiteSpace(tickReplayCollection))
@@ -176,6 +190,27 @@ tr.MapGet("/sessions/{jobId}/ticks", (string jobId, long offset, int count, Tick
     catch (ArgumentOutOfRangeException ex) { return Results.BadRequest(new { error = ex.Message }); }
     catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
 });
+
+// London + New York: Plan pruefen, gemeinsamen Lauf starten (synchron, max. 31 Kalendertage), gespeicherte Laeufe lesen.
+var ss = app.MapGroup("/api/backtest/sessions").RequireCors(ReactCors);
+ss.MapGet("/plan", (string from, string to, int? closeOutMinutes, SessionPlanService s) =>
+{
+    try
+    {
+        return Results.Ok(s.Plan(DateOnly.ParseExact(from, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
+            DateOnly.ParseExact(to, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture), closeOutMinutes));
+    }
+    catch (Exception ex) when (ex is ArgumentException or FormatException or FileNotFoundException or InvalidOperationException)
+    { return Results.BadRequest(new { error = ex.Message }); }
+});
+ss.MapPost("/run", async (SessionRunRequest request, SessionRunService s, CancellationToken ct) =>
+{
+    try { return Results.Ok(await s.RunAsync(request, ct)); }
+    catch (Exception ex) when (ex is ArgumentException or FormatException or FileNotFoundException or InvalidOperationException or InvalidDataException or KeyNotFoundException)
+    { return Results.BadRequest(new { error = ex.Message }); }
+});
+ss.MapGet("/runs", (SessionRunService s) => Results.Ok(s.List()));
+ss.MapGet("/runs/{runId}", (string runId, SessionRunService s) => s.Get(runId) is { } r ? Results.Ok(r) : Results.NotFound(new { error = "Lauf nicht gefunden: " + runId }));
 
 // Quant-Research-API (Auswertung, Validierung, Monte Carlo, Overfitting, Versuchsregister).
 // Alle Berechnungen laufen im Backend; das React-Dashboard stellt ausschließlich echte Ergebnisse dar.

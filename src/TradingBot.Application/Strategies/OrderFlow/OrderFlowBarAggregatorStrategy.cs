@@ -2,6 +2,7 @@ using TradingBot.Core.Interfaces;
 using TradingBot.Application.MarketData;
 using TradingBot.Domain.Models;
 using TradingBot.Domain.Enums;
+using TradingBot.Application.Sessions;
 
 namespace TradingBot.Application.Strategies.OrderFlow;
 
@@ -11,7 +12,7 @@ namespace TradingBot.Application.Strategies.OrderFlow;
 /// Ermöglicht die Nutzung von OrderFlow-Strategien mit der bestehenden <see cref="BacktestEngine"/>
 /// (die nur <see cref="IStrategy.OnTick"/> aufruft), ohne Architektur-Änderung.
 /// </summary>
-public sealed class OrderFlowBarAggregatorStrategy : IStrategy, IPositionManagerAware
+public sealed class OrderFlowBarAggregatorStrategy : IStrategy, IPositionManagerAware, ISessionAware
 {
     private readonly IStrategy _innerStrategy;
     private readonly int _ticksPerBar;
@@ -66,6 +67,23 @@ public sealed class OrderFlowBarAggregatorStrategy : IStrategy, IPositionManager
     public void UsePositionManager(IPositionManager positions)
     {
         if (_innerStrategy is IPositionManagerAware aware) aware.UsePositionManager(positions);
+    }
+
+    /// <summary>Ticks der laufenden, noch nicht geschlossenen Bar.</summary>
+    public int PendingBarTicks => _currentBarTicks.Count;
+
+    /// <summary>
+    /// Neue Session (nach einer unbeobachteten Pause): eine angefangene Bar der Vorsession wird VERWORFEN – keine Bar
+    /// spannt über die Pause, kein Signal aus einer unvollständigen Bar. Das kumulative Delta (Session-CVD) startet neu.
+    /// Die innere Strategie wird weitergereicht, falls sie selbst sessionbezogenen Zustand hat.
+    /// </summary>
+    public int OnSessionStart(SessionSegment segment)
+    {
+        int discarded = _currentBarTicks.Count;
+        _currentBarTicks.Clear();
+        _cumulativeDelta = 0m;
+        if (_innerStrategy is ISessionAware aware) aware.OnSessionStart(segment);
+        return discarded;
     }
 
     public void Reset()

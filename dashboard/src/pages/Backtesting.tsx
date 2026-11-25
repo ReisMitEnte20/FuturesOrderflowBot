@@ -16,11 +16,13 @@ import { checkCounts, groupChecks, isHoldout, paramSummary, plannedText, preview
 import { ReportView, StatusChip, stepLabel } from "@/components/backtesting/ReportView";
 import { LineChart } from "@/components/backtesting/charts";
 import { ChartReplayView } from "@/components/chartreplay/ChartReplayView";
+import { SessionsBacktest } from "@/components/sessions/SessionsBacktest";
 import { Research } from "./Research";
 
-type View = "test" | "compare" | "chart" | "history" | "orderflow" | "research";
+type View = "test" | "sessions" | "compare" | "chart" | "history" | "orderflow" | "research";
 const PRIMARY: { key: View; label: string }[] = [
   { key: "test", label: "Strategie testen" },
+  { key: "sessions", label: "London + New York" },
   { key: "compare", label: "Strategien vergleichen" },
   { key: "chart", label: "Chart & Replay" },
 ];
@@ -42,6 +44,7 @@ export function Backtesting({ defaultView = "test" }: { defaultView?: View }) {
     const p = new URLSearchParams(params); p.set("view", v);
     if (v !== "test" && v !== "chart") p.delete("run");
     if (v !== "chart") CHART_KEYS.forEach((k) => p.delete(k));
+    if (v !== "chart" && v !== "sessions") p.delete("srun");
     if (v === "chart" && p.get("run")) p.set("mode", "run");
     setParams(p);
   };
@@ -75,6 +78,9 @@ export function Backtesting({ defaultView = "test" }: { defaultView?: View }) {
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto">
         {view === "test" && <TestView />}
+        {view === "sessions" && (
+          <SessionsBacktest runId={params.get("srun")} onRun={(id) => { const p = new URLSearchParams(params); p.set("view", "sessions"); if (id) p.set("srun", id); else p.delete("srun"); setParams(p); }} />
+        )}
         {view === "compare" && <CompareView />}
         {view === "history" && <HistoryView />}
         {view === "chart" && <ChartReplayView defaultMode={raw === "orderflow" ? "files" : "run"} />}

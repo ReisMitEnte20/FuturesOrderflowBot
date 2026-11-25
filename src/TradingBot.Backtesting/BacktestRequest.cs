@@ -30,4 +30,14 @@ public sealed record BacktestRequest
 
     /// <summary>Optional deterministisches Reject-Kriterium (simuliert abgelehnte Orders).</summary>
     public Func<OrderRequest, bool>? RejectOrder { get; init; }
+
+    /// <summary>
+    /// Optional: wird VOR jedem Tick aufgerufen – vor Uhr, Fills und Strategie. Gibt der Guard einen Grund zurück, stoppt der
+    /// Lauf vor diesem Tick (<see cref="BacktestRunStatus.Stopped"/>): der Tick füllt keine offene Order und erreicht die
+    /// Strategie nicht. Genutzt z. B. an Sessiongrenzen (keine Position/Order über eine unbeobachtete Pause).
+    /// </summary>
+    public Func<BacktestTickGuardContext, string?>? TickGuard { get; init; }
 }
+
+/// <summary>Zustand VOR dem nächsten Tick (nach allen Fills und Signalen des vorherigen Ticks).</summary>
+public sealed record BacktestTickGuardContext(MarketTick NextTick, int PendingOrders, Domain.Enums.PositionSide PositionSide, int PositionQuantity);

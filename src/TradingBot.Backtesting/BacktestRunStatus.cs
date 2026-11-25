@@ -7,5 +7,7 @@ public enum BacktestRunStatus
     Running = 1,
     Completed = 2,
     Cancelled = 3,
-    Failed = 4
+    Failed = 4,
+    /// <summary>Vom <see cref="BacktestRequest.TickGuard"/> VOR einem Tick angehalten (Lauf unvollständig; der Tick wurde nicht verarbeitet).</summary>
+    Stopped = 5
 }
