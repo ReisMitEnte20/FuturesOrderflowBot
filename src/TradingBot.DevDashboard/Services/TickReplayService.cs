@@ -80,6 +80,9 @@ public sealed class TickReplayService
     private readonly string _cacheDir;
     private readonly ConcurrentDictionary<string, Lazy<Task<TickReplaySessionMeta>>> _builds = new();
     private readonly ConcurrentDictionary<string, string> _sliceHashMemo = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Zeitfenster, in dem Laenge + Schreibzeit einer CSV nicht als Beleg fuer „unveraendert“ gelten (Zeitstempel-
+    /// Aufloesung von NTFS/FAT/Netzlaufwerken; FAT: 2 s).</summary>
+    internal static readonly TimeSpan RacyWindow = TimeSpan.FromSeconds(2);
     private readonly object _manifestLock = new();
     private readonly Dictionary<string, (long Length, long WriteTicks, List<Job> Jobs)> _manifestCache = new(StringComparer.OrdinalIgnoreCase);
 
@@ -473,11 +476,27 @@ public sealed class TickReplayService
                 || h.SliceStart != job.SliceStart || h.SliceEnd != job.SliceEnd) return null;
             var csv = new FileInfo(h.CsvPath);
             if (!csv.Exists) return null;
-            if (csv.Length == h.CsvLength && csv.LastWriteTimeUtc.Ticks == h.CsvWriteTicks) return ToMeta(job, h, "wiederverwendet", 0);
-            if (job.SliceStart < 0 || csv.Length < h.SliceEnd) return null; // ohne Abschnitt: jede Dateiaenderung invalidiert
+            // „Racy“-Schutz (wie bei git): Laenge + Schreibzeit belegen „unveraendert“ nur, wenn die CSV deutlich VOR dem
+            // Vermerk (= Schreibzeit der Cache-Datei) zuletzt geaendert wurde. Sonst koennte eine gleich lange Aenderung
+            // innerhalb der Zeitstempel-Aufloesung dieselbe Schreibzeit tragen. Im Racy-Fenster wird daher per Hash
+            // GEPRUEFT (nicht verworfen und nicht aus dem nach Laenge/Schreibzeit verschluesselten Memo gelesen).
+            bool racy = csv.LastWriteTimeUtc >= File.GetLastWriteTimeUtc(cache) - RacyWindow;
+            bool stampSame = csv.Length == h.CsvLength && csv.LastWriteTimeUtc.Ticks == h.CsvWriteTicks;
+            if (stampSame && !racy) return ToMeta(job, h, "wiederverwendet", 0);
+            if (job.SliceStart < 0)
+            {
+                // Ganzdatei-Modus: eine geaenderte Laenge/Schreibzeit invalidiert; im Racy-Fenster entscheidet der Dateihash.
+                if (!stampSame || string.IsNullOrEmpty(h.CsvSha256)) return null;
+                return string.Equals(AtasCollectionImporter.HashSlice(h.CsvPath, 0, csv.Length), h.CsvSha256, StringComparison.OrdinalIgnoreCase)
+                    ? ToMeta(job, h, "wiederverwendet", 0) : null;
+            }
+            if (csv.Length < h.SliceEnd) return null;
             string memoKey = $"{h.CsvPath}|{csv.Length}|{csv.LastWriteTimeUtc.Ticks}|{h.SliceStart}|{h.SliceEnd}";
-            string sha = _sliceHashMemo.GetOrAdd(memoKey, _ => AtasCollectionImporter.HashSlice(h.CsvPath, h.SliceStart, h.SliceEnd));
+            string sha = racy
+                ? AtasCollectionImporter.HashSlice(h.CsvPath, h.SliceStart, h.SliceEnd)
+                : _sliceHashMemo.GetOrAdd(memoKey, _ => AtasCollectionImporter.HashSlice(h.CsvPath, h.SliceStart, h.SliceEnd));
             if (!string.Equals(sha, h.SliceSha256, StringComparison.OrdinalIgnoreCase)) return null;
+            if (stampSame) return ToMeta(job, h, "wiederverwendet", 0);   // nur Racy-Fenster: Abschnitt per Hash bestaetigt
             var updated = h with { CsvLength = csv.Length, CsvWriteTicks = csv.LastWriteTimeUtc.Ticks };
             TryPersistHeader(cache, h, updated);
             return ToMeta(job, updated, "wiederverwendet (Abschnitt nach Dateiaenderung neu geprueft)", 0);
