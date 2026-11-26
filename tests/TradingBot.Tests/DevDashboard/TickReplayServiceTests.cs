@@ -173,6 +173,9 @@ public sealed class TickReplayServiceTests
 
         // Collector haengt einen neuen Tag an (Datei waechst): nur der Abschnitt wird neu gehasht, Cache bleibt gueltig.
         File.AppendAllText(csv, "dayX,recX,runX,2026-10-29T13:30:00.000000000Z,MNQ,20010,1,Buy\n");
+        // Das Anhaengen liegt eindeutig VOR dem folgenden Vermerk (ausserhalb des Racy-Fensters) – sonst wuerde zu Recht
+        // neu gehasht statt „sofort gueltig“ (deterministisch statt abhaengig von der Zeitstempel-Aufloesung).
+        File.SetLastWriteTimeUtc(csv, DateTime.UtcNow.AddMinutes(-5));
         Assert.StartsWith("wiederverwendet (Abschnitt", (await svc.PrepareAsync(Day1, CancellationToken.None)).Cache);
         // Neustart (neue Instanz): Dateistand wurde im Cache-Kopf vermerkt -> sofort gueltig, kein erneutes Hashen.
         var restarted = new TickReplayService(Path.GetDirectoryName(csv)!, cacheDir);
@@ -183,6 +186,23 @@ public sealed class TickReplayServiceTests
         var rebuilt = await restarted.PrepareAsync(Day1, CancellationToken.None);
         Assert.Equal("aufgebaut", rebuilt.Cache);
         Assert.Equal(20002.75, Decode(restarted.ReadTicks(Day1, 3, 1)).Price[0]);
+    }
+
+    [Theory]
+    [InlineData(true)]   // Tagesabschnitt (Byte-Offsets im Manifest)
+    [InlineData(false)]  // Ganzdatei-Modus
+    public async Task Same_length_edit_with_unchanged_write_time_is_detected_inside_the_racy_window(bool offsets)
+    {
+        // Ursache des frueheren Flackerns, hier erzwungen: gleiche Laenge UND gleiche Schreibzeit wie im Vermerk.
+        var (svc, csv, cacheDir) = Fixture(offsets: offsets, drops: 0);
+        Assert.Equal("aufgebaut", (await svc.PrepareAsync(Day1, CancellationToken.None)).Cache);
+        var stamp = File.GetLastWriteTimeUtc(csv);
+        File.WriteAllText(csv, File.ReadAllText(csv).Replace("20002.50", "20002.75"));
+        File.SetLastWriteTimeUtc(csv, stamp);
+        var fresh = new TickReplayService(Path.GetDirectoryName(csv)!, cacheDir);
+        var r = await fresh.PrepareAsync(Day1, CancellationToken.None);
+        Assert.Equal("aufgebaut", r.Cache);
+        Assert.Equal(20002.75, Decode(fresh.ReadTicks(Day1, 3, 1)).Price[0]);
     }
 
     [Fact]
