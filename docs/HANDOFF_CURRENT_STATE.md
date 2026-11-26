@@ -2,6 +2,50 @@
 
 > Stand: **2026-09-27**. Ersetzt den veralteten Stand (`ab032ea`, 347 Tests). Historische Phasen siehe unten.
 
+## Multi-Timeframe-Backtest + Trade-Rewind + Backtesting-Tab (2026-11-26) — Branch `feature/mtf-replay-backtest` (auf PR #23)
+
+- **Strategie-Sichten:** Die Strategie sieht 5m, 1m und rangeXV (vorläufig, Period 4) gleichzeitig aus einer Ereignisfolge
+  (`Application/MarketState`). Das läuft über die bestehende Engine; die Entscheidungsspur wird beim Entscheiden gespeichert.
+- **Rewind:** Er wiederholt deterministisch ab Sessionbeginn. Details: [MTF_BACKTEST.md](MTF_BACKTEST.md).
+- **Backtesting-Tab:**
+  - drei Aufgaben (Lauf starten / Ergebnis ansehen / Trade nachspielen),
+  - Bericht mit Kernkennzahlen und drei Ansichten plus „Alle Abschnitte“,
+  - Inventar in [BACKTEST_REPORT_INVENTORY.md](BACKTEST_REPORT_INVENTORY.md).
+- **Vorher/Nachher-Abgleich:** OHLC-, Tick- und London+NY-Bericht zeigen dieselben Werte.
+- **Offen:**
+  - Die rangeXV-Gleichheit mit ATAS ist unbestätigt.
+  - Für MTF-Läufe sind keine Robustheitsprüfungen angebunden.
+
+## Marktdaten Live | Aufzeichnung + ATAS-Live-Bridge (2026-11-25) — Branch `feature/marktdaten-atas-live` (auf `feature/data-quality-audit`)
+
+- **Startseite** `/` = Marktdaten (Live | Aufzeichnung), ohne Orders, Strategie oder Training.
+  - Der Paper-Desk liegt unter `/desk`, Rithmic unter `/market`.
+  - Bestehende Direktlinks funktionieren weiter. Details: [MARKTDATEN.md](MARKTDATEN.md).
+- **Live:** ATAS-Indikator `research/atas-live-bridge` (nur lesend, TCP 127.0.0.1:5036) → `Services/Live/AtasLiveFeed` →
+  `/api/marketdata/live/state`.
+  - Herkunft und Wertzustände je Wert.
+  - Buch wird bei Trennung verworfen; Neuaufbau aus Snapshot.
+  - Zähler für empfangen, verarbeitet und verworfen.
+  - Vergleich ATAS-Chartkerze ↔ Dashboard.
+- **Aufzeichnung:** `DayReplay` ohne Lauf, mit Herkunftsbanner aus dem Audit („ATAS-Minutenhistorie · Tickfolge im Replay
+  generiert“). Ereignisse werden nicht als Börsentrades beschriftet.
+- **Offen:** Die Bridge-DLL ist gebaut, aber nicht in ATAS installiert; die Live-Abnahme mit echtem MNQ-Feed fehlt.
+
+## Datenqualität / Herkunft der Aufnahmen (2026-11-25) — Branch `feature/data-quality-audit`
+
+- **Werkzeug:** `research/data-bridge/atas_data_audit.py` (nur lesend; Tests synthetisch).
+  - Erzeugt lokal eine Tabelle je Handelstag × Session × Aufnahme.
+  - Bewertet die Stufen A (Trades/Delta/VWAP), B (+Tape), C (+historisches BBO) und D (+historisches DOM).
+  - Details: `research/data-bridge/README.md`.
+- **Befund zur Herkunft:**
+  - Die Collector-Läufe nutzen den ATAS-Replay-Typ `CandlesAndGeneratedBestPrices`. ATAS lädt dabei nur 1-Minuten-Kerzen.
+  - Die Tick-Zeitstempel liegen je Minute exakt gleichverteilt (60 s / n). Ablauf, Zeit und Einzelgröße innerhalb der
+    Minute sind also generiert.
+  - BBO und DOM sind generiert; das DOM hat nur 1 Level je Seite.
+  - Damit sind nur Minutenaggregate belastbar. Strategien auf N-Tick-Bars (z. B. DeltaFlow mit 500 Ticks) testen einen
+    generierten Ablauf und sind kein Edge-Nachweis.
+- **Ergebnisse:** Zahlen und Tabelle liegen nur lokal unter `artifacts/data-audit/` (gitignored).
+
 ## London + New York (2026-11-25) — PR #21 (Draft), Branch `feature/london-newyork-combined` (von `main` 666783d6)
 
 Gemeinsamer Modus für Backtesting und Chart & Replay: ein Start, eine Strategieinstanz, ein Konto. Der Lauf geht über die bestehende

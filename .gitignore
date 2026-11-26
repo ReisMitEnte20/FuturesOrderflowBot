@@ -58,6 +58,7 @@ __pycache__/
 
 # Build-Ausgabe des ATAS-Recorders (research/atas-recorder/build.ps1)
 research/atas-recorder/out/
+research/atas-live-bridge/out/
 
 # Demo-Vorschau: reines Build-Artefakt (aus dashboard/ mit VITE_QUANT_API=/api/quant VITE_BACKTEST_API=/api/backtest neu baubar)
 dashboard/dist-demo/

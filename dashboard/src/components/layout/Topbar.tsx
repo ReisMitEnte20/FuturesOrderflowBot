@@ -14,12 +14,14 @@ const STATUS_POLL_MS = 10_000;
 
 // Titel/Untertitel je Bereich (rein beschreibend).
 const PAGES: Record<string, { title: string; subtitle: string }> = {
-  "/": { title: "Live Desk", subtitle: "Positionen · Signale · Orders" },
+  "/": { title: "Marktdaten", subtitle: "Live | Aufzeichnung · was der Bot aus ATAS sieht · nur lesend" },
+  "/marktdaten": { title: "Marktdaten", subtitle: "Live | Aufzeichnung · was der Bot aus ATAS sieht · nur lesend" },
+  "/desk": { title: "Paper-Desk", subtitle: "Positionen · Signale · Orders (Simulation)" },
   "/signals": { title: "Signals", subtitle: "Signale der Strategien" },
   "/backtesting": { title: "Backtesting", subtitle: "Strategie testen · vergleichen · Bericht" },
   "/backtest": { title: "Chart-Backtest", subtitle: "OHLC-Simulation" },
   "/research": { title: "Backtesting · Research", subtitle: "Quant- und Orderflow-Auswertung (bisherige Ansicht)" },
-  "/market": { title: "Market Data", subtitle: "Rithmic · nur Marktdaten" },
+  "/market": { title: "Rithmic-Kerzen", subtitle: "Rithmic · 1-Minuten-Kerzen · nur Marktdaten" },
   "/pipeline": { title: "Pipeline", subtitle: "Datenfluss der Strategien" },
   "/settings": { title: "Settings", subtitle: "Datenquelle und Verbindung" },
 };

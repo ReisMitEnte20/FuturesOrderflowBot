@@ -18,14 +18,23 @@ import { LineChart } from "@/components/backtesting/charts";
 import { ChartReplayView } from "@/components/chartreplay/ChartReplayView";
 import { SessionsBacktest } from "@/components/sessions/SessionsBacktest";
 import { Research } from "./Research";
+import { MtfBacktest } from "@/components/mtf/MtfBacktest";
 
-type View = "test" | "sessions" | "compare" | "chart" | "history" | "orderflow" | "research";
-const PRIMARY: { key: View; label: string }[] = [
-  { key: "test", label: "Strategie testen" },
-  { key: "sessions", label: "London + New York" },
-  { key: "compare", label: "Strategien vergleichen" },
-  { key: "chart", label: "Chart & Replay" },
+type View = "test" | "sessions" | "compare" | "chart" | "history" | "orderflow" | "research" | "mtf";
+// Drei Aufgaben: Lauf starten · Ergebnis ansehen · Trade nachspielen. Die bisherigen Ansichten (und ihre Direktlinks) bleiben –
+// sie sind diesen Aufgaben nur zugeordnet.
+type Task = "start" | "result" | "replay";
+const TASKS: { key: Task; label: string; hint: string }[] = [
+  { key: "start", label: "1 · Lauf starten", hint: "Strategie → Datensatz/Zeitraum → Session → Datenprüfung → Start" },
+  { key: "result", label: "2 · Ergebnis ansehen", hint: "Datenqualität, Kennzahlen, Robustheit, Journal" },
+  { key: "replay", label: "3 · Trade nachspielen", hint: "Gespeicherte Trades im Chart, Ereignis für Ereignis" },
 ];
+const SUBVIEWS: Record<Task, { key: View; label: string }[]> = {
+  start: [{ key: "test", label: "Strategie-Bericht (Kerzen / Tick)" }, { key: "sessions", label: "London + New York" }, { key: "mtf", label: "Multi-Timeframe 5m · 1m · 4RxV" }],
+  result: [{ key: "history", label: "Alle Läufe" }, { key: "compare", label: "Strategien vergleichen" }],
+  replay: [{ key: "chart", label: "Chart & Replay" }, { key: "mtf", label: "Multi-Timeframe-Trade" }],
+};
+const PRIMARY: { key: View; label: string }[] = [];
 const SECONDARY: { key: View; label: string }[] = [
   { key: "research", label: "Expertenansicht (Kampagnen & Holdout)" },
 ];
@@ -45,7 +54,21 @@ export function Backtesting({ defaultView = "test" }: { defaultView?: View }) {
     if (v !== "test" && v !== "chart") p.delete("run");
     if (v !== "chart") CHART_KEYS.forEach((k) => p.delete(k));
     if (v !== "chart" && v !== "sessions") p.delete("srun");
+    if (v !== "mtf") { p.delete("mrun"); p.delete("mtrade"); }
     if (v === "chart" && p.get("run")) p.set("mode", "run");
+    setParams(p);
+  };
+  const opened = (view === "test" && params.get("run")) || (view === "sessions" && params.get("srun")) || (view === "mtf" && params.get("mrun") && params.get("mtrade") == null);
+  const task: Task = view === "chart" || (view === "mtf" && params.get("mtrade") != null) ? "replay"
+    : view === "history" || view === "compare" || opened ? "result" : "start";
+  const goTask = (t: Task) => {
+    if (t === "start") { const p = new URLSearchParams(); p.set("view", view === "sessions" || view === "mtf" ? view : "test"); setParams(p); return; }
+    if (t === "result") { if (!opened) setView("history"); return; }
+    setView("chart");
+  };
+  const setMtf = (patch: Record<string, string | null>) => {
+    const p = new URLSearchParams(params); p.set("view", "mtf");
+    for (const [k, v] of Object.entries(patch)) { if (v == null) p.delete(k); else p.set(k, v); }
     setParams(p);
   };
   return (
@@ -53,16 +76,22 @@ export function Backtesting({ defaultView = "test" }: { defaultView?: View }) {
       {/* Eine Überschrift steht bereits in der Kopfzeile der App — hier nur die Ansichten. */}
       <div className="flex-shrink-0 border-b border-[var(--line)] bg-[var(--bg-2)]">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-2">
+          <div className="flex flex-wrap gap-1" role="tablist" aria-label="Backtesting-Aufgaben" data-testid="bt-tasks" data-task={task}>
+            {TASKS.map((t) => (
+              <button key={t.key} role="tab" aria-selected={task === t.key} onClick={() => goTask(t.key)} title={t.hint} data-testid={`bt-task-${t.key}`}
+                className={cn("h-[30px] rounded-md px-3.5 text-[13px] transition-colors", task === t.key ? "bg-grad-brand text-[var(--bg)] font-semibold" : "border border-[var(--line-2)] text-[var(--fg-dim)] hover:text-[var(--fg)]")}>
+                {t.label}
+              </button>
+            ))}
+          </div>
           <div className="flex flex-wrap gap-1" role="tablist" aria-label="Backtesting-Ansichten">
-            {PRIMARY.map((v) => (
-              <button key={v.key} role="tab" aria-selected={view === v.key} onClick={() => setView(v.key)}
-                className={cn("h-[30px] rounded-md px-3.5 text-[13px]", view === v.key ? "bg-grad-brand text-[var(--bg)] font-semibold" : "border border-[var(--line-2)] text-[var(--fg-dim)] hover:text-[var(--fg)]")}>
+            {SUBVIEWS[task].map((v) => (
+              <button key={v.key + task} role="tab" aria-selected={view === v.key} onClick={() => setView(v.key)} data-testid={`bt-view-${v.key}`}
+                className={cn("h-[26px] rounded-md px-2.5 text-[12px]", view === v.key ? "border border-[var(--cyan)] text-[var(--fg)]" : "text-[var(--fg-dim)] hover:text-[var(--fg)]")}>
                 {v.label}
               </button>
             ))}
-            {view === "history" && (
-              <span role="tab" aria-selected className="flex h-[30px] items-center rounded-md border border-[var(--cyan)] px-3 text-[12px] text-[var(--fg)]">Alle Läufe</span>
-            )}
+            {PRIMARY.length > 0 && null}
           </div>
           <span className="hidden text-[11px] text-[var(--fg-faint)] md:inline">Simulation, keine Orders</span>
           <nav aria-label="Weitere Ansichten" className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
@@ -85,6 +114,10 @@ export function Backtesting({ defaultView = "test" }: { defaultView?: View }) {
         {view === "history" && <HistoryView />}
         {view === "chart" && <ChartReplayView defaultMode={raw === "orderflow" ? "files" : "run"} />}
         {view === "research" && <Research hideWorkspace={!legacyPath} />}
+        {view === "mtf" && (
+          <MtfBacktest runId={params.get("mrun")} trade={params.get("mtrade") != null ? Number(params.get("mtrade")) : null}
+            onOpen={(id) => setMtf({ mrun: id, mtrade: null })} onTrade={(t) => setMtf({ mtrade: t == null ? null : String(t) })} />
+        )}
       </div>
     </div>
   );
@@ -268,7 +301,28 @@ function TestView() {
       {error && <div className="rounded-lg border border-[var(--red)] bg-[var(--panel)] p-3 text-xs text-[var(--red)]">{error}</div>}
       {notice && <div className="rounded-lg border border-[var(--gold)] bg-[var(--panel)] p-3 text-xs text-[var(--gold)]">{notice}</div>}
 
-      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]">
+      {run && (
+        <div className="report-fade flex flex-wrap items-center gap-2 rounded-lg border border-[var(--cyan)] bg-[var(--panel)] px-3 py-2 text-[12px]" data-testid="opened-run-banner">
+          <b className="text-[var(--fg)]">Gespeicherter Bericht · Lauf {run.runId}</b>
+          <span className="text-[var(--fg-dim)]">zeigt die Einstellungen und Daten dieses Laufs – nicht deine aktuelle Auswahl.</span>
+          <button onClick={closeReport} className="ml-auto h-[28px] rounded-md border border-[var(--line-2)] px-2.5 text-xs text-[var(--fg)]" data-testid="new-run">Neuen Lauf konfigurieren</button>
+        </div>
+      )}
+      {!run && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-[var(--line-2)] bg-[var(--panel)] px-3 py-2" data-testid="start-bar">
+          <button onClick={start} disabled={starting || anyRunning || (decision.kind !== "ready" && decision.kind !== "limited")} data-testid="start-full"
+            className="h-9 rounded-md bg-grad-brand px-5 text-sm font-semibold text-[var(--bg)] disabled:cursor-not-allowed disabled:opacity-50">
+            {starting ? "Wird gestartet …" : "Vollständigen Backtest starten"}
+          </button>
+          <span className={cn("text-[11px]", decision.kind === "blocked" ? "text-[var(--red)]" : decision.kind === "limited" ? "text-[var(--gold)]" : "text-[var(--fg-dim)]")}>
+            {anyRunning ? "Ein Auftrag läuft gerade — Fortschritt und Abbruch unter „Letzte Läufe“."
+              : decision.kind === "blocked" ? "Start gesperrt — rechts steht, welche Pflichtdaten fehlen."
+              : decision.kind === "limited" ? "Startbar mit Einschränkungen — rechts stehen die nicht anwendbaren Prüfungen."
+              : "Ein Klick startet alle anwendbaren Analysen und speichert den Bericht. Der finale Holdout bleibt reserviert."}
+          </span>
+        </div>
+      )}
+      {!run && <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]">
         {/* ---- Neue Konfiguration ---- */}
         <section aria-label="Neue Konfiguration" className="self-start rounded-lg border border-[var(--line)] bg-[var(--panel)] p-3 space-y-2.5">
           <h2 className="text-[13px] font-medium text-[var(--fg)]">Neuer Backtest</h2>
@@ -345,17 +399,6 @@ function TestView() {
               <Field label="Seed"><Input type="number" value={String(form.seed)} onChange={(v) => set("seed", parseInt(v, 10) || 0)} /></Field>
             </div>
           )}
-          <div className="border-t border-[var(--line)] pt-2.5">
-            <button onClick={start} disabled={starting || anyRunning || (decision.kind !== "ready" && decision.kind !== "limited")}
-              className="h-10 w-full rounded-md bg-grad-brand text-sm font-semibold text-[var(--bg)] disabled:cursor-not-allowed disabled:opacity-50">
-              {starting ? "Wird gestartet …" : "Vollständigen Backtest starten"}
-            </button>
-            <p className="mt-1 text-[10px] text-[var(--fg-faint)]">
-              {anyRunning ? "Ein Auftrag läuft gerade — Fortschritt und Abbruch unter „Letzte Läufe“."
-                : decision.kind === "blocked" ? "Start gesperrt — siehe rechts, welche Pflichtdaten fehlen."
-                : "Ein Klick startet alle anwendbaren Analysen im Backend und speichert den Bericht."}
-            </p>
-          </div>
         </section>
 
         {/* ---- Entscheidung ---- */}
@@ -364,7 +407,7 @@ function TestView() {
         {/* ---- Gespeicherte Läufe (getrennt von der neuen Konfiguration) ---- */}
         <RecentRuns list={reports.list} err={reports.err} openId={runId} onOpen={openReport} onCancel={cancelRun}
           onAll={() => navigate("/backtesting?view=history")} onRefresh={reports.load} />
-      </div>
+      </div>}
 
       {run && (
         <section id="opened-report" aria-label="Geöffneter Bericht" className="space-y-3 scroll-mt-4">

@@ -8,6 +8,8 @@ const Backtesting = lazy(() => import("@/pages/Backtesting").then((m) => ({ defa
 // Bisherige /research-Links bleiben gültig: dieselbe Seite im Bereich „Backtesting“ (Expertenansicht inkl. Orderflow/Replay).
 const ResearchLegacy = lazy(() => import("@/pages/Backtesting").then((m) => ({ default: () => <m.Backtesting defaultView="research" /> })));
 const MarketData = lazy(() => import("@/pages/MarketData").then((m) => ({ default: m.MarketData })));
+// Hauptweg „Marktdaten → Live | Aufzeichnung“ (Startansicht, ohne Orders/Strategie/Training).
+const Marktdaten = lazy(() => import("@/pages/Marktdaten").then((m) => ({ default: m.Marktdaten })));
 const Pipeline = lazy(() => import("@/pages/Pipeline").then((m) => ({ default: m.Pipeline })));
 const Settings = lazy(() => import("@/pages/Settings").then((m) => ({ default: m.default })));
 
@@ -31,7 +33,10 @@ export const router = createBrowserRouter([
   {
     element: <Layout />,
     children: [
-      { path: "/", element: wrap(TradingDesk) },
+      { path: "/", element: wrap(Marktdaten) },
+      { path: "/marktdaten", element: wrap(Marktdaten) },
+      // Bisherige Startseite (Positionen/Orders der Paper-Simulation) bleibt erreichbar, aber nicht mehr als Startansicht.
+      { path: "/desk", element: wrap(TradingDesk) },
       { path: "/signals", element: wrap(Signals) },
       // Bisheriger Hauptmenüpunkt „Chart-Backtest“: jetzt unter Backtesting → Chart & Replay (Schnelltest auf Kerzen).
       { path: "/backtest", element: <Navigate to="/backtesting?view=chart&mode=quick" replace /> },

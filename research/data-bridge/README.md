@@ -69,3 +69,47 @@ exch_order_id, aggr_exch_order_id, open_interest, data_type, schema_version`
 
 `schemaVersion = atas-bridge-trades-1`. Spätere Nutzer: C#, Python, NautilusTrader, hftbacktest — jeweils erst nach
 Book-Qualifikation für DOM/Quotes. Diese Runde: nur Trades qualifiziert.
+
+## Datenqualität und Herkunft (`atas_data_audit.py`)
+
+Nur lesend. Prüft alle Collections und Aufnahmeordner und erzeugt **lokal** eine Tabelle mit einer Zeile je Handelstag ×
+Session × Aufnahme, dazu einen Bericht und eine JSON-Auswertung.
+
+```
+python atas_data_audit.py --collections-root <...\Collections> [--collections-root ...] \
+    --recordings-root <...\Recordings> [--recordings-root ...] [--atas-logs <%APPDATA%\ATAS\Logs>] --out <lokaler Ordner>
+```
+
+**Je Stream** (Trades = `ticks.csv`/`ticks.ndjson`, Tape = `cumtrades`, BBO, DOM) wird geprüft:
+- Vorhanden (roh oder `.zst`) und lesbar.
+- Erstes Ereignis im Fenster.
+- Verwertbare Ereignisse in einer Stichprobe.
+- Drops laut `summary.json`.
+- Herkunft: historisch, Minutenaggregat, generiert oder ungeklärt.
+
+**Herkunft nur aus aufnahmebezogenen Belegen.** Datei vorhanden und null Drops belegen nichts. Es gibt drei Belege:
+1. Replay-Typ aus `run_protocol.txt`. Er zählt nur für die Aufnahme, die im selben Auftragsblock als
+   „Zugeordnete Instanz“ genannt ist.
+2. Gleichverteilte Tick-Zeitstempel je Minute (Abstand exakt 60 s / n). Dann ist der Ablauf innerhalb der Minute
+   generiert, und nur Minutenaggregate gelten.
+3. Ein DOM mit nur einem Level je Seite. Das ist keine Markttiefe.
+
+ATAS-Protokolle sind nur Kontext, denn sie beziehen sich auf ein Fenster, nicht auf eine Aufnahme.
+
+**Weitere Regeln:**
+- Der Kontrakt wird nie aus dem Datum abgeleitet.
+- Überlappende Collections zählen nicht doppelt. Der Schlüssel ist Handelstag + Session.
+- London und New York am selben Tag sind zwei Sessions, keine Duplikate.
+- Mehrere saubere Fassungen mit unterschiedlichem Inhalt gelten als Konflikt.
+
+**Stufen (kumulativ):**
+- A: Trades, Delta, VWAP
+- B: + Tape
+- C: + historisches Bid/Ask
+- D: + historisches DOM
+
+Ein Replay im Modus `CandlesAndGeneratedBestPrices` lädt laut ATAS-Protokoll nur 1-Minuten-Kerzen. Trades erreichen dann
+höchstens Stufe A auf Minutenbasis, Tape, BBO und DOM gelten als generiert.
+
+Tests: `test_atas_data_audit.py`, nur synthetische Dateien. Tabelle und Bericht enthalten Marktdaten-Kennzahlen und
+bleiben lokal, z. B. unter `artifacts/` (gitignored).
