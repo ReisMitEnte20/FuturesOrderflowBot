@@ -2,6 +2,20 @@
 
 > Stand: **2026-09-27**. Ersetzt den veralteten Stand (`ab032ea`, 347 Tests). Historische Phasen siehe unten.
 
+## Multi-Timeframe-Backtest + Trade-Rewind + Backtesting-Tab (2026-11-26) — Branch `feature/mtf-replay-backtest` (auf PR #23)
+
+- **Strategie-Sichten:** Die Strategie sieht 5m, 1m und rangeXV (vorläufig, Period 4) gleichzeitig aus einer Ereignisfolge
+  (`Application/MarketState`). Das läuft über die bestehende Engine; die Entscheidungsspur wird beim Entscheiden gespeichert.
+- **Rewind:** Er wiederholt deterministisch ab Sessionbeginn. Details: [MTF_BACKTEST.md](MTF_BACKTEST.md).
+- **Backtesting-Tab:**
+  - drei Aufgaben (Lauf starten / Ergebnis ansehen / Trade nachspielen),
+  - Bericht mit Kernkennzahlen und drei Ansichten plus „Alle Abschnitte“,
+  - Inventar in [BACKTEST_REPORT_INVENTORY.md](BACKTEST_REPORT_INVENTORY.md).
+- **Vorher/Nachher-Abgleich:** OHLC-, Tick- und London+NY-Bericht zeigen dieselben Werte.
+- **Offen:**
+  - Die rangeXV-Gleichheit mit ATAS ist unbestätigt.
+  - Für MTF-Läufe sind keine Robustheitsprüfungen angebunden.
+
 ## Marktdaten Live | Aufzeichnung + ATAS-Live-Bridge (2026-11-25) — Branch `feature/marktdaten-atas-live` (auf `feature/data-quality-audit`)
 
 - **Startseite** `/` = Marktdaten (Live | Aufzeichnung), ohne Orders, Strategie oder Training.

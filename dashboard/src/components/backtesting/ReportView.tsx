@@ -103,34 +103,49 @@ const Grid = ({ children, cols = 4 }: { children: ReactNode; cols?: number }) =>
 export function ReportView({ run, onOpenHoldout, onOpenChart }: { run: ReportRun; onOpenHoldout: () => void; onOpenChart?: (trade?: number) => void }) {
   const rep = run.report;
   const step = (k: string) => run.steps.find((s) => s.key === k);
+  const [tab, setTab] = useState<ReportTab>(() => readTab());
+  const pick = (t: ReportTab) => { setTab(t); try { localStorage.setItem("backtesting:reportTab", t); } catch { /* */ } };
   if (!rep) return <p className="text-xs text-[var(--fg-faint)]">Für diesen Lauf ist (noch) kein Bericht gespeichert.</p>;
+  const show = (k: string) => tab === "alle" || TAB_OF[k] === tab;
   return (
-    <div className="space-y-3">
+    <div className="space-y-3 report-fade" data-testid="report-view" data-tab={tab}>
       <Overview rep={rep} run={run} />
-      <Provenance rep={rep} />
+      <KeyFigures rep={rep} />
+      <div className="sticky top-0 z-10 -mx-1 flex flex-wrap items-center gap-1 bg-[var(--bg)] px-1 py-1.5" role="tablist" aria-label="Berichtsansichten">
+        {REPORT_TABS.map((t) => (
+          <button key={t.key} role="tab" aria-selected={tab === t.key} onClick={() => pick(t.key)} data-testid={`report-tab-${t.key}`} title={t.question}
+            className={cn("h-[28px] rounded-md px-3 text-[12px] transition-colors", tab === t.key ? "bg-grad-brand font-semibold text-[var(--bg)]" : "border border-[var(--line-2)] text-[var(--fg-dim)] hover:text-[var(--fg)]")}>
+            {t.label}
+          </button>
+        ))}
+        <span className="ml-1 text-[10px] text-[var(--fg-faint)]">{REPORT_TABS.find((t) => t.key === tab)?.question}</span>
+      </div>
       <nav className="flex flex-wrap gap-1 text-[10px]">
         {run.steps.map((s) => {
           const label = stepLabel(s);
           return (
-            <a key={s.key} href={`#sec-${s.key}`} className="rounded border border-[var(--line)] px-1.5 py-0.5 text-[var(--fg-dim)] hover:text-[var(--fg)]">
+            <a key={s.key} href={`#sec-${s.key}`} onClick={() => { if (!show(s.key)) pick(TAB_OF[s.key] ?? "alle"); }}
+              className={cn("rounded border border-[var(--line)] px-1.5 py-0.5 hover:text-[var(--fg)]", show(s.key) ? "text-[var(--fg-dim)]" : "text-[var(--fg-faint)] opacity-60")}>
               {label.replace(/^(\d\d) .*/, "$1")} {STATUS_TEXT[s.status] === "fertig" ? "✓" : "·"} {s.key === "oos" ? "Walk-forward-Testdaten" : s.key === "holdout" ? "Holdout (unbenutzt)" : label.replace(/^\d\d /, "").split(" ")[0]}
             </a>
           );
         })}
       </nav>
-      <DataSection rep={rep} step={step("data")} />
-      <ResultSection rep={rep} step={step("result")} />
-      <EquitySection rep={rep} step={step("equity")} />
-      <RiskSection rep={rep} step={step("risk")} />
-      <SensitivitySection rep={rep} step={step("sensitivity")} />
-      <OosSection rep={rep} step={step("oos")} />
-      <SimulationSection rep={rep} step={step("simulation")} />
-      <CostSection rep={rep} step={step("costs")} />
-      <StabilitySection rep={rep} step={step("stability")} />
-      <ConcentrationSection rep={rep} step={step("concentration")} />
-      <ControlSection rep={rep} step={step("controls")} />
-      <TradeSection rep={rep} step={step("trades")} onOpenChart={onOpenChart} />
-      <HoldoutSection run={run} step={step("holdout")} onOpen={onOpenHoldout} />
+      {show("provenance") && <Provenance rep={rep} />}
+      {show("data") && <DataSection rep={rep} step={step("data")} />}
+      {show("result") && <ResultSection rep={rep} step={step("result")} />}
+      {tab === "ergebnis" && <SessionContribution rep={rep} />}
+      {show("equity") && <EquitySection rep={rep} step={step("equity")} />}
+      {show("risk") && <RiskSection rep={rep} step={step("risk")} />}
+      {show("sensitivity") && <SensitivitySection rep={rep} step={step("sensitivity")} />}
+      {show("oos") && <OosSection rep={rep} step={step("oos")} />}
+      {show("simulation") && <SimulationSection rep={rep} step={step("simulation")} />}
+      {show("costs") && <CostSection rep={rep} step={step("costs")} />}
+      {show("stability") && <StabilitySection rep={rep} step={step("stability")} />}
+      {show("concentration") && <ConcentrationSection rep={rep} step={step("concentration")} />}
+      {show("controls") && <ControlSection rep={rep} step={step("controls")} />}
+      {show("trades") && <TradeSection rep={rep} step={step("trades")} onOpenChart={onOpenChart} />}
+      {show("holdout") && <HoldoutSection run={run} step={step("holdout")} onOpen={onOpenHoldout} />}
     </div>
   );
 }
@@ -148,6 +163,67 @@ export const stepLabel = (s: ResearchStepState) => STEP_LABELS[s.key] ?? s.label
 const FIGURE_LABELS: Record<string, string> = { oos: "Ergebnis auf Walk-forward-Testdaten", sessions: "Walk-forward-Testsessions" };
 const figureBasis = (key: string, basis: string) =>
   key === "oos" || key === "sessions" ? basis.replace(/^OOS — /, "Walk-forward-Testdaten (OOS) — ").replace(/^OOS$/, "Walk-forward-Testdaten (OOS)") : basis;
+
+// ---------------------------------------------------------------------------------------------
+// Drei Ansichten desselben Berichts (nichts entfällt – „Alle Abschnitte“ zeigt die bisherige Reihenfolge).
+// ---------------------------------------------------------------------------------------------
+type ReportTab = "ergebnis" | "robust" | "trades" | "alle";
+const REPORT_TABS: { key: ReportTab; label: string; question: string }[] = [
+  { key: "ergebnis", label: "Ergebnis & Risiko", question: "Wie viel hat die Strategie verdient, mit welchem Risiko und in welcher Session?" },
+  { key: "robust", label: "Robustheit", question: "Hält das Ergebnis bei anderen Parametern, Zeitfenstern, Kosten und Handelsreihenfolgen?" },
+  { key: "trades", label: "Trades & Replay", question: "Welche konkreten Entscheidungen haben das Ergebnis erzeugt?" },
+  { key: "alle", label: "Alle Abschnitte", question: "Alle Abschnitte 01–12 und Holdout in der bisherigen Reihenfolge." },
+];
+const TAB_OF: Record<string, ReportTab> = {
+  provenance: "ergebnis", data: "ergebnis", result: "ergebnis", equity: "ergebnis", risk: "ergebnis",
+  sensitivity: "robust", oos: "robust", simulation: "robust", costs: "robust", stability: "robust", concentration: "robust", controls: "robust", holdout: "robust",
+  trades: "trades",
+};
+function readTab(): ReportTab { try { const v = localStorage.getItem("backtesting:reportTab"); return (REPORT_TABS.some((t) => t.key === v) ? v : "ergebnis") as ReportTab; } catch { return "ergebnis"; } }
+
+/** Kompakte Übersicht: Netto nach Kosten, Trades, Profit Factor, max. Drawdown, Kapital-/Drawdown-Kurve; Sharpe, Sortino, Calmar
+ *  daneben – jeweils mit Basis bzw. Grund, wenn nicht berechenbar (kein Ersatzwert). Werte 1:1 aus den Abschnitten 02–04. */
+function KeyFigures({ rep }: { rep: BacktestReport }) {
+  const st = rep.result?.stats;
+  const dd = rep.equity?.closedTrades;
+  const mtm = rep.equity?.markToMarket;
+  const metric = (k: string) => rep.risk?.metrics.find((m) => m.key === k);
+  const m = (k: string, label: string) => {
+    const x = metric(k);
+    return <Kv label={label} value={x?.value != null ? num(x.value, 2) : <span className="text-[11px] text-[var(--fg-faint)]">nicht berechenbar</span>}
+      hint={x ? (x.value != null ? `n = ${x.sampleSize ?? "?"} · ${x.method ?? ""}` : x.unavailableReason ?? "") : "nicht im Bericht"} />;
+  };
+  return (
+    <div className="rounded-lg border border-[var(--line-2)] bg-[var(--panel)] p-3" data-testid="report-keyfigures">
+      <div className="grid gap-2 grid-cols-2 md:grid-cols-4 xl:grid-cols-7">
+        <Kv label="Netto nach Kosten (Basislauf)" value={st ? money(st.netPnL) : "–"} tone={tone(st?.netPnL)} hint={st ? `Brutto ${money(st.grossPnL)} · Gebühren ${money(st.fees)}` : undefined} />
+        <Kv label="Trades" value={st ? String(st.trades) : "–"} hint={st ? `${st.longs} long / ${st.shorts} short` : undefined} />
+        <Kv label="Profit Factor" value={st ? rv(st.profitFactor, (x) => num(x, 2)) : "–"} hint={st ? rvHint(st.profitFactor) : undefined} />
+        <Kv label="Max. Drawdown (geschlossene Trades)" value={dd ? money(dd.maxDrawdown) : "–"} hint={dd ? `${pct(dd.maxDrawdownFraction)} vom Hoch · ${dd.basis}` : undefined} />
+        {m("sharpe", "Sharpe")}{m("sortino", "Sortino")}{m("calmar", "Calmar")}
+      </div>
+      {mtm && mtm.t.length > 1 && (
+        <div className="mt-2 grid gap-2 md:grid-cols-2">
+          <LineChart height={110} ariaLabel="Kapitalkurve (Mark-to-Market)" series={[{ name: "Kapital (Mark-to-Market)", x: mtm.t, y: mtm.equity, color: "#22b8f0" }]} />
+          <LineChart height={110} ariaLabel="Drawdown-Verlauf" zeroLine series={[{ name: "Drawdown", x: mtm.t, y: mtm.drawdown.map((v) => -Math.abs(v)), color: "#f0566a", area: true }]} />
+        </div>
+      )}
+      <p className="mt-1 text-[10px] text-[var(--fg-faint)]">Werte unverändert aus 02 (Ergebnis), 03 (Equity) und 04 (Risiko); Kurven: {mtm?.basis ?? "–"}. Simulierte Drawdowns stehen getrennt unter „Robustheit“ (07).</p>
+    </div>
+  );
+}
+
+/** Sessionbeiträge (aus 09, Dimension „Session“) – Gesamtquoten stammen aus der gemeinsamen Datenbasis, nicht aus Mittelwerten. */
+function SessionContribution({ rep }: { rep: BacktestReport }) {
+  const b = rep.stability?.breakdowns.find((x) => x.dimension === "Session");
+  if (!b) return null;
+  return (
+    <div className="rounded-lg border border-[var(--line)] bg-[var(--panel)] p-3 text-[11px]" data-testid="report-session-contribution">
+      <b className="text-[12px] text-[var(--fg)]">Ergebnis je Session</b> <span className="text-[var(--fg-faint)]">{b.definition}</span>
+      <Tbl head={["Session", "Trades", "Netto", "Erwartungswert", "Trefferquote"]} rows={b.rows.map((r) => [r.key, r.trades, money(r.net), r.expectancy == null ? "–" : money(r.expectancy), r.winRate == null ? "–" : pct(r.winRate)])} />
+    </div>
+  );
+}
 
 function Overview({ rep, run }: { rep: BacktestReport; run: ReportRun }) {
   const figs = rep.overview.figures;
