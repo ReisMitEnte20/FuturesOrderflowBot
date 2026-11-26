@@ -90,6 +90,11 @@ builder.Services.AddHostedService(_ => atasLiveListener);
 builder.Services.AddSingleton(new TradingBot.DevDashboard.Services.Live.RecordingProvenanceService(
     builder.Configuration["DataAudit:Root"] ?? Path.Combine(repoRoot ?? AppContext.BaseDirectory, "artifacts", "data-audit")));
 
+// MULTI-TIMEFRAME-LAUF (5m/1m/rangeXV) über die bestehende Tick-Engine + Entscheidungsspur + Trade-Rewind (artifacts/mtf-runs, gitignored).
+builder.Services.AddSingleton(sp => new TradingBot.DevDashboard.Services.Mtf.MtfRunService(backtestApi, tickReplay,
+    sp.GetRequiredService<TradingBot.DevDashboard.Services.Live.RecordingProvenanceService>(),
+    Path.Combine(repoRoot ?? AppContext.BaseDirectory, "artifacts", "mtf-runs")));
+
 var app = builder.Build();
 
 app.UseCors(ReactCors);
@@ -235,6 +240,27 @@ md.MapGet("/live/state", (int? trades, int? tape, int? candles, TradingBot.DevDa
 md.MapGet("/live/compare", (TradingBot.DevDashboard.Services.Live.AtasLiveFeed f) => Results.Ok(f.Compare()));
 md.MapGet("/recordings/{recordingId}/provenance", (string recordingId, TradingBot.DevDashboard.Services.Live.RecordingProvenanceService p) =>
     recordingId.Any(c => !(char.IsLetterOrDigit(c) || c is '_' or '-')) ? Results.BadRequest(new { error = "ungültige Aufnahme-ID" }) : Results.Ok(p.Get(recordingId)));
+
+// Multi-Timeframe-Orderflow-Lauf: Datenprüfung vor dem Start, Lauf, gespeicherte Läufe, deterministischer Trade-Rewind.
+var mtf = app.MapGroup("/api/backtest/mtf").RequireCors(ReactCors);
+mtf.MapPost("/check", (TradingBot.DevDashboard.Services.Mtf.MtfRunRequest r, TradingBot.DevDashboard.Services.Mtf.MtfRunService s) =>
+{
+    try { return Results.Ok(s.Check(r)); }
+    catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { return Results.BadRequest(new { error = ex.Message }); }
+});
+mtf.MapPost("/run", async (TradingBot.DevDashboard.Services.Mtf.MtfRunRequest r, TradingBot.DevDashboard.Services.Mtf.MtfRunService s, CancellationToken ct) =>
+{
+    try { return Results.Ok(await s.RunAsync(r, ct)); }
+    catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or InvalidDataException or KeyNotFoundException) { return Results.BadRequest(new { error = ex.Message }); }
+});
+mtf.MapGet("/runs", (TradingBot.DevDashboard.Services.Mtf.MtfRunService s) => Results.Ok(s.List()));
+mtf.MapGet("/runs/{runId}", (string runId, TradingBot.DevDashboard.Services.Mtf.MtfRunService s) => s.Get(runId) is { } r ? Results.Ok(r) : Results.NotFound(new { error = "Lauf nicht gefunden" }));
+mtf.MapGet("/runs/{runId}/replay", async (string runId, int trade, int? preroll, int? postroll, TradingBot.DevDashboard.Services.Mtf.MtfRunService s, CancellationToken ct) =>
+{
+    try { return Results.Ok(await s.ReplayAsync(runId, trade, preroll ?? 60, postroll ?? 30, ct)); }
+    catch (KeyNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
+    catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { return Results.BadRequest(new { error = ex.Message }); }
+});
 
 // Quant-Research-API (Auswertung, Validierung, Monte Carlo, Overfitting, Versuchsregister).
 // Alle Berechnungen laufen im Backend; das React-Dashboard stellt ausschließlich echte Ergebnisse dar.
